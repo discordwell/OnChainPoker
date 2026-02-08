@@ -23,6 +23,7 @@ function normalizePrivateKey(pk: string | undefined): string | undefined {
 }
 
 const privateKey = normalizePrivateKey(process.env.PRIVATE_KEY);
+const localhostUrl = process.env.OCP_RPC_URL ?? process.env.LOCALHOST_RPC_URL ?? "http://127.0.0.1:8545";
 
 export default defineConfig({
   plugins: [hardhatEthersPlugin, hardhatEthersChaiMatchersPlugin, hardhatMochaPlugin],
@@ -34,7 +35,7 @@ export default defineConfig({
   },
   networks: {
     default: { type: "edr-simulated", chainType: "l1" },
-    localhost: { type: "http", chainType: "l1", url: "http://127.0.0.1:8545" },
+    localhost: { type: "http", chainType: "l1", url: localhostUrl },
     amoy: {
       type: "http",
       chainType: "l1",

@@ -1,0 +1,27 @@
+{
+  "name": "@onchainpoker/holdem-eval",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.1",
+    "pokersolver": "^2.1.4",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  }
+}
+

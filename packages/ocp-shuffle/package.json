@@ -1,0 +1,27 @@
+{
+  "name": "@onchainpoker/ocp-shuffle",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test dist/test/**/*.test.js",
+    "bench": "pnpm build && node dist/bench/verify.js",
+    "gen:test-vector": "pnpm build && node dist/scripts/gen-test-vector.js"
+  },
+  "dependencies": {
+    "@onchainpoker/ocp-crypto": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3"
+  }
+}

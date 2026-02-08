@@ -1,0 +1,10 @@
+{
+  "name": "@onchainpoker/dkg",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "sim": "node src/simulate.js"
+  }
+}

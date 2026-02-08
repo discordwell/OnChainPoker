@@ -3,12 +3,32 @@
   "private": true,
   "packageManager": "pnpm@10.28.2",
   "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "localnet": "node scripts/localnet.mjs",
+    "web": "node scripts/web.mjs",
+    "test": "pnpm contracts:test && pnpm -C apps/web test && pnpm web:build",
+    "test:integration": "node scripts/integration.mjs",
     "contracts:compile": "pnpm -C packages/contracts compile",
     "contracts:test": "pnpm -C packages/contracts test",
     "contracts:deploy:local": "pnpm -C packages/contracts deploy:local",
     "contracts:deploy:amoy": "pnpm -C packages/contracts deploy:amoy",
+    "sdk:build": "pnpm -C packages/ocp-sdk build",
+    "sdk:test": "pnpm -C packages/ocp-sdk test",
+    "ws1:build": "pnpm -C packages/poker-engine build",
+    "ws1:test": "pnpm -C packages/poker-engine test",
+    "ws4:test": "pnpm -C packages/dkg test",
+    "ws4:sim": "pnpm -C packages/dkg sim",
+    "ws5:test": "pnpm -C packages/ocp-shuffle test",
+    "ws5:bench": "pnpm -C packages/ocp-shuffle bench",
+    "ws7:play_hand": "pnpm sdk:build && node scripts/play_hand.mjs",
+    "ws9:test": "pnpm -C apps/sim test",
+    "ws9:sim": "pnpm -C apps/sim sim",
     "web:dev": "pnpm -C apps/web dev",
     "web:build": "pnpm -C apps/web build",
-    "web:preview": "pnpm -C apps/web preview"
+    "web:preview": "pnpm -C apps/web preview",
+    "coordinator:dev": "node scripts/coordinator.mjs dev",
+    "coordinator:build": "node scripts/coordinator.mjs build",
+    "coordinator:start": "node scripts/coordinator.mjs start",
+    "coordinator:test": "node scripts/coordinator.mjs test"
   }
 }
