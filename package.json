@@ -1,0 +1,12 @@
+{
+  "name": "onchainpoker",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "scripts": {
+    "contracts:compile": "pnpm -C packages/contracts compile",
+    "contracts:test": "pnpm -C packages/contracts test",
+    "contracts:deploy:local": "pnpm -C packages/contracts deploy:local",
+    "contracts:deploy:amoy": "pnpm -C packages/contracts deploy:amoy"
+  }
+}
+

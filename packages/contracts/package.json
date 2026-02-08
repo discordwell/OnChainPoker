@@ -1,0 +1,27 @@
+{
+  "name": "@onchainpoker/contracts",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "node": "hardhat node",
+    "deploy:local": "hardhat run scripts/deploy.ts --network localhost",
+    "deploy:amoy": "hardhat run scripts/deploy.ts --network amoy"
+  },
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.0.0"
+  },
+  "devDependencies": {
+    "@nomicfoundation/hardhat-ethers": "^4.0.4",
+    "@nomicfoundation/hardhat-ethers-chai-matchers": "^3.0.2",
+    "@nomicfoundation/hardhat-mocha": "^3.0.9",
+    "chai": "^5.1.2",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.14.0",
+    "hardhat": "^3.1.7",
+    "mocha": "^11.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}

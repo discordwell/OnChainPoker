@@ -8,7 +8,7 @@ OnChainPoker is a blockchain-based poker platform that enables trustless, transp
 
 ## Status
 
-🚧 **Project in development** - Repository created for Claude Code Web development.
+🚧 **Project in development**
 
 ## Tech Stack (Planned)
 
@@ -18,10 +18,43 @@ OnChainPoker is a blockchain-based poker platform that enables trustless, transp
 - Backend: Node.js
 - Game Engine: Custom poker logic
 
+## Repo Layout
+
+- `packages/contracts`: Hardhat + Solidity contracts
+  - `OCPToken` (ERC-20): owner-mintable platform token
+  - `PokerVault`: escrow + internal ledger for off-chain dealt poker (owner applies zero-sum hand results)
+
+## Quickstart
+
+```bash
+# Hardhat recommends Node 22 LTS (see `.nvmrc`)
+pnpm install
+pnpm contracts:compile
+pnpm contracts:test
+```
+
+### Local Deploy
+
+Terminal 1:
+
+```bash
+pnpm -C packages/contracts node
+```
+
+Terminal 2:
+
+```bash
+pnpm -C packages/contracts deploy:local
+```
+
+### Polygon Amoy Deploy
+
+Set `PRIVATE_KEY` and (optionally) `AMOY_RPC_URL` in `.env` (see `.env.example`), then:
+
+```bash
+pnpm contracts:deploy:amoy
+```
+
 ## License
 
 MIT
-
----
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
