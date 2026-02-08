@@ -6,7 +6,9 @@
     "contracts:compile": "pnpm -C packages/contracts compile",
     "contracts:test": "pnpm -C packages/contracts test",
     "contracts:deploy:local": "pnpm -C packages/contracts deploy:local",
-    "contracts:deploy:amoy": "pnpm -C packages/contracts deploy:amoy"
+    "contracts:deploy:amoy": "pnpm -C packages/contracts deploy:amoy",
+    "web:dev": "pnpm -C apps/web dev",
+    "web:build": "pnpm -C apps/web build",
+    "web:preview": "pnpm -C apps/web preview"
   }
 }
-

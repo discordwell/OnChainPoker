@@ -22,7 +22,8 @@ OnChainPoker is a blockchain-based poker platform that enables trustless, transp
 
 - `packages/contracts`: Hardhat + Solidity contracts
   - `OCPToken` (ERC-20): owner-mintable platform token
-  - `PokerVault`: escrow + internal ledger for off-chain dealt poker (owner applies zero-sum hand results)
+  - `PokerVault`: escrow + internal ledger for off-chain dealt poker (EIP-712 signatures required to apply zero-sum hand results)
+- `apps/web`: wallet UI (connect/approve/deposit/withdraw + sign/submit hand results)
 
 ## Quickstart
 
@@ -45,6 +46,16 @@ Terminal 2:
 
 ```bash
 pnpm -C packages/contracts deploy:local
+```
+
+Deployments are also written to `deployments/<network>-<chainId>.json`.
+
+### Web App
+
+Set `VITE_TOKEN_ADDRESS` and `VITE_VAULT_ADDRESS` in `apps/web/.env` (see `apps/web/.env.example`), then:
+
+```bash
+pnpm web:dev
 ```
 
 ### Polygon Amoy Deploy

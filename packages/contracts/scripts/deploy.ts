@@ -1,8 +1,14 @@
 import { network } from "hardhat";
+import { mkdir, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 async function main() {
   const connection = await network.connect();
   const { ethers } = connection;
+
+  const __filename = fileURLToPath(import.meta.url);
+  const __dirname = dirname(__filename);
 
   const [deployer] = await ethers.getSigners();
 
@@ -31,6 +37,11 @@ async function main() {
 
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(out, null, 2));
+
+  // Also persist for easy local/dev reuse.
+  const deploymentsDir = resolve(__dirname, "../../../deployments");
+  await mkdir(deploymentsDir, { recursive: true });
+  await writeFile(resolve(deploymentsDir, `${out.network}-${out.chainId}.json`), `${JSON.stringify(out, null, 2)}\n`, "utf8");
 }
 
 main().catch((err) => {
