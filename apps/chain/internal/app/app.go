@@ -294,7 +294,8 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 				continue
 			}
 			s := t.Seats[i]
-			s.InHand = true
+			// Only funded seats participate in the hand.
+			s.InHand = s.Stack > 0
 			s.Folded = false
 			s.AllIn = false
 			s.BetThisRound = 0
