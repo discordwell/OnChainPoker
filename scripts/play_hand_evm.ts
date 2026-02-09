@@ -27,7 +27,7 @@ async function main() {
   await token.waitForDeployment();
 
   const Vault = await hhEthers.getContractFactory("PokerVault", owner);
-  const vault = await Vault.deploy(await owner.getAddress(), await token.getAddress());
+  const vault = await Vault.deploy(await owner.getAddress(), await token.getAddress(), 3600);
   await vault.waitForDeployment();
 
   const tokenAddr = await token.getAddress();
@@ -105,8 +105,15 @@ async function main() {
     bob: (await vaultOwner.balanceOf(bobAddr)).toString()
   });
 
-  await (await vaultAlice.withdraw(hhEthers.parseEther("60"))).wait();
-  await (await vaultBob.withdraw(hhEthers.parseEther("40"))).wait();
+  await (await vaultAlice.requestWithdraw(hhEthers.parseEther("60"))).wait();
+  await (await vaultBob.requestWithdraw(hhEthers.parseEther("40"))).wait();
+
+  const withdrawDelay = await vaultOwner.withdrawDelay();
+  await provider.send("evm_increaseTime", [Number(withdrawDelay)]);
+  await provider.send("evm_mine", []);
+
+  await (await vaultAlice.executeWithdraw()).wait();
+  await (await vaultBob.executeWithdraw()).wait();
 
   offDeposit();
   offApplied();
@@ -117,4 +124,3 @@ main().catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });
-

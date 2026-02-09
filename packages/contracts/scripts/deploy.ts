@@ -21,8 +21,11 @@ async function main() {
   const token = await Token.deploy(deployer.address, initialSupply);
   await token.waitForDeployment();
 
+  const withdrawDelaySecs =
+    process.env.WITHDRAW_DELAY_SECS != null ? Number(process.env.WITHDRAW_DELAY_SECS) : 3600;
+
   const Vault = await ethers.getContractFactory("PokerVault");
-  const vault = await Vault.deploy(deployer.address, await token.getAddress());
+  const vault = await Vault.deploy(deployer.address, await token.getAddress(), withdrawDelaySecs);
   await vault.waitForDeployment();
 
   const chain = await ethers.provider.getNetwork();
@@ -32,7 +35,8 @@ async function main() {
     chainId: chain.chainId.toString(),
     deployer: deployer.address,
     token: await token.getAddress(),
-    vault: await vault.getAddress()
+    vault: await vault.getAddress(),
+    withdrawDelaySecs
   };
 
   // eslint-disable-next-line no-console

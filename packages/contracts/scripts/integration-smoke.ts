@@ -121,9 +121,29 @@ await (await vault.connect(owner).applyHandResultWithSignatures(handId, players,
 assert.equal(await vault.balanceOf(alice.address), ethers.parseEther("60"));
 assert.equal(await vault.balanceOf(bob.address), ethers.parseEther("40"));
 
-await (await vault.connect(alice).withdraw(ethers.parseEther("60"))).wait();
-await (await vault.connect(bob).withdraw(ethers.parseEther("40"))).wait();
+const withdrawDelay = await vault.withdrawDelay();
+if (withdrawDelay === 0n) {
+  await (await vault.connect(alice).withdraw(ethers.parseEther("60"))).wait();
+  await (await vault.connect(bob).withdraw(ethers.parseEther("40"))).wait();
+} else {
+  await (await vault.connect(alice).requestWithdraw(ethers.parseEther("60"))).wait();
+  await (await vault.connect(bob).requestWithdraw(ethers.parseEther("40"))).wait();
+
+  // Local-only convenience: try to fast-forward time. On real networks, execute the withdraw later.
+  try {
+    await ethers.provider.send("evm_increaseTime", [Number(withdrawDelay)]);
+    await ethers.provider.send("evm_mine", []);
+  } catch {
+    // eslint-disable-next-line no-console
+    console.log(
+      `Withdraw requests submitted. withdrawDelay=${withdrawDelay.toString()}s; unable to time-travel on this network, so executeWithdraw() later.`
+    );
+    process.exit(0);
+  }
+
+  await (await vault.connect(alice).executeWithdraw()).wait();
+  await (await vault.connect(bob).executeWithdraw()).wait();
+}
 
 assert.equal(await token.balanceOf(alice.address), ethers.parseEther("110"));
 assert.equal(await token.balanceOf(bob.address), ethers.parseEther("90"));
-

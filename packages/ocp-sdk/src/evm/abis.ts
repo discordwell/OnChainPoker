@@ -11,15 +11,21 @@ export const OCP_TOKEN_ABI = [
 
 export const POKER_VAULT_ABI = [
   "function token() view returns (address)",
+  "function withdrawDelay() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
   "function deposit(uint256 amount)",
   "function withdraw(uint256 amount)",
+  "function withdrawRequests(address) view returns (uint256 amount, uint256 availableAt)",
+  "function requestWithdraw(uint256 amount)",
+  "function cancelWithdraw()",
+  "function executeWithdraw()",
   "function nonces(address) view returns (uint256)",
   "function handApplied(bytes32) view returns (bool)",
   "function computeResultHash(bytes32 handId, address[] players, int256[] deltas) view returns (bytes32)",
   "function applyHandResultWithSignatures(bytes32 handId, address[] players, int256[] deltas, uint256 deadline, bytes[] signatures)",
   "event Deposit(address indexed player, uint256 amount)",
+  "event WithdrawRequested(address indexed player, uint256 amount, uint256 availableAt)",
+  "event WithdrawCancelled(address indexed player)",
   "event Withdraw(address indexed player, uint256 amount)",
   "event HandResultApplied(bytes32 indexed handId, bytes32 indexed resultHash, address indexed submitter, address[] players, int256[] deltas)"
 ] as const;
-

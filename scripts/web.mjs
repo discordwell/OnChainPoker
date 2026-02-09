@@ -54,4 +54,3 @@ registerShutdown(async () => {
 log("[ws10] Starting web...");
 webProc = spawnInherit("pnpm", ["-C", "apps/web", "dev"], { cwd: ROOT_DIR, env: process.env });
 await new Promise((r) => webProc.once("exit", r));
-

@@ -127,4 +127,3 @@ const first = await Promise.race(waits);
 log(`[ws10] ${first.name} exited (${first.code ?? "null"}). Shutting down...`);
 await shutdown();
 process.exitCode = first.code ?? 0;
-

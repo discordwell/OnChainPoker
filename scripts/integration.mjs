@@ -22,11 +22,87 @@ const deploymentsDir = path.join(ROOT_DIR, "deployments");
 let nodeProc = null;
 let startedNode = false;
 
-registerShutdown(async () => {
+async function stopNode() {
   if (!startedNode || !nodeProc) return;
+  const proc = nodeProc;
+  nodeProc = null;
+  startedNode = false;
   log("[ws10] Stopping Hardhat node...");
-  nodeProc.kill("SIGINT");
-  await new Promise((r) => nodeProc.once("exit", r));
+
+  // Avoid hanging forever:
+  // - attach listeners before signaling (race-free)
+  // - if the process already exited, don't wait for an event that already fired
+  // - enforce timeouts + SIGKILL fallback
+  let settled = false;
+  /** @type {(value: { code: number | null; signal: string | null; source: string }) => void} */
+  let resolveExit = () => {};
+  const exitPromise = new Promise((resolve) => {
+    resolveExit = resolve;
+  });
+
+  function cleanup() {
+    proc.removeListener("exit", onExit);
+    proc.removeListener("close", onClose);
+  }
+
+  function settle(code, sig, source) {
+    if (settled) return;
+    settled = true;
+    cleanup();
+    resolveExit({ code: code ?? null, signal: sig ?? null, source });
+  }
+
+  function onExit(code, sig) {
+    settle(code, sig, "exit");
+  }
+  function onClose(code, sig) {
+    settle(code, sig, "close");
+  }
+
+  proc.once("exit", onExit);
+  proc.once("close", onClose);
+
+  // Handle the race where the process already exited before listeners were registered.
+  if (proc.exitCode !== null) {
+    settle(proc.exitCode, proc.signalCode ?? null, "already-exited");
+  } else {
+    try {
+      proc.kill("SIGINT");
+    } catch {
+      // ignore
+    }
+  }
+
+  async function waitOrTimeout(ms) {
+    const res = await Promise.race([
+      exitPromise,
+      new Promise((resolve) => setTimeout(() => resolve({ timeout: true }), ms))
+    ]);
+    return res;
+  }
+
+  const first = await waitOrTimeout(5_000);
+  if (first && typeof first === "object" && "timeout" in first) {
+    try {
+      proc.kill("SIGKILL");
+    } catch {
+      // ignore
+    }
+    const second = await waitOrTimeout(2_000);
+    if (second && typeof second === "object" && "timeout" in second) {
+      cleanup();
+      try {
+        proc.unref();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+}
+
+registerShutdown(async () => {
+  await stopNode();
 });
 
 try {
@@ -69,9 +145,5 @@ try {
     }
   );
 } finally {
-  if (startedNode && nodeProc) {
-    log("[ws10] Stopping Hardhat node...");
-    nodeProc.kill("SIGINT");
-    await new Promise((r) => nodeProc.once("exit", r));
-  }
+  await stopNode();
 }

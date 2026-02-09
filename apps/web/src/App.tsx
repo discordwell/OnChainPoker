@@ -83,6 +83,9 @@ export function App() {
   const [walletBal, setWalletBal] = useState<bigint>(0n);
   const [vaultBal, setVaultBal] = useState<bigint>(0n);
   const [allowance, setAllowance] = useState<bigint>(0n);
+  const [withdrawDelay, setWithdrawDelay] = useState<bigint>(0n);
+  const [withdrawReqAmt, setWithdrawReqAmt] = useState<bigint>(0n);
+  const [withdrawReqAt, setWithdrawReqAt] = useState<bigint>(0n);
 
   const [depositAmt, setDepositAmt] = useState<string>("10");
   const [withdrawAmt, setWithdrawAmt] = useState<string>("5");
@@ -169,17 +172,22 @@ export function App() {
     setSigList("");
     setResultHashPreview("");
     setNoncePreview("");
+    setWithdrawDelay(0n);
+    setWithdrawReqAmt(0n);
+    setWithdrawReqAt(0n);
   }, []);
 
   const refresh = useCallback(async () => {
     if (!tokenContract || !vaultContract || !address) return;
-    const [sym, dec, own, wb, vb, al] = await Promise.all([
+    const [sym, dec, own, wb, vb, al, wd, wr] = await Promise.all([
       tokenContract.symbol().catch(() => tokenSymbol),
       tokenContract.decimals().catch(() => tokenDecimals),
       tokenContract.owner().catch(() => ""),
       tokenContract.balanceOf(address),
       vaultContract.balanceOf(address),
-      tokenContract.allowance(address, ENV.vaultAddress)
+      tokenContract.allowance(address, ENV.vaultAddress),
+      vaultContract.withdrawDelay().catch(() => 0n),
+      vaultContract.withdrawRequests(address).catch(() => [0n, 0n])
     ]);
 
     setTokenSymbol(String(sym));
@@ -188,6 +196,11 @@ export function App() {
     setWalletBal(BigInt(wb));
     setVaultBal(BigInt(vb));
     setAllowance(BigInt(al));
+    setWithdrawDelay(BigInt(wd));
+    const wrAmt = (wr as any)?.amount ?? (wr as any)?.[0] ?? 0;
+    const wrAt = (wr as any)?.availableAt ?? (wr as any)?.[1] ?? 0;
+    setWithdrawReqAmt(BigInt(wrAmt));
+    setWithdrawReqAt(BigInt(wrAt));
   }, [tokenContract, vaultContract, address, tokenSymbol, tokenDecimals]);
 
   useEffect(() => {
@@ -234,16 +247,54 @@ export function App() {
       setError("");
       if (!vaultWrite) throw new Error("wallet not connected");
       const amtWei = ethers.parseUnits(withdrawAmt, tokenDecimals);
-      setStatus("Withdrawing from vault…");
-      const tx = await vaultWrite.withdraw(amtWei);
-      setStatus(`Withdraw tx sent: ${tx.hash}`);
-      await tx.wait();
-      setStatus("Withdraw confirmed.");
+      if (withdrawDelay === 0n) {
+        setStatus("Withdrawing from vault…");
+        const tx = await vaultWrite.withdraw(amtWei);
+        setStatus(`Withdraw tx sent: ${tx.hash}`);
+        await tx.wait();
+        setStatus("Withdraw confirmed.");
+      } else {
+        setStatus("Requesting withdraw…");
+        const tx = await vaultWrite.requestWithdraw(amtWei);
+        setStatus(`Withdraw request tx sent: ${tx.hash}`);
+        await tx.wait();
+        setStatus("Withdraw requested. Execute after the delay.");
+      }
       await refresh();
     } catch (e: any) {
       setError(e?.shortMessage ?? e?.message ?? String(e));
     }
-  }, [vaultWrite, withdrawAmt, tokenDecimals, refresh]);
+  }, [vaultWrite, withdrawAmt, tokenDecimals, refresh, withdrawDelay]);
+
+  const onExecuteWithdraw = useCallback(async () => {
+    try {
+      setError("");
+      if (!vaultWrite) throw new Error("wallet not connected");
+      setStatus("Executing withdraw…");
+      const tx = await vaultWrite.executeWithdraw();
+      setStatus(`Execute tx sent: ${tx.hash}`);
+      await tx.wait();
+      setStatus("Withdraw executed.");
+      await refresh();
+    } catch (e: any) {
+      setError(e?.shortMessage ?? e?.message ?? String(e));
+    }
+  }, [vaultWrite, refresh]);
+
+  const onCancelWithdraw = useCallback(async () => {
+    try {
+      setError("");
+      if (!vaultWrite) throw new Error("wallet not connected");
+      setStatus("Cancelling withdraw request…");
+      const tx = await vaultWrite.cancelWithdraw();
+      setStatus(`Cancel tx sent: ${tx.hash}`);
+      await tx.wait();
+      setStatus("Withdraw request cancelled.");
+      await refresh();
+    } catch (e: any) {
+      setError(e?.shortMessage ?? e?.message ?? String(e));
+    }
+  }, [vaultWrite, refresh]);
 
   const onMint = useCallback(async () => {
     try {
@@ -461,13 +512,54 @@ export function App() {
           </div>
 
           <div className="field">
-            <label>Withdraw ({tokenSymbol})</label>
+            <label>
+              Withdraw ({tokenSymbol}){" "}
+              {withdrawDelay !== 0n ? (
+                <span className="hint">
+                  delay: <span className="mono">{withdrawDelay.toString()}s</span>
+                </span>
+              ) : null}
+            </label>
             <div className="row">
               <input value={withdrawAmt} onChange={(e) => setWithdrawAmt(e.target.value)} placeholder="5" />
               <button className="btn" onClick={() => void onWithdraw()} disabled={!address || !chainOk}>
-                Withdraw
+                {withdrawDelay === 0n ? "Withdraw" : "Request"}
               </button>
+              {withdrawDelay !== 0n ? (
+                <>
+                  <button
+                    className="btn btnPrimary"
+                    onClick={() => void onExecuteWithdraw()}
+                    disabled={!address || !chainOk || withdrawReqAmt === 0n}
+                    title={withdrawReqAmt === 0n ? "No pending withdraw request" : "Execute once the delay has elapsed"}
+                  >
+                    Execute
+                  </button>
+                  <button
+                    className="btn btnDanger"
+                    onClick={() => void onCancelWithdraw()}
+                    disabled={!address || !chainOk || withdrawReqAmt === 0n}
+                    title={withdrawReqAmt === 0n ? "No pending withdraw request" : "Cancel the pending request"}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : null}
             </div>
+            {withdrawDelay !== 0n && withdrawReqAmt !== 0n ? (
+              <div className="hint" style={{ marginTop: 6 }}>
+                pending: <span className="mono">{fmt(withdrawReqAmt)}</span>{" "}
+                availableAt:{" "}
+                <span className="mono">
+                  {withdrawReqAt.toString()}
+                  {withdrawReqAt !== 0n ? ` (${new Date(Number(withdrawReqAt) * 1000).toLocaleString()})` : ""}
+                </span>
+              </div>
+            ) : withdrawDelay !== 0n ? (
+              <div className="hint" style={{ marginTop: 6 }}>
+                Request first, then execute after the delay. Others can submit already-signed settlements during this window.
+              </div>
+            ) : null}
           </div>
 
           <div className="field">

@@ -81,4 +81,3 @@ if (startedNode && nodeProc) {
   log("[ws10] Hardhat node running. Ctrl+C to stop.");
   await new Promise((r) => nodeProc.once("exit", r));
 }
-

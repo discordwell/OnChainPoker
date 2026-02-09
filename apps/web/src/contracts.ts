@@ -24,9 +24,14 @@ export const OCP_TOKEN_ABI = [
 
 export const POKER_VAULT_ABI = [
   "function token() view returns (address)",
+  "function withdrawDelay() view returns (uint256)",
   "function balanceOf(address) view returns (uint256)",
   "function deposit(uint256 amount)",
   "function withdraw(uint256 amount)",
+  "function withdrawRequests(address) view returns (uint256 amount, uint256 availableAt)",
+  "function requestWithdraw(uint256 amount)",
+  "function cancelWithdraw()",
+  "function executeWithdraw()",
   "function nonces(address) view returns (uint256)",
   "function handApplied(bytes32) view returns (bool)",
   "function computeResultHash(bytes32 handId, address[] players, int256[] deltas) view returns (bytes32)",
@@ -37,4 +42,3 @@ export function formatAddr(addr: string): string {
   if (!ethers.isAddress(addr)) return addr;
   return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
-

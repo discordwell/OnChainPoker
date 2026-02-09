@@ -3,6 +3,8 @@ import { network } from "hardhat";
 
 const { ethers } = await network.connect();
 
+const WITHDRAW_DELAY_SECS = 3600;
+
 const approvalTypes = {
   HandResultApproval: [
     { name: "resultHash", type: "bytes32" },
@@ -36,7 +38,7 @@ describe("PokerVault", () => {
     await token.waitForDeployment();
 
     const Vault = await ethers.getContractFactory("PokerVault");
-    const vault = await Vault.deploy(owner.address, await token.getAddress());
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), WITHDRAW_DELAY_SECS);
     await vault.waitForDeployment();
 
     await token.mint(alice.address, ethers.parseEther("100"));
@@ -94,8 +96,12 @@ describe("PokerVault", () => {
       .to.be.revertedWithCustomError(vault, "HandAlreadyApplied")
       .withArgs(handId);
 
-    await vault.connect(alice).withdraw(ethers.parseEther("60"));
-    await vault.connect(bob).withdraw(ethers.parseEther("40"));
+    await vault.connect(alice).requestWithdraw(ethers.parseEther("60"));
+    await vault.connect(bob).requestWithdraw(ethers.parseEther("40"));
+    await ethers.provider.send("evm_increaseTime", [WITHDRAW_DELAY_SECS]);
+    await ethers.provider.send("evm_mine", []);
+    await vault.connect(alice).executeWithdraw();
+    await vault.connect(bob).executeWithdraw();
 
     expect(await token.balanceOf(alice.address)).to.equal(ethers.parseEther("110"));
     expect(await token.balanceOf(bob.address)).to.equal(ethers.parseEther("90"));
@@ -109,7 +115,7 @@ describe("PokerVault", () => {
     await token.waitForDeployment();
 
     const Vault = await ethers.getContractFactory("PokerVault");
-    const vault = await Vault.deploy(owner.address, await token.getAddress());
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), WITHDRAW_DELAY_SECS);
     await vault.waitForDeployment();
 
     await token.mint(alice.address, ethers.parseEther("10"));
@@ -159,7 +165,7 @@ describe("PokerVault", () => {
     await token.waitForDeployment();
 
     const Vault = await ethers.getContractFactory("PokerVault");
-    const vault = await Vault.deploy(owner.address, await token.getAddress());
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), WITHDRAW_DELAY_SECS);
     await vault.waitForDeployment();
 
     await token.mint(alice.address, ethers.parseEther("5"));
@@ -199,7 +205,7 @@ describe("PokerVault", () => {
     await token.waitForDeployment();
 
     const Vault = await ethers.getContractFactory("PokerVault");
-    const vault = await Vault.deploy(owner.address, await token.getAddress());
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), WITHDRAW_DELAY_SECS);
     await vault.waitForDeployment();
 
     const handId = ethers.keccak256(ethers.toUtf8Bytes("hand-empty"));
@@ -223,7 +229,7 @@ describe("PokerVault", () => {
     await token.waitForDeployment();
 
     const Vault = await ethers.getContractFactory("PokerVault");
-    const vault = await Vault.deploy(owner.address, await token.getAddress());
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), WITHDRAW_DELAY_SECS);
     await vault.waitForDeployment();
 
     await token.mint(alice.address, ethers.parseEther("100"));
@@ -235,8 +241,41 @@ describe("PokerVault", () => {
     expect(await token.balanceOf(await vault.getAddress())).to.equal(ethers.parseEther("90"));
     expect(await vault.balanceOf(alice.address)).to.equal(ethers.parseEther("90"));
 
-    await vault.connect(alice).withdraw(ethers.parseEther("90"));
+    await vault.connect(alice).requestWithdraw(ethers.parseEther("90"));
+    await ethers.provider.send("evm_increaseTime", [WITHDRAW_DELAY_SECS]);
+    await ethers.provider.send("evm_mine", []);
+    await vault.connect(alice).executeWithdraw();
     expect(await vault.balanceOf(alice.address)).to.equal(0n);
     expect(await token.balanceOf(await vault.getAddress())).to.equal(0n);
+  });
+
+  it("enforces withdraw request delay and boundary timing", async () => {
+    const [owner, alice] = await ethers.getSigners();
+
+    const Token = await ethers.getContractFactory("OCPToken");
+    const token = await Token.deploy(owner.address, ethers.parseEther("1000000"));
+    await token.waitForDeployment();
+
+    const Vault = await ethers.getContractFactory("PokerVault");
+    const vault = await Vault.deploy(owner.address, await token.getAddress(), 10);
+    await vault.waitForDeployment();
+
+    await token.mint(alice.address, ethers.parseEther("10"));
+    await token.connect(alice).approve(await vault.getAddress(), ethers.parseEther("10"));
+    await vault.connect(alice).deposit(ethers.parseEther("10"));
+
+    await vault.connect(alice).requestWithdraw(ethers.parseEther("10"));
+    const req = await vault.withdrawRequests(alice.address);
+    const availableAt = req[1] as bigint;
+
+    await expect(vault.connect(alice).executeWithdraw())
+      .to.be.revertedWithCustomError(vault, "WithdrawNotReady")
+      .withArgs(alice.address, availableAt);
+
+    await ethers.provider.send("evm_setNextBlockTimestamp", [Number(availableAt)]);
+    await ethers.provider.send("evm_mine", []);
+
+    await vault.connect(alice).executeWithdraw();
+    expect(await vault.balanceOf(alice.address)).to.equal(0n);
   });
 });

@@ -204,4 +204,3 @@ export function registerShutdown(handler) {
     void wrapped("unhandledRejection");
   });
 }
-

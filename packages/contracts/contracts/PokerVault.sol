@@ -14,6 +14,11 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract PokerVault is Ownable, EIP712 {
     using SafeERC20 for IERC20;
 
+    struct WithdrawRequest {
+        uint256 amount;
+        uint256 availableAt;
+    }
+
     error EmptyPlayers();
     error LengthMismatch();
     error DeadlineExpired(uint256 deadline);
@@ -22,17 +27,26 @@ contract PokerVault is Ownable, EIP712 {
     error InvalidSignature(address expectedSigner, address recoveredSigner);
     error NonZeroSum();
     error InsufficientBalance(address player, uint256 have, uint256 need);
+    error DeltaInt256Min(address player);
+
+    error WithdrawalsDelayed();
+    error NoWithdrawRequest(address player);
+    error WithdrawNotReady(address player, uint256 availableAt);
 
     bytes32 public constant HAND_RESULT_APPROVAL_TYPEHASH =
         keccak256("HandResultApproval(bytes32 resultHash,uint256 nonce,uint256 deadline)");
 
     IERC20 public immutable token;
+    uint256 public immutable withdrawDelay;
 
     mapping(address => uint256) public balanceOf;
     mapping(address => uint256) public nonces;
     mapping(bytes32 => bool) public handApplied;
+    mapping(address => WithdrawRequest) public withdrawRequests;
 
     event Deposit(address indexed player, uint256 amount);
+    event WithdrawRequested(address indexed player, uint256 amount, uint256 availableAt);
+    event WithdrawCancelled(address indexed player);
     event Withdraw(address indexed player, uint256 amount);
     event HandResultApplied(
         bytes32 indexed handId,
@@ -42,8 +56,12 @@ contract PokerVault is Ownable, EIP712 {
         int256[] deltas
     );
 
-    constructor(address initialOwner, IERC20 token_) Ownable(initialOwner) EIP712("PokerVault", "1") {
+    constructor(address initialOwner, IERC20 token_, uint256 withdrawDelaySeconds)
+        Ownable(initialOwner)
+        EIP712("PokerVault", "1")
+    {
         token = token_;
+        withdrawDelay = withdrawDelaySeconds;
     }
 
     function deposit(uint256 amount) external {
@@ -54,12 +72,41 @@ contract PokerVault is Ownable, EIP712 {
         emit Deposit(msg.sender, received);
     }
 
+    /// @notice Immediate withdraw (only enabled when `withdrawDelay == 0`).
+    /// @dev When `withdrawDelay > 0`, use `requestWithdraw` + `executeWithdraw` so others have time
+    ///      to submit already-signed settlements before funds leave the vault.
     function withdraw(uint256 amount) external {
+        if (withdrawDelay != 0) revert WithdrawalsDelayed();
         uint256 bal = balanceOf[msg.sender];
         if (bal < amount) revert InsufficientBalance(msg.sender, bal, amount);
         balanceOf[msg.sender] = bal - amount;
         token.safeTransfer(msg.sender, amount);
         emit Withdraw(msg.sender, amount);
+    }
+
+    function requestWithdraw(uint256 amount) external {
+        uint256 availableAt = block.timestamp + withdrawDelay;
+        withdrawRequests[msg.sender] = WithdrawRequest({amount: amount, availableAt: availableAt});
+        emit WithdrawRequested(msg.sender, amount, availableAt);
+    }
+
+    function cancelWithdraw() external {
+        delete withdrawRequests[msg.sender];
+        emit WithdrawCancelled(msg.sender);
+    }
+
+    function executeWithdraw() external {
+        WithdrawRequest memory req = withdrawRequests[msg.sender];
+        if (req.amount == 0) revert NoWithdrawRequest(msg.sender);
+        if (block.timestamp < req.availableAt) revert WithdrawNotReady(msg.sender, req.availableAt);
+
+        uint256 bal = balanceOf[msg.sender];
+        if (bal < req.amount) revert InsufficientBalance(msg.sender, bal, req.amount);
+
+        balanceOf[msg.sender] = bal - req.amount;
+        delete withdrawRequests[msg.sender];
+        token.safeTransfer(msg.sender, req.amount);
+        emit Withdraw(msg.sender, req.amount);
     }
 
     function computeResultHash(bytes32 handId, address[] calldata players, int256[] calldata deltas)
@@ -107,6 +154,7 @@ contract PokerVault is Ownable, EIP712 {
             nonces[p] = nonce + 1;
 
             if (d < 0) {
+                if (d == type(int256).min) revert DeltaInt256Min(p);
                 uint256 ud = uint256(-d);
                 uint256 bal = balanceOf[p];
                 if (bal < ud) revert InsufficientBalance(p, bal, ud);
