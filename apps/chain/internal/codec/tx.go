@@ -10,8 +10,19 @@ import (
 // CometBFT transactions are opaque bytes. For v0 localnet we use JSON-encoded
 // txs to move fast; this is NOT the final protocol encoding.
 type TxEnvelope struct {
+	// Basic routing.
 	Type  string          `json:"type"`
 	Value json.RawMessage `json:"value"`
+
+	// v0 tx auth (optional):
+	// - Nonce: included in the signed message to prevent CometBFT tx-cache collisions.
+	// - Signer: logical signer id (validatorId for validator-signed txs).
+	// - Sig: Ed25519 signature over (type, nonce, signer, sha256(value)).
+	//
+	// Note: This is still a scaffold; it is NOT the final protocol encoding.
+	Nonce  string `json:"nonce,omitempty"`
+	Signer string `json:"signer,omitempty"`
+	Sig    []byte `json:"sig,omitempty"`
 }
 
 func DecodeTxEnvelope(txBytes []byte) (TxEnvelope, error) {
@@ -79,7 +90,22 @@ type PokerActTx struct {
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
 type StakingRegisterValidatorTx struct {
 	ValidatorID string `json:"validatorId"`
+	PubKey      []byte `json:"pubKey"` // base64 (32 bytes)
 	Power       uint64 `json:"power,omitempty"`
+}
+
+type StakingBondTx struct {
+	ValidatorID string `json:"validatorId"`
+	Amount      uint64 `json:"amount"`
+}
+
+type StakingUnbondTx struct {
+	ValidatorID string `json:"validatorId"`
+	Amount      uint64 `json:"amount"`
+}
+
+type StakingUnjailTx struct {
+	ValidatorID string `json:"validatorId"`
 }
 
 // ---- Dealer (v0) ----
@@ -128,6 +154,10 @@ type DealerDKGShareRevealTx struct {
 }
 
 type DealerFinalizeEpochTx struct {
+	EpochID uint64 `json:"epochId"`
+}
+
+type DealerDKGTimeoutTx struct {
 	EpochID uint64 `json:"epochId"`
 }
 

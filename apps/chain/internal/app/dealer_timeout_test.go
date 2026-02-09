@@ -80,6 +80,19 @@ func TestDealerTimeout_Shuffle_SlashesExpectedShufflerAndAllowsNext(t *testing.T
 	if len(a.st.Dealer.Epoch.Slashed) != 1 || a.st.Dealer.Epoch.Slashed[0] != "v1" {
 		t.Fatalf("expected v1 slashed, got %v", a.st.Dealer.Epoch.Slashed)
 	}
+	v1 := findValidator(a.st, "v1")
+	if v1 == nil {
+		t.Fatalf("expected v1 validator record")
+	}
+	if v1.Status != state.ValidatorJailed {
+		t.Fatalf("expected v1 jailed after timeout slash")
+	}
+	if v1.Bond != 90 {
+		t.Fatalf("expected v1 bond slashed to 90 (10%%), got %d", v1.Bond)
+	}
+	if got := a.st.Balance(treasuryAccount); got != 10 {
+		t.Fatalf("expected treasury balance 10 after slash, got %d", got)
+	}
 
 	// Now v2 should be the expected shuffler for round 1.
 	submitShuffleOnce(t, a, timeoutH, tableID, handID, "v2")
@@ -117,7 +130,7 @@ func TestDealerTimeout_Reveal_SlashesMissingAndFinalizesReveal(t *testing.T) {
 	handID := table.Hand.HandID
 	dh := table.Hand.Dealer
 
-	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+	submitAllShuffles(t, a, height, tableID, handID)
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,
@@ -200,7 +213,7 @@ func TestDealerTimeout_HoleShares_AbortsAndRefunds(t *testing.T) {
 	handID := table.Hand.HandID
 	dh := table.Hand.Dealer
 
-	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+	submitAllShuffles(t, a, height, tableID, handID)
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,

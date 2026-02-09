@@ -35,7 +35,7 @@ func TestDecodeTxEnvelope_IgnoresUnknownFields(t *testing.T) {
 	// v0 clients may include a throwaway nonce to keep tx bytes unique.
 	b, err := json.Marshal(map[string]any{
 		"type":  "bank/mint",
-		"nonce": 7,
+		"nonce": "7",
 		"value": map[string]any{"to": "alice", "amount": 1},
 	})
 	if err != nil {
@@ -67,4 +67,3 @@ func TestDecodeTxEnvelope_InvalidJSON(t *testing.T) {
 		t.Fatalf("expected error")
 	}
 }
-

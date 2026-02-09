@@ -1,12 +1,17 @@
 package app
 
 import (
+	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"strconv"
+	"sync/atomic"
 	"testing"
 
 	abci "github.com/cometbft/cometbft/abci/types"
 
+	"onchainpoker/apps/chain/internal/codec"
 	"onchainpoker/apps/chain/internal/state"
 )
 
@@ -25,6 +30,36 @@ func txBytes(t *testing.T, typ string, value any) []byte {
 		"type":  typ,
 		"value": value,
 	})
+}
+
+var testTxNonce uint64
+
+func testEd25519Key(validatorID string) (ed25519.PublicKey, ed25519.PrivateKey) {
+	seed := sha256.Sum256([]byte("ocp/test/ed25519/" + validatorID))
+	priv := ed25519.NewKeyFromSeed(seed[:])
+	pub := priv.Public().(ed25519.PublicKey)
+	return pub, priv
+}
+
+func txBytesSigned(t *testing.T, typ string, value any, signerID string) []byte {
+	t.Helper()
+	if signerID == "" {
+		t.Fatalf("txBytesSigned: missing signerID")
+	}
+	_, priv := testEd25519Key(signerID)
+	valueBytes := mustMarshal(t, value)
+	nonce := fmt.Sprintf("test-%d", atomic.AddUint64(&testTxNonce, 1))
+	msg := txAuthSignBytesV0(typ, valueBytes, nonce, signerID)
+	sig := ed25519.Sign(priv, msg)
+
+	env := codec.TxEnvelope{
+		Type:   typ,
+		Value:  valueBytes,
+		Nonce:  nonce,
+		Signer: signerID,
+		Sig:    sig,
+	}
+	return mustMarshal(t, env)
 }
 
 func findEvent(events []abci.Event, typ string) *abci.Event {

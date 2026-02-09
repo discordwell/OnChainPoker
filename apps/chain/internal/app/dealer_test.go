@@ -71,9 +71,17 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 
 	// Register validators (staking stub).
 	for _, id := range validatorIDs {
-		mustOk(t, a.deliverTx(txBytes(t, "staking/register_validator", map[string]any{
+		pub, _ := testEd25519Key(id)
+		// Fund + bond so validators are eligible for committee sampling.
+		mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": id, "amount": uint64(1000)}), height, 0))
+		mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
 			"validatorId": id,
-		}), height, 0))
+			"pubKey":      []byte(pub),
+		}, id), height, 0))
+		mustOk(t, a.deliverTx(txBytesSigned(t, "staking/bond", map[string]any{
+			"validatorId": id,
+			"amount":      uint64(100),
+		}, id), height, 0))
 	}
 
 	// Begin epoch DKG. With a registry containing exactly committeeSize validators, committee selection is deterministic.
@@ -110,11 +118,11 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 		for _, c := range coeffs {
 			commitments = append(commitments, ocpcrypto.MulBase(c).Bytes())
 		}
-		mustOk(t, a.deliverTx(txBytes(t, "dealer/dkg_commit", map[string]any{
+		mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
 			"epochId":      epochID,
 			"dealerId":     dkg.Members[di].ValidatorID,
 			"commitments": commitments,
-		}), height, 0))
+		}, dkg.Members[di].ValidatorID), height, 0))
 	}
 
 	// Compute per-validator secret shares for later dealer proofs.
@@ -188,14 +196,14 @@ func submitPubShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epoc
 	}
 	proofBytes := ocpcrypto.EncodeChaumPedersenProof(cp)
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/submit_pub_share", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/submit_pub_share", map[string]any{
 		"tableId":     tableID,
 		"handId":      handID,
 		"pos":         pos,
 		"validatorId": validatorID,
 		"pubShare":    share.Bytes(),
 		"proofShare":  proofBytes,
-	}), height, 0))
+	}, validatorID), height, 0))
 }
 
 func submitEncShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epochID uint64, validatorID string, xShare ocpcrypto.Scalar, pos uint8, pkPlayer ocpcrypto.Point, rSeed, wxSeed, wrSeed uint64) {
@@ -242,7 +250,7 @@ func submitEncShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epoc
 	encShareBytes := append(append([]byte(nil), U.Bytes()...), V.Bytes()...)
 	proofBytes := ocpcrypto.EncodeEncShareProof(proof)
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/submit_enc_share", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/submit_enc_share", map[string]any{
 		"tableId":       tableID,
 		"handId":        handID,
 		"pos":           pos,
@@ -250,10 +258,15 @@ func submitEncShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epoc
 		"pkPlayer":      pkPlayer.Bytes(),
 		"encShare":      encShareBytes,
 		"proofEncShare": proofBytes,
-	}), height, 0))
+	}, validatorID), height, 0))
 }
 
 func submitShuffleOnce(t *testing.T, a *OCPApp, height int64, tableID, handID uint64, shufflerID string) {
+	t.Helper()
+	submitShuffleRound(t, a, height, tableID, handID, uint16(1), shufflerID)
+}
+
+func submitShuffleRound(t *testing.T, a *OCPApp, height int64, tableID, handID uint64, round uint16, shufflerID string) {
 	t.Helper()
 
 	table := a.st.Tables[tableID]
@@ -282,13 +295,36 @@ func submitShuffleOnce(t *testing.T, a *OCPApp, height int64, tableID, handID ui
 		t.Fatalf("prove: %v", err)
 	}
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/submit_shuffle", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/submit_shuffle", map[string]any{
 		"tableId":      tableID,
 		"handId":       handID,
-		"round":        uint16(1),
+		"round":        round,
 		"shufflerId":   shufflerID,
 		"proofShuffle": prove.ProofBytes,
-	}), height, 0))
+	}, shufflerID), height, 0))
+}
+
+func submitAllShuffles(t *testing.T, a *OCPApp, height int64, tableID, handID uint64) {
+	t.Helper()
+
+	for {
+		table := a.st.Tables[tableID]
+		if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
+			t.Fatalf("expected dealer hand state")
+		}
+		dh := table.Hand.Dealer
+
+		epoch := a.st.Dealer.Epoch
+		if epoch == nil {
+			t.Fatalf("expected dealer epoch")
+		}
+		qual := epochQualMembers(epoch)
+		if int(dh.ShuffleStep) >= len(qual) {
+			return
+		}
+		expectID := qual[dh.ShuffleStep].ValidatorID
+		submitShuffleRound(t, a, height, tableID, handID, dh.ShuffleStep+1, expectID)
+	}
 }
 
 func revealNextWithMember(t *testing.T, a *OCPApp, height int64, tableID, handID, epochID uint64, member testMember, w uint64) *abci.ExecTxResult {
@@ -335,8 +371,8 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 		t.Fatalf("deck size mismatch: deckSize=%d len=%d", dh.DeckSize, len(dh.Deck))
 	}
 
-	// Shuffle at least once before finalizing (otherwise the initial encrypted deck order is public).
-	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+	// Shuffle by every qualified member before finalizing (otherwise a single shuffler could know the deck).
+	submitAllShuffles(t, a, height, tableID, handID)
 
 	// Finalize the deck (assign hole positions + community cursor).
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
@@ -451,13 +487,13 @@ func TestDealer_SubmitShuffle_UpdatesDeck(t *testing.T) {
 		t.Fatalf("prove: %v", err)
 	}
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/submit_shuffle", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/submit_shuffle", map[string]any{
 		"tableId":      tableID,
 		"handId":       handID,
 		"round":        uint16(1),
 		"shufflerId":   "v1",
 		"proofShuffle": prove.ProofBytes,
-	}), height, 0))
+	}, "v1"), height, 0))
 
 	after0 := dh.Deck[0].C1
 	if string(after0) == string(before0) {
@@ -483,7 +519,7 @@ func TestDealer_SubmitEncShare_VerifiesEncShareProof(t *testing.T) {
 
 	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 	handID := a.st.Tables[tableID].Hand.HandID
-	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+	submitAllShuffles(t, a, height, tableID, handID)
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,
@@ -517,7 +553,7 @@ func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
 	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 	table := a.st.Tables[tableID]
 	handID := table.Hand.HandID
-	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+	submitAllShuffles(t, a, height, tableID, handID)
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { randomBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, randomBytes, sign as cryptoSign } from "node:crypto";
 
 import { OcpV0Client } from "../packages/ocp-sdk/dist/index.js";
 import {
@@ -36,6 +36,42 @@ function b64(bytes) {
 
 function unb64(str) {
   return new Uint8Array(Buffer.from(String(str), "base64"));
+}
+
+function b64urlToBytes(str) {
+  const s = String(str);
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  return new Uint8Array(Buffer.from(b64, "base64"));
+}
+
+// v0 tx auth: ed25519 signature over (type, nonce, signer, sha256(valueJson)).
+let txNonceCtr = 0;
+function nextTxNonce() {
+  return `${Date.now()}-${++txNonceCtr}`;
+}
+
+function txAuthSignBytesV0({ type, value, nonce, signer }) {
+  const valueBytes = Buffer.from(JSON.stringify(value), "utf8");
+  const valueHash = createHash("sha256").update(valueBytes).digest();
+  return Buffer.concat([
+    Buffer.from("ocp/tx/v0", "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(type), "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(nonce), "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(signer), "utf8"),
+    Buffer.from([0]),
+    valueHash,
+  ]);
+}
+
+function signedEnv({ type, value, signerId, signerSk }) {
+  const nonce = nextTxNonce();
+  const msg = txAuthSignBytesV0({ type, value, nonce, signer: signerId });
+  const sig = cryptoSign(null, msg, signerSk);
+  return { type, value, nonce, signer: signerId, sig: b64(sig) };
 }
 
 function u64le(n) {
@@ -194,7 +230,8 @@ async function main() {
   const numPlayers = Math.min(9, Math.max(2, Number(process.env.OCP_PLAYERS ?? 3)));
   const committeeN = Math.min(9, Math.max(1, Number(process.env.OCP_COMMITTEE_N ?? 3)));
   const threshold = Math.min(committeeN, Math.max(1, Number(process.env.OCP_THRESHOLD ?? Math.min(2, committeeN))));
-  const shuffleSteps = Math.max(1, Number(process.env.OCP_SHUFFLE_STEPS ?? Math.min(2, committeeN)));
+  // The chain requires the deck be shuffled by every QUAL committee member before finalization.
+  const shuffleSteps = Math.min(committeeN, Math.max(1, Number(process.env.OCP_SHUFFLE_STEPS ?? committeeN)));
   const shuffleRounds = Math.max(2, Number(process.env.OCP_SHUFFLE_ROUNDS ?? 8));
   const requestedEpochId = Math.max(0, Number(process.env.OCP_EPOCH_ID ?? 0));
 
@@ -206,9 +243,32 @@ async function main() {
   const committee = Array.from({ length: committeeN }, (_, i) => {
     const index = i + 1; // DKG assigns indices deterministically by sorting validator ids; v1..vN => 1..N.
     const id = `v${index}`;
-    return { id, index, skShare: 0n };
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const jwk = publicKey.export({ format: "jwk" });
+    const pkSignBytes = b64urlToBytes(jwk.x);
+    if (pkSignBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
+    return { id, index, skShare: 0n, signSk: privateKey, signPkBytes: pkSignBytes };
   });
-  for (const v of committee) await ocp.stakingRegisterValidator({ validatorId: v.id, power: 1 });
+  const committeeById = new Map(committee.map((m) => [m.id, m]));
+  for (const v of committee) {
+    await ocp.bankMint({ to: v.id, amount: 100000 });
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "staking/register_validator",
+        value: { validatorId: v.id, pubKey: b64(v.signPkBytes), power: 1 },
+        signerId: v.id,
+        signerSk: v.signSk,
+      })
+    );
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "staking/bond",
+        value: { validatorId: v.id, amount: 1000 },
+        signerId: v.id,
+        signerSk: v.signSk,
+      })
+    );
+  }
 
   // Begin epoch DKG. If the requested epoch id is wrong (state already advanced), omit epochId.
   const beginRes = await ocp.dealerBeginEpoch({
@@ -233,7 +293,16 @@ async function main() {
 
   for (const p of polys) {
     const commitments = p.coeffs.map((a) => b64(groupElementToBytes(mulBase(a))));
-    await ocp.dealerDkgCommit({ epochId, dealerId: p.dealerId, commitments });
+    const dealer = committeeById.get(p.dealerId);
+    if (!dealer) throw new Error(`missing dealer signing key for ${p.dealerId}`);
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "dealer/dkg_commit",
+        value: { epochId, dealerId: p.dealerId, commitments },
+        signerId: dealer.id,
+        signerSk: dealer.signSk,
+      })
+    );
   }
 
   // Derive epoch secret and per-validator shares (needed to produce decrypt shares later in this script).
@@ -321,13 +390,14 @@ async function main() {
     const { proofBytes } = shuffleProveV1(pkHand, deckIn, { rounds: shuffleRounds, seed });
     const shuffler = committee[(step - 1) % committee.length]!;
 
-    await ocp.dealerSubmitShuffle({
-      tableId,
-      handId,
-      round: step,
-      shufflerId: shuffler.id,
-      proofShuffle: b64(proofBytes),
-    });
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "dealer/submit_shuffle",
+        value: { tableId, handId, round: step, shufflerId: shuffler.id, proofShuffle: b64(proofBytes) },
+        signerId: shuffler.id,
+        signerSk: shuffler.signSk,
+      })
+    );
   }
 
   await ocp.dealerFinalizeDeck({ tableId, handId });
@@ -370,15 +440,22 @@ async function main() {
         const encShareBytes = concatBytes(groupElementToBytes(u), groupElementToBytes(v));
         const proofBytes = encodeEncShareProof(proof);
 
-        await ocp.dealerSubmitEncShare({
-          tableId,
-          handId,
-          pos,
-          validatorId: m.id,
-          pkPlayer: b64(groupElementToBytes(p.pk)),
-          encShare: b64(encShareBytes),
-          proofEncShare: b64(proofBytes),
-        });
+        await ocp.broadcastTxEnvelope(
+          signedEnv({
+            type: "dealer/submit_enc_share",
+            value: {
+              tableId,
+              handId,
+              pos,
+              validatorId: m.id,
+              pkPlayer: b64(groupElementToBytes(p.pk)),
+              encShare: b64(encShareBytes),
+              proofEncShare: b64(proofBytes),
+            },
+            signerId: m.id,
+            signerSk: m.signSk,
+          })
+        );
       }
     }
   }
@@ -474,14 +551,21 @@ async function main() {
         const proof = chaumPedersenProve({ y: yHand, c1: c1Cipher, d, x: xHand, w });
         const proofBytes = encodeChaumPedersenProof(proof);
 
-        await ocp.dealerSubmitPubShare({
-          tableId,
-          handId,
-          pos,
-          validatorId: m.id,
-          pubShare: b64(groupElementToBytes(d)),
-          proofShare: b64(proofBytes),
-        });
+        await ocp.broadcastTxEnvelope(
+          signedEnv({
+            type: "dealer/submit_pub_share",
+            value: {
+              tableId,
+              handId,
+              pos,
+              validatorId: m.id,
+              pubShare: b64(groupElementToBytes(d)),
+              proofShare: b64(proofBytes),
+            },
+            signerId: m.id,
+            signerSk: m.signSk,
+          })
+        );
       }
 
       await ocp.dealerFinalizeReveal({ tableId, handId, pos });

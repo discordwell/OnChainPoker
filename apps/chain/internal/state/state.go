@@ -336,8 +336,10 @@ const (
 
 type Validator struct {
 	ValidatorID string          `json:"validatorId"`
+	PubKey      []byte          `json:"pubKey,omitempty"` // 32-byte ed25519 public key (base64 in JSON)
 	Power       uint64          `json:"power,omitempty"`
 	Status      ValidatorStatus `json:"status"`
+	Bond        uint64          `json:"bond,omitempty"` // staked/bonded tokens locked for slashing
 	SlashCount  uint32          `json:"slashCount,omitempty"`
 }
 

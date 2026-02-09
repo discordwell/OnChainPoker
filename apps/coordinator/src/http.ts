@@ -191,13 +191,15 @@ export function createHttpApp(opts: {
     if (phase === "shuffle") {
       const shuffleStep = asNumber(dh.shuffleStep) ?? 0;
       const nextRound = shuffleStep + 1;
-      const canFinalize = shuffleStep > 0;
+      // v1 dealer mode requires the deck be shuffled by every QUAL member before finalization.
+      let canFinalize = shuffleStep > 0;
 
       let suggestedShuffler: string | null = null;
       if (epoch?.members?.length) {
         const qual = [...epoch.members]
           .filter((m) => !slashed.has(String(m.validatorId)))
           .sort((a, b) => (a.index ?? 0) - (b.index ?? 0) || String(a.validatorId).localeCompare(String(b.validatorId)));
+        canFinalize = shuffleStep >= qual.length;
         const pick = qual[shuffleStep];
         suggestedShuffler = pick?.validatorId ?? null;
       }

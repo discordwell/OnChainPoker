@@ -2,6 +2,7 @@ package app
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -125,6 +126,16 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 	active := make([]string, 0, len(st.Dealer.Validators))
 	for _, v := range st.Dealer.Validators {
 		if v.ValidatorID == "" {
+			continue
+		}
+		if v.Status != "" && v.Status != state.ValidatorActive {
+			continue
+		}
+		// v0 staking: require an on-chain pubkey and a non-zero bond to be eligible for committee sampling.
+		if len(v.PubKey) != ed25519.PublicKeySize {
+			continue
+		}
+		if v.Bond == 0 {
 			continue
 		}
 		if v.Status == "" || v.Status == state.ValidatorActive {
@@ -422,6 +433,52 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 	if findDKGComplaint(dkg, msg.ComplainerID, msg.DealerID) != nil {
 		return nil, fmt.Errorf("complaint already filed")
 	}
+
+	shareMsg, err := decodeDKGShareMsgV1(msg.ShareMsg)
+	if err != nil {
+		return nil, err
+	}
+	if shareMsg.EpochID != dkg.EpochID {
+		return nil, fmt.Errorf("shareMsg epochId mismatch")
+	}
+	if shareMsg.DealerID != msg.DealerID {
+		return nil, fmt.Errorf("shareMsg dealerId mismatch")
+	}
+	if shareMsg.ToID != msg.ComplainerID {
+		return nil, fmt.Errorf("shareMsg toId mismatch")
+	}
+	vDealer := findValidator(st, msg.DealerID)
+	if vDealer == nil || len(vDealer.PubKey) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("dealer validator missing pubKey")
+	}
+	sigMsg := append(append([]byte(dkgShareMsgDomainV1), 0), shareMsg.Body...)
+	if !ed25519.Verify(ed25519.PublicKey(vDealer.PubKey), sigMsg, shareMsg.Sig) {
+		return nil, fmt.Errorf("invalid shareMsg signature")
+	}
+
+	// Verify share against on-chain commitments. If invalid, slash dealer immediately (objective evidence).
+	var slashedAmt uint64
+	commit := findDKGCommit(dkg, msg.DealerID)
+	toMem := findDKGMember(dkg, msg.ComplainerID)
+	if toMem == nil {
+		return nil, fmt.Errorf("complainer not in committee")
+	}
+	if commit == nil {
+		// Missing commit after the commit deadline is slashable.
+		dkgSlash(dkg, msg.DealerID)
+		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+	} else {
+		ok, err := dkgVerifyShare(commit.Commitments, toMem.Index, shareMsg.Share)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			return nil, fmt.Errorf("share matches commitments")
+		}
+		dkgSlash(dkg, msg.DealerID)
+		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+	}
+
 	dkg.Complaints = append(dkg.Complaints, state.DealerDKGComplaint{
 		EpochID:      dkg.EpochID,
 		ComplainerID: msg.ComplainerID,
@@ -435,12 +492,24 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 		}
 		return dkg.Complaints[i].ComplainerID < dkg.Complaints[j].ComplainerID
 	})
-	return okEvent("DKGComplaintAccepted", map[string]string{
+	res := okEvent("DKGComplaintAccepted", map[string]string{
 		"epochId":      fmt.Sprintf("%d", dkg.EpochID),
 		"dealerId":     msg.DealerID,
 		"complainerId": msg.ComplainerID,
 		"kind":         "invalid",
-	}), nil
+	})
+	if slashedAmt > 0 || dkgIsSlashed(dkg, msg.DealerID) {
+		res.Events = append(res.Events, abci.Event{
+			Type: "ValidatorSlashed",
+			Attributes: []abci.EventAttribute{
+				{Key: "epochId", Value: fmt.Sprintf("%d", dkg.EpochID), Index: true},
+				{Key: "validatorId", Value: msg.DealerID, Index: true},
+				{Key: "reason", Value: "dkg-invalid-share", Index: false},
+				{Key: "amount", Value: fmt.Sprintf("%d", slashedAmt), Index: false},
+			},
+		})
+	}
+	return res, nil
 }
 
 func dkgEvalCommitment(commitments [][]byte, x uint32) (ocpcrypto.Point, error) {
@@ -700,30 +769,108 @@ func dealerFinalizeEpoch(st *state.State, msg codec.DealerFinalizeEpochTx) (*abc
 		Slashed:        append([]string(nil), dkg.Slashed...),
 	}
 
-	// Jail slashed validators in the stub registry (objective evidence is the on-chain transcript).
-	for _, vid := range dkg.Slashed {
-		v := findValidator(st, vid)
-		if v == nil {
-			continue
-		}
-		if v.Status == state.ValidatorJailed {
-			continue
-		}
-		v.Status = state.ValidatorJailed
-		v.SlashCount++
-	}
-
 	// Clear in-progress DKG.
 	st.Dealer.DKG = nil
 
-	ev := okEvent("DealerEpochFinalized", map[string]string{
+	res := okEvent("DealerEpochFinalized", map[string]string{
 		"epochId":        fmt.Sprintf("%d", st.Dealer.Epoch.EpochID),
 		"threshold":      fmt.Sprintf("%d", st.Dealer.Epoch.Threshold),
 		"committeeSize":  fmt.Sprintf("%d", len(st.Dealer.Epoch.Members)),
 		"transcriptRoot": fmt.Sprintf("%x", root),
 		"slashed":        fmt.Sprintf("%d", len(dkg.Slashed)),
 	})
-	return ev, nil
+	for _, vid := range dkg.Slashed {
+		amt := jailAndSlashValidator(st, vid, slashBpsDKG)
+		res.Events = append(res.Events, abci.Event{
+			Type: "ValidatorSlashed",
+			Attributes: []abci.EventAttribute{
+				{Key: "epochId", Value: fmt.Sprintf("%d", st.Dealer.Epoch.EpochID), Index: true},
+				{Key: "validatorId", Value: vid, Index: true},
+				{Key: "reason", Value: "dkg", Index: false},
+				{Key: "amount", Value: fmt.Sprintf("%d", amt), Index: false},
+			},
+		})
+	}
+	return res, nil
+}
+
+func dealerDKGTimeout(st *state.State, msg codec.DealerDKGTimeoutTx) (*abci.ExecTxResult, error) {
+	if st == nil || st.Dealer == nil || st.Dealer.DKG == nil {
+		return nil, fmt.Errorf("no dkg in progress")
+	}
+	dkg := st.Dealer.DKG
+	if msg.EpochID != dkg.EpochID {
+		return nil, fmt.Errorf("epochId mismatch: expected %d got %d", dkg.EpochID, msg.EpochID)
+	}
+	if st.Height <= dkg.CommitDeadline {
+		return nil, fmt.Errorf("too early for dkg timeout: height=%d commitDeadline=%d", st.Height, dkg.CommitDeadline)
+	}
+
+	events := []abci.Event{
+		{
+			Type: "DKGTimeoutApplied",
+			Attributes: []abci.EventAttribute{
+				{Key: "epochId", Value: fmt.Sprintf("%d", dkg.EpochID), Index: true},
+				{Key: "height", Value: fmt.Sprintf("%d", st.Height), Index: true},
+			},
+		},
+	}
+
+	// Apply slashing for missing commits once the commit deadline passes.
+	for _, m := range dkg.Members {
+		if findDKGCommit(dkg, m.ValidatorID) != nil {
+			continue
+		}
+		if dkgIsSlashed(dkg, m.ValidatorID) {
+			continue
+		}
+		dkgSlash(dkg, m.ValidatorID)
+		amt := jailAndSlashValidator(st, m.ValidatorID, slashBpsDKG)
+		events = append(events, abci.Event{
+			Type: "ValidatorSlashed",
+			Attributes: []abci.EventAttribute{
+				{Key: "epochId", Value: fmt.Sprintf("%d", dkg.EpochID), Index: true},
+				{Key: "validatorId", Value: m.ValidatorID, Index: true},
+				{Key: "reason", Value: "dkg-commit-timeout", Index: false},
+				{Key: "amount", Value: fmt.Sprintf("%d", amt), Index: false},
+			},
+		})
+	}
+
+	qualDealers := make([]state.DealerMember, 0, len(dkg.Members))
+	for _, m := range dkg.Members {
+		if dkgIsSlashed(dkg, m.ValidatorID) {
+			continue
+		}
+		qualDealers = append(qualDealers, m)
+	}
+
+	if len(qualDealers) < int(dkg.Threshold) {
+		// Abort early if the DKG can no longer reach threshold (liveness).
+		st.Dealer.DKG = nil
+		events = append(events, abci.Event{
+			Type: "DealerEpochAborted",
+			Attributes: []abci.EventAttribute{
+				{Key: "epochId", Value: fmt.Sprintf("%d", dkg.EpochID), Index: true},
+				{Key: "threshold", Value: fmt.Sprintf("%d", dkg.Threshold), Index: true},
+				{Key: "qual", Value: fmt.Sprintf("%d", len(qualDealers)), Index: true},
+				{Key: "reason", Value: "dkg-below-threshold", Index: false},
+			},
+		})
+		return &abci.ExecTxResult{Code: 0, Events: events}, nil
+	}
+
+	// If the reveal deadline passed, finalize deterministically.
+	if st.Height > dkg.RevealDeadline {
+		res, err := dealerFinalizeEpoch(st, codec.DealerFinalizeEpochTx{EpochID: msg.EpochID})
+		if err != nil {
+			return nil, err
+		}
+		res.Events = append(events, res.Events...)
+		return res, nil
+	}
+
+	return &abci.ExecTxResult{Code: 0, Events: events}, nil
 }
 
 func dealerInitHand(st *state.State, t *state.Table, msg codec.DealerInitHandTx, nowUnix int64) (*abci.ExecTxResult, error) {
@@ -902,7 +1049,10 @@ func dealerSubmitShuffle(st *state.State, t *state.Table, msg codec.DealerSubmit
 	return ev, nil
 }
 
-func dealerFinalizeDeck(t *state.Table, msg codec.DealerFinalizeDeckTx, nowUnix int64) (*abci.ExecTxResult, error) {
+func dealerFinalizeDeck(st *state.State, t *state.Table, msg codec.DealerFinalizeDeckTx, nowUnix int64) (*abci.ExecTxResult, error) {
+	if st == nil || st.Dealer == nil {
+		return nil, fmt.Errorf("state missing dealer epoch")
+	}
 	if t == nil || t.Hand == nil || t.Hand.Dealer == nil {
 		return nil, fmt.Errorf("dealer hand not initialized")
 	}
@@ -917,8 +1067,18 @@ func dealerFinalizeDeck(t *state.Table, msg codec.DealerFinalizeDeckTx, nowUnix 
 	if dh.Finalized {
 		return nil, fmt.Errorf("deck already finalized")
 	}
-	if dh.ShuffleStep == 0 {
-		return nil, fmt.Errorf("deck must be shuffled before finalization")
+	epoch := st.Dealer.Epoch
+	if epoch == nil || epoch.EpochID != dh.EpochID {
+		return nil, fmt.Errorf("epoch not available")
+	}
+	qual := epochQualMembers(epoch)
+	if len(qual) < int(epoch.Threshold) {
+		return nil, fmt.Errorf("insufficient qualified members: have %d need %d", len(qual), epoch.Threshold)
+	}
+	// Require every QUAL member to contribute exactly one shuffle in deterministic order. This ensures that
+	// as long as at least one QUAL member is honest, no single party can know the final deck order.
+	if int(dh.ShuffleStep) != len(qual) {
+		return nil, fmt.Errorf("deck must be shuffled by all qualified members before finalization: have %d need %d", dh.ShuffleStep, len(qual))
 	}
 	dh.Finalized = true
 
@@ -1623,32 +1783,38 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 			return nil, fmt.Errorf("shuffle not timed out")
 		}
 
-		// If we already have at least one shuffle, the contract can finalize the deck deterministically.
-		if dh.ShuffleStep > 0 {
-			ev, err := dealerFinalizeDeck(t, codec.DealerFinalizeDeckTx{TableID: t.ID, HandID: h.HandID}, nowUnix)
-			if err != nil {
-				return nil, err
-			}
-			events = append(events, ev.Events...)
-			return &abci.ExecTxResult{Code: 0, Events: events}, nil
-		}
-
 		qual := epochQualMembers(epoch)
 		if len(qual) == 0 {
 			events = append(events, abortHandRefundAllCommits(t, "dealer: no qualified committee members")...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
-		// Slash the expected shuffler for round=1 (shuffleStep=0).
-		expectID := qual[0].ValidatorID
+		// If all qualified members already shuffled, allow anyone to finalize deterministically.
+		if int(dh.ShuffleStep) == len(qual) {
+			ev, err := dealerFinalizeDeck(st, t, codec.DealerFinalizeDeckTx{TableID: t.ID, HandID: h.HandID}, nowUnix)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, ev.Events...)
+			return &abci.ExecTxResult{Code: 0, Events: events}, nil
+		}
+		if int(dh.ShuffleStep) > len(qual) {
+			return nil, fmt.Errorf("shuffleStep out of range: step=%d qual=%d", dh.ShuffleStep, len(qual))
+		}
+
+		// Slash the expected shuffler for the next round (shuffleStep starts at 0).
+		expectID := qual[dh.ShuffleStep].ValidatorID
 		if epochSlash(epoch, expectID) {
+			amt := jailAndSlashValidator(st, expectID, slashBpsHandDealer)
 			events = append(events, abci.Event{
 				Type: "ValidatorSlashed",
 				Attributes: []abci.EventAttribute{
 					{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
 					{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+					{Key: "epochId", Value: fmt.Sprintf("%d", epoch.EpochID), Index: true},
 					{Key: "validatorId", Value: expectID, Index: true},
 					{Key: "reason", Value: "shuffle-timeout", Index: false},
+					{Key: "amount", Value: fmt.Sprintf("%d", amt), Index: false},
 				},
 			})
 		}
@@ -1656,6 +1822,16 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 		qual = epochQualMembers(epoch)
 		if len(qual) < threshold {
 			events = append(events, abortHandRefundAllCommits(t, "dealer: committee below threshold after shuffle timeout")...)
+			return &abci.ExecTxResult{Code: 0, Events: events}, nil
+		}
+
+		// If slashing reduced QUAL enough that all remaining members already shuffled, finalize now.
+		if int(dh.ShuffleStep) == len(qual) {
+			ev, err := dealerFinalizeDeck(st, t, codec.DealerFinalizeDeckTx{TableID: t.ID, HandID: h.HandID}, nowUnix)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, ev.Events...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
@@ -1678,13 +1854,16 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 		}
 		for _, id := range missing {
 			if epochSlash(epoch, id) {
+				amt := jailAndSlashValidator(st, id, slashBpsHandDealer)
 				events = append(events, abci.Event{
 					Type: "ValidatorSlashed",
 					Attributes: []abci.EventAttribute{
 						{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
 						{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+						{Key: "epochId", Value: fmt.Sprintf("%d", epoch.EpochID), Index: true},
 						{Key: "validatorId", Value: id, Index: true},
 						{Key: "reason", Value: "hole-enc-shares-timeout", Index: false},
+						{Key: "amount", Value: fmt.Sprintf("%d", amt), Index: false},
 					},
 				})
 			}
@@ -1744,13 +1923,16 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 	missing := dealerMissingPubShares(epoch, dh, pos)
 	for _, id := range missing {
 		if epochSlash(epoch, id) {
+			amt := jailAndSlashValidator(st, id, slashBpsHandDealer)
 			events = append(events, abci.Event{
 				Type: "ValidatorSlashed",
 				Attributes: []abci.EventAttribute{
 					{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
 					{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+					{Key: "epochId", Value: fmt.Sprintf("%d", epoch.EpochID), Index: true},
 					{Key: "validatorId", Value: id, Index: true},
 					{Key: "reason", Value: "reveal-timeout", Index: false},
+					{Key: "amount", Value: fmt.Sprintf("%d", amt), Index: false},
 					{Key: "pos", Value: fmt.Sprintf("%d", pos), Index: true},
 				},
 			})

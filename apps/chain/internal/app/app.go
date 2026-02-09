@@ -481,7 +481,52 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad staking/register_validator value"}
 		}
+		if err := requireRegisterValidatorAuth(env, msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		ev, err := stakingRegisterValidator(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "staking/bond":
+		var msg codec.StakingBondTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad staking/bond value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ValidatorID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		ev, err := stakingBond(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "staking/unbond":
+		var msg codec.StakingUnbondTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad staking/unbond value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ValidatorID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		ev, err := stakingUnbond(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "staking/unjail":
+		var msg codec.StakingUnjailTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad staking/unjail value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ValidatorID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		ev, err := stakingUnjail(a.st, msg)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -503,6 +548,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_commit value"}
 		}
+		if err := requireValidatorAuth(a.st, env, msg.DealerID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		ev, err := dealerDKGCommit(a.st, msg)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
@@ -513,6 +561,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		var msg codec.DealerDKGComplaintMissingTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_complaint_missing value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ComplainerID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		ev, err := dealerDKGComplaintMissing(a.st, msg)
 		if err != nil {
@@ -525,6 +576,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_complaint_invalid value"}
 		}
+		if err := requireValidatorAuth(a.st, env, msg.ComplainerID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		ev, err := dealerDKGComplaintInvalid(a.st, msg)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
@@ -535,6 +589,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		var msg codec.DealerDKGShareRevealTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_share_reveal value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.DealerID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		ev, err := dealerDKGShareReveal(a.st, msg)
 		if err != nil {
@@ -548,6 +605,17 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/finalize_epoch value"}
 		}
 		ev, err := dealerFinalizeEpoch(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/dkg_timeout":
+		var msg codec.DealerDKGTimeoutTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_timeout value"}
+		}
+		ev, err := dealerDKGTimeout(a.st, msg)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -573,6 +641,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_shuffle value"}
 		}
+		if err := requireValidatorAuth(a.st, env, msg.ShufflerID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
@@ -592,7 +663,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerFinalizeDeck(t, msg, nowUnix)
+		ev, err := dealerFinalizeDeck(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -602,6 +673,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		var msg codec.DealerSubmitPubShareTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_pub_share value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ValidatorID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {
@@ -617,6 +691,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		var msg codec.DealerSubmitEncShareTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_enc_share value"}
+		}
+		if err := requireValidatorAuth(a.st, env, msg.ValidatorID); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {

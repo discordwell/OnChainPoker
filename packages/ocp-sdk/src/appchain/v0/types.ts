@@ -3,6 +3,9 @@ export type Json = null | boolean | number | string | Json[] | { [k: string]: Js
 export type TxEnvelope<TValue extends Json = Json> = {
   type: string;
   value: TValue;
+  nonce?: string;
+  signer?: string;
+  sig?: string; // base64 (ed25519)
 };
 
 // ---- Tx values (must match apps/chain/internal/codec/tx.go json tags) ----
@@ -53,7 +56,22 @@ export type PokerActTx = {
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
 export type StakingRegisterValidatorTx = {
   validatorId: string;
+  pubKey: string; // base64 (32 bytes)
   power?: number;
+};
+
+export type StakingBondTx = {
+  validatorId: string;
+  amount: number;
+};
+
+export type StakingUnbondTx = {
+  validatorId: string;
+  amount: number;
+};
+
+export type StakingUnjailTx = {
+  validatorId: string;
 };
 
 export type DealerBeginEpochTx = {
@@ -103,6 +121,10 @@ export type DealerDKGShareRevealTx = {
 };
 
 export type DealerFinalizeEpochTx = {
+  epochId: number;
+};
+
+export type DealerDKGTimeoutTx = {
   epochId: number;
 };
 

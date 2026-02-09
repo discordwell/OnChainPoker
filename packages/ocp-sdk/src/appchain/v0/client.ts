@@ -14,6 +14,7 @@ import type {
   DealerDKGComplaintInvalidTx,
   DealerDKGComplaintMissingTx,
   DealerDKGShareRevealTx,
+  DealerDKGTimeoutTx,
   DealerFinalizeDeckTx,
   DealerFinalizeEpochTx,
   DealerFinalizeRevealTx,
@@ -26,7 +27,10 @@ import type {
   PokerCreateTableTx,
   PokerSitTx,
   PokerStartHandTx,
+  StakingBondTx,
   StakingRegisterValidatorTx,
+  StakingUnbondTx,
+  StakingUnjailTx,
   TableView,
   TxEnvelope,
   WsSubscriptionMsg
@@ -115,6 +119,18 @@ export class OcpV0Client {
     return this.broadcastTxEnvelope({ type: "staking/register_validator", value });
   }
 
+  stakingBond(value: StakingBondTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "staking/bond", value });
+  }
+
+  stakingUnbond(value: StakingUnbondTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "staking/unbond", value });
+  }
+
+  stakingUnjail(value: StakingUnjailTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "staking/unjail", value });
+  }
+
   dealerBeginEpoch(value: DealerBeginEpochTx): Promise<BroadcastTxCommitResult> {
     return this.broadcastTxEnvelope({ type: "dealer/begin_epoch", value });
   }
@@ -137,6 +153,10 @@ export class OcpV0Client {
 
   dealerFinalizeEpoch(value: DealerFinalizeEpochTx): Promise<BroadcastTxCommitResult> {
     return this.broadcastTxEnvelope({ type: "dealer/finalize_epoch", value });
+  }
+
+  dealerDkgTimeout(value: DealerDKGTimeoutTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/dkg_timeout", value });
   }
 
   dealerInitHand(value: DealerInitHandTx): Promise<BroadcastTxCommitResult> {
@@ -170,7 +190,12 @@ export class OcpV0Client {
   async broadcastTxEnvelope(env: TxEnvelope): Promise<BroadcastTxCommitResult> {
     // v0 localnet has no auth/nonce; CometBFT rejects identical tx bytes via its tx cache.
     // Add an ignored-by-app nonce to keep bytes unique.
-    const withNonce = { ...env, nonce: `${Date.now()}-${++this.txNonce}` };
+    const hasAuth = env.signer != null || env.sig != null;
+    const nonce = env.nonce ?? `${Date.now()}-${++this.txNonce}`;
+    if (hasAuth && !env.nonce) {
+      throw new Error("signed tx requires env.nonce (nonce is part of the signature)");
+    }
+    const withNonce = { ...env, nonce };
     const txBytes = utf8ToBytes(JSON.stringify(withNonce));
     return this.broadcastTxCommit(txBytes);
   }
