@@ -45,3 +45,10 @@ export {
   decodeChaumPedersenProof,
   encodeChaumPedersenProof,
 } from "./proofs/chaumPedersen.js";
+export {
+  type EncShareProof,
+  encShareProve,
+  encShareVerify,
+  decodeEncShareProof,
+  encodeEncShareProof,
+} from "./proofs/encShare.js";

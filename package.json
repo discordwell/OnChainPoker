@@ -23,6 +23,7 @@
     "ws5:test": "pnpm -C packages/ocp-shuffle test",
     "ws5:bench": "pnpm -C packages/ocp-shuffle bench",
     "ws7:play_hand": "pnpm sdk:build && node scripts/play_hand.mjs",
+    "ws7:play_hand_dealer": "pnpm -C packages/ocp-crypto build && pnpm -C packages/ocp-shuffle build && pnpm sdk:build && node scripts/play_hand_dealer.mjs",
     "ws9:test": "pnpm -C apps/sim test",
     "ws9:sim": "pnpm -C apps/sim sim",
     "web:dev": "pnpm -C apps/web dev",

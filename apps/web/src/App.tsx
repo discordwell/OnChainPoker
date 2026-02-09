@@ -1,6 +1,7 @@
 import { ethers } from "ethers";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ENV, formatAddr, isConfigured, OCP_TOKEN_ABI, POKER_VAULT_ABI } from "./contracts";
+import { AppchainDealerDemo } from "./AppchainDealer";
 
 type HandPayload = {
   handId: string;
@@ -542,6 +543,8 @@ export function App() {
           </div>
         </div>
       </div>
+
+      <AppchainDealerDemo />
 
       {status ? (
         <p className="hint animateIn" style={{ marginTop: 14 }}>

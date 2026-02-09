@@ -9,10 +9,24 @@ import type {
   BankMintTx,
   BankSendTx,
   BroadcastTxCommitResult,
+  DealerBeginEpochTx,
+  DealerDKGCommitTx,
+  DealerDKGComplaintInvalidTx,
+  DealerDKGComplaintMissingTx,
+  DealerDKGShareRevealTx,
+  DealerFinalizeDeckTx,
+  DealerFinalizeEpochTx,
+  DealerFinalizeRevealTx,
+  DealerInitHandTx,
+  DealerSubmitEncShareTx,
+  DealerSubmitPubShareTx,
+  DealerSubmitShuffleTx,
+  DealerTimeoutTx,
   PokerActTx,
   PokerCreateTableTx,
   PokerSitTx,
   PokerStartHandTx,
+  StakingRegisterValidatorTx,
   TableView,
   TxEnvelope,
   WsSubscriptionMsg
@@ -95,6 +109,62 @@ export class OcpV0Client {
 
   pokerAct(value: PokerActTx): Promise<BroadcastTxCommitResult> {
     return this.broadcastTxEnvelope({ type: "poker/act", value });
+  }
+
+  stakingRegisterValidator(value: StakingRegisterValidatorTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "staking/register_validator", value });
+  }
+
+  dealerBeginEpoch(value: DealerBeginEpochTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/begin_epoch", value });
+  }
+
+  dealerDkgCommit(value: DealerDKGCommitTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/dkg_commit", value });
+  }
+
+  dealerDkgComplaintMissing(value: DealerDKGComplaintMissingTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/dkg_complaint_missing", value });
+  }
+
+  dealerDkgComplaintInvalid(value: DealerDKGComplaintInvalidTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/dkg_complaint_invalid", value });
+  }
+
+  dealerDkgShareReveal(value: DealerDKGShareRevealTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/dkg_share_reveal", value });
+  }
+
+  dealerFinalizeEpoch(value: DealerFinalizeEpochTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/finalize_epoch", value });
+  }
+
+  dealerInitHand(value: DealerInitHandTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/init_hand", value });
+  }
+
+  dealerSubmitShuffle(value: DealerSubmitShuffleTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/submit_shuffle", value });
+  }
+
+  dealerFinalizeDeck(value: DealerFinalizeDeckTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/finalize_deck", value });
+  }
+
+  dealerSubmitPubShare(value: DealerSubmitPubShareTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/submit_pub_share", value });
+  }
+
+  dealerSubmitEncShare(value: DealerSubmitEncShareTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/submit_enc_share", value });
+  }
+
+  dealerFinalizeReveal(value: DealerFinalizeRevealTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/finalize_reveal", value });
+  }
+
+  dealerTimeout(value: DealerTimeoutTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "dealer/timeout", value });
   }
 
   async broadcastTxEnvelope(env: TxEnvelope): Promise<BroadcastTxCommitResult> {

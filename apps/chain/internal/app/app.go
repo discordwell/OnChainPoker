@@ -82,7 +82,7 @@ func (a *OCPApp) FinalizeBlock(_ context.Context, req *abci.FinalizeBlockRequest
 
 	txResults := make([]*abci.ExecTxResult, 0, len(req.Txs))
 	for _, txBytes := range req.Txs {
-		res := a.deliverTx(txBytes, req.Height)
+		res := a.deliverTx(txBytes, req.Height, req.Time.Unix())
 		txResults = append(txResults, res)
 	}
 
@@ -110,6 +110,7 @@ func (a *OCPApp) Query(_ context.Context, req *abci.QueryRequest) (*abci.QueryRe
 
 	// Paths:
 	// - /account/<addr>
+	// - /dealer/epoch
 	// - /table/<id>
 	// - /tables
 	path := strings.TrimSpace(req.Path)
@@ -125,6 +126,12 @@ func (a *OCPApp) Query(_ context.Context, req *abci.QueryRequest) (*abci.QueryRe
 		addr := strings.TrimPrefix(path, "/account/")
 		bal := a.st.Balance(addr)
 		b, _ := json.Marshal(map[string]any{"addr": addr, "balance": bal})
+		return &abci.QueryResponse{Code: 0, Value: b, Height: a.st.Height}, nil
+	case path == "/dealer/epoch":
+		if a.st.Dealer == nil || a.st.Dealer.Epoch == nil {
+			return &abci.QueryResponse{Code: 1, Log: "no active dealer epoch", Height: a.st.Height}, nil
+		}
+		b, _ := json.Marshal(a.st.Dealer.Epoch)
 		return &abci.QueryResponse{Code: 0, Value: b, Height: a.st.Height}, nil
 	case strings.HasPrefix(path, "/table/"):
 		raw := strings.TrimPrefix(path, "/table/")
@@ -143,10 +150,17 @@ func (a *OCPApp) Query(_ context.Context, req *abci.QueryRequest) (*abci.QueryRe
 	}
 }
 
-func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
+func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *abci.ExecTxResult {
 	env, err := codec.DecodeTxEnvelope(txBytes)
 	if err != nil {
 		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+	}
+
+	// v0: keep state height consistent even in tests that call deliverTx() directly.
+	a.st.Height = height
+	nowUnix := height
+	if len(nowUnixOpt) > 0 {
+		nowUnix = nowUnixOpt[0]
 	}
 
 	switch env.Type {
@@ -338,7 +352,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			lastActed[i] = -1
 		}
 
-		var deck []state.Card
+		deck := []state.Card{}
 		if !useDealer {
 			// DealerStub: deterministic deck seed = H(height||tableId||handId).
 			seed := []byte(fmt.Sprintf("%d|%d|%d", height, msg.TableID, handId))
@@ -346,20 +360,20 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		}
 
 		h := &state.Hand{
-			HandID:         handId,
-			Phase:          state.PhaseBetting,
-			Street:         state.StreetPreflop,
-			ButtonSeat:     t.ButtonSeat,
-			SmallBlindSeat: sbSeat,
-			BigBlindSeat:   bbSeat,
-			ActionOn:       -1,
-			BetTo:          0,
-			MinRaiseSize:   t.Params.BigBlind,
-			IntervalID:     0,
+			HandID:            handId,
+			Phase:             state.PhaseBetting,
+			Street:            state.StreetPreflop,
+			ButtonSeat:        t.ButtonSeat,
+			SmallBlindSeat:    sbSeat,
+			BigBlindSeat:      bbSeat,
+			ActionOn:          -1,
+			BetTo:             0,
+			MinRaiseSize:      t.Params.BigBlind,
+			IntervalID:        0,
 			LastIntervalActed: lastActed,
 			Deck:              deck,
-			DeckCursor:         0,
-			Board:              []state.Card{},
+			DeckCursor:        0,
+			Board:             []state.Card{},
 		}
 		// Note: the remaining fixed-size arrays default to zero values.
 		h.InHand = inHand
@@ -402,7 +416,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 				HandID:   handId,
 				EpochID:  epoch.EpochID,
 				DeckSize: 0,
-			})
+			}, nowUnix)
 			if err != nil {
 				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 			}
@@ -442,7 +456,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t.Seats[h.ActionOn].Player != msg.Player {
 			return &abci.ExecTxResult{Code: 1, Log: "not your turn"}
 		}
-		res := applyAction(t, msg.Action, msg.Amount)
+		res := applyAction(t, msg.Action, msg.Amount, nowUnix)
 		if res.Code != 0 {
 			return res
 		}
@@ -462,12 +476,78 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		})
 		return res
 
+	case "staking/register_validator":
+		var msg codec.StakingRegisterValidatorTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad staking/register_validator value"}
+		}
+		ev, err := stakingRegisterValidator(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
 	case "dealer/begin_epoch":
 		var msg codec.DealerBeginEpochTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/begin_epoch value"}
 		}
 		ev, err := dealerBeginEpoch(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/dkg_commit":
+		var msg codec.DealerDKGCommitTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_commit value"}
+		}
+		ev, err := dealerDKGCommit(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/dkg_complaint_missing":
+		var msg codec.DealerDKGComplaintMissingTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_complaint_missing value"}
+		}
+		ev, err := dealerDKGComplaintMissing(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/dkg_complaint_invalid":
+		var msg codec.DealerDKGComplaintInvalidTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_complaint_invalid value"}
+		}
+		ev, err := dealerDKGComplaintInvalid(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/dkg_share_reveal":
+		var msg codec.DealerDKGShareRevealTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/dkg_share_reveal value"}
+		}
+		ev, err := dealerDKGShareReveal(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/finalize_epoch":
+		var msg codec.DealerFinalizeEpochTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/finalize_epoch value"}
+		}
+		ev, err := dealerFinalizeEpoch(a.st, msg)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -482,7 +562,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerInitHand(a.st, t, msg)
+		ev, err := dealerInitHand(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -497,7 +577,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerSubmitShuffle(t, msg)
+		ev, err := dealerSubmitShuffle(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -512,7 +592,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerFinalizeDeck(t, msg)
+		ev, err := dealerFinalizeDeck(t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -527,7 +607,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerSubmitPubShare(a.st, t, msg)
+		ev, err := dealerSubmitPubShare(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -542,7 +622,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerSubmitEncShare(a.st, t, msg)
+		ev, err := dealerSubmitEncShare(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -557,7 +637,22 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
 		}
-		ev, err := dealerFinalizeReveal(a.st, t, msg)
+		ev, err := dealerFinalizeReveal(a.st, t, msg, nowUnix)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/timeout":
+		var msg codec.DealerTimeoutTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/timeout value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerTimeout(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}

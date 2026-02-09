@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/base64"
+	"strconv"
 	"testing"
 
 	abci "github.com/cometbft/cometbft/abci/types"
@@ -17,8 +18,8 @@ func setupHeadsUpTableWithPK(t *testing.T, pkAliceB64, pkBobB64 string) (a *OCPA
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
 
 	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
 		"creator":   "alice",
@@ -27,12 +28,12 @@ func setupHeadsUpTableWithPK(t *testing.T, pkAliceB64, pkBobB64 string) (a *OCPA
 		"minBuyIn":   100,
 		"maxBuyIn":   1000,
 		"label":      "t",
-	}), height))
+	}), height, 0))
 	ev := findEvent(createRes.Events, "TableCreated")
 	tableID = parseU64(t, attr(ev, "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100, "pkPlayer": pkAliceB64}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100, "pkPlayer": pkBobB64}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100, "pkPlayer": pkAliceB64}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100, "pkPlayer": pkBobB64}), height, 0))
 
 	return a, tableID
 }
@@ -41,6 +42,122 @@ type testMember struct {
 	id    string
 	index uint32
 	share ocpcrypto.Scalar
+}
+
+func evalPolyScalar(coeffs []ocpcrypto.Scalar, x ocpcrypto.Scalar) ocpcrypto.Scalar {
+	acc := ocpcrypto.ScalarZero()
+	pow := ocpcrypto.ScalarFromUint64(1)
+	for _, a := range coeffs {
+		acc = ocpcrypto.ScalarAdd(acc, ocpcrypto.ScalarMul(a, pow))
+		pow = ocpcrypto.ScalarMul(pow, x)
+	}
+	return acc
+}
+
+func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string, threshold uint8) (epochID uint64, members []testMember, nextHeight int64) {
+	t.Helper()
+	if a == nil || a.st == nil {
+		t.Fatalf("missing app/state")
+	}
+	if threshold == 0 {
+		t.Fatalf("threshold must be > 0")
+	}
+	if len(validatorIDs) == 0 {
+		t.Fatalf("validatorIDs must be non-empty")
+	}
+	if int(threshold) > len(validatorIDs) {
+		t.Fatalf("threshold exceeds validator count")
+	}
+
+	// Register validators (staking stub).
+	for _, id := range validatorIDs {
+		mustOk(t, a.deliverTx(txBytes(t, "staking/register_validator", map[string]any{
+			"validatorId": id,
+		}), height, 0))
+	}
+
+	// Begin epoch DKG. With a registry containing exactly committeeSize validators, committee selection is deterministic.
+	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+		"epochId":        uint64(1),
+		"committeeSize":  uint32(len(validatorIDs)),
+		"threshold":      threshold,
+		"commitBlocks":   uint64(1),
+		"complaintBlocks": uint64(1),
+		"revealBlocks":   uint64(1),
+		"finalizeBlocks": uint64(1),
+	}), height, 0))
+	if a.st.Dealer == nil || a.st.Dealer.DKG == nil {
+		t.Fatalf("expected dkg in progress")
+	}
+	dkg := a.st.Dealer.DKG
+	epochID = dkg.EpochID
+
+	// Simulate an all-honest Feldman DKG off-chain and submit only commitments on-chain.
+	type dealerPoly struct {
+		dealerID string
+		coeffs   []ocpcrypto.Scalar
+	}
+	polys := make([]dealerPoly, 0, len(dkg.Members))
+	for di, m := range dkg.Members {
+		_ = m
+		coeffs := make([]ocpcrypto.Scalar, int(threshold))
+		for k := 0; k < int(threshold); k++ {
+			coeffs[k] = ocpcrypto.ScalarFromUint64(uint64(1000 + di*100 + k + 1))
+		}
+		polys = append(polys, dealerPoly{dealerID: dkg.Members[di].ValidatorID, coeffs: coeffs})
+
+		commitments := make([][]byte, 0, len(coeffs))
+		for _, c := range coeffs {
+			commitments = append(commitments, ocpcrypto.MulBase(c).Bytes())
+		}
+		mustOk(t, a.deliverTx(txBytes(t, "dealer/dkg_commit", map[string]any{
+			"epochId":      epochID,
+			"dealerId":     dkg.Members[di].ValidatorID,
+			"commitments": commitments,
+		}), height, 0))
+	}
+
+	// Compute per-validator secret shares for later dealer proofs.
+	members = make([]testMember, 0, len(dkg.Members))
+	for _, m := range dkg.Members {
+		x := ocpcrypto.ScalarFromUint64(uint64(m.Index))
+		sk := ocpcrypto.ScalarZero()
+		for _, p := range polys {
+			sk = ocpcrypto.ScalarAdd(sk, evalPolyScalar(p.coeffs, x))
+		}
+		members = append(members, testMember{id: m.ValidatorID, index: m.Index, share: sk})
+	}
+
+	// Finalize after reveal deadline.
+	finalizeH := height + 10
+	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_epoch", map[string]any{
+		"epochId": epochID,
+	}), finalizeH, 0))
+	if a.st.Dealer == nil || a.st.Dealer.Epoch == nil {
+		t.Fatalf("expected active dealer epoch after finalize")
+	}
+
+	// Sanity: chain-computed public shares should match MulBase(secretShare).
+	for _, em := range a.st.Dealer.Epoch.Members {
+		var sk ocpcrypto.Scalar
+		found := false
+		for _, m := range members {
+			if m.id == em.ValidatorID {
+				sk = m.share
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing secret share for epoch member %q", em.ValidatorID)
+		}
+		want := ocpcrypto.MulBase(sk).Bytes()
+		if string(want) != string(em.PubShare) {
+			t.Fatalf("pubShare mismatch for %q", em.ValidatorID)
+		}
+	}
+
+	return epochID, members, finalizeH + 1
 }
 
 func submitPubShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epochID uint64, validatorID string, xShare ocpcrypto.Scalar, pos uint8, w uint64) {
@@ -78,7 +195,7 @@ func submitPubShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epoc
 		"validatorId": validatorID,
 		"pubShare":    share.Bytes(),
 		"proofShare":  proofBytes,
-	}), height))
+	}), height, 0))
 }
 
 func submitEncShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epochID uint64, validatorID string, xShare ocpcrypto.Scalar, pos uint8, pkPlayer ocpcrypto.Point, rSeed, wxSeed, wrSeed uint64) {
@@ -133,7 +250,45 @@ func submitEncShare(t *testing.T, a *OCPApp, height int64, tableID, handID, epoc
 		"pkPlayer":      pkPlayer.Bytes(),
 		"encShare":      encShareBytes,
 		"proofEncShare": proofBytes,
-	}), height))
+	}), height, 0))
+}
+
+func submitShuffleOnce(t *testing.T, a *OCPApp, height int64, tableID, handID uint64, shufflerID string) {
+	t.Helper()
+
+	table := a.st.Tables[tableID]
+	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
+		t.Fatalf("expected dealer hand state")
+	}
+	dh := table.Hand.Dealer
+
+	pkHand, err := ocpcrypto.PointFromBytesCanonical(dh.PKHand)
+	if err != nil {
+		t.Fatalf("pkHand: %v", err)
+	}
+	deckIn := make([]ocpcrypto.ElGamalCiphertext, 0, len(dh.Deck))
+	for _, c := range dh.Deck {
+		c1, _ := ocpcrypto.PointFromBytesCanonical(c.C1)
+		c2, _ := ocpcrypto.PointFromBytesCanonical(c.C2)
+		deckIn = append(deckIn, ocpcrypto.ElGamalCiphertext{C1: c1, C2: c2})
+	}
+
+	seed := make([]byte, 32)
+	for i := range seed {
+		seed[i] = 7
+	}
+	prove, err := ocpshuffle.ShuffleProveV1(pkHand, deckIn, ocpshuffle.ShuffleProveOpts{Seed: seed, Rounds: 4})
+	if err != nil {
+		t.Fatalf("prove: %v", err)
+	}
+
+	mustOk(t, a.deliverTx(txBytes(t, "dealer/submit_shuffle", map[string]any{
+		"tableId":      tableID,
+		"handId":       handID,
+		"round":        uint16(1),
+		"shufflerId":   shufflerID,
+		"proofShuffle": prove.ProofBytes,
+	}), height, 0))
 }
 
 func revealNextWithMember(t *testing.T, a *OCPApp, height int64, tableID, handID, epochID uint64, member testMember, w uint64) *abci.ExecTxResult {
@@ -154,41 +309,21 @@ func revealNextWithMember(t *testing.T, a *OCPApp, height int64, tableID, handID
 		"tableId": tableID,
 		"handId":  handID,
 		"pos":     pos,
-	}), height))
+	}), height, 0))
 }
 
 func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
-	const height = int64(1)
+	height := int64(1)
 
 	// Player keys (toy).
 	pkAlice := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(999))
 	pkBob := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1001))
 	a, tableID := setupHeadsUpTableWithPK(t, base64.StdEncoding.EncodeToString(pkAlice.Bytes()), base64.StdEncoding.EncodeToString(pkBob.Bytes()))
 
-	// Epoch: 2-of-3 Shamir shares with f(i) = x + a*i.
-	epochID := uint64(1)
-	x := ocpcrypto.ScalarFromUint64(111)
-	a1 := ocpcrypto.ScalarFromUint64(222)
-	members := []testMember{}
-	for i := uint32(1); i <= 3; i++ {
-		xi := ocpcrypto.ScalarAdd(x, ocpcrypto.ScalarMul(a1, ocpcrypto.ScalarFromUint64(uint64(i))))
-		members = append(members, testMember{id: "v" + string(rune('0'+i)), index: i, share: xi})
-	}
-
-	beginEpoch := map[string]any{
-		"epochId":   epochID,
-		"threshold": 2,
-		"pkEpoch":   ocpcrypto.MulBase(x).Bytes(),
-		"members": []map[string]any{
-			{"validatorId": "v1", "index": uint32(1), "pubShare": ocpcrypto.MulBase(members[0].share).Bytes()},
-			{"validatorId": "v2", "index": uint32(2), "pubShare": ocpcrypto.MulBase(members[1].share).Bytes()},
-			{"validatorId": "v3", "index": uint32(3), "pubShare": ocpcrypto.MulBase(members[2].share).Bytes()},
-		},
-	}
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", beginEpoch), height))
+	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1", "v2", "v3"}, 2)
 
 	// Start a dealer-mode hand (starts in shuffle phase and initializes the encrypted deck).
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
@@ -200,11 +335,14 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 		t.Fatalf("deck size mismatch: deckSize=%d len=%d", dh.DeckSize, len(dh.Deck))
 	}
 
+	// Shuffle at least once before finalizing (otherwise the initial encrypted deck order is public).
+	submitShuffleOnce(t, a, height, tableID, handID, "v1")
+
 	// Finalize the deck (assign hole positions + community cursor).
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,
-	}), height))
+	}), height, 0))
 
 	// Provide encrypted shares for hole cards (2 seats x 2 cards x threshold(2) = 8 enc shares).
 	for seat := 0; seat < 2; seat++ {
@@ -229,8 +367,8 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 	}
 
 	// Complete preflop quickly: SB calls, BB checks.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitFlop {
 		t.Fatalf("expected awaitFlop after preflop, got %q", table.Hand.Phase)
 	}
@@ -242,7 +380,7 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 		"tableId": tableID,
 		"handId":  handID,
 		"pos":     nextPos,
-	}), height)
+	}), height, 0)
 	if res.Code == 0 {
 		t.Fatalf("expected finalize_reveal to fail without shares")
 	}
@@ -254,41 +392,36 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 		"tableId": tableID,
 		"handId":  handID,
 		"pos":     nextPos,
-	}), height))
+	}), height, 0))
 
 	ev := findEvent(final.Events, "RevealFinalized")
 	if ev == nil {
 		t.Fatalf("expected RevealFinalized event")
 	}
-	if got := attr(ev, "cardId"); got != "4" {
-		t.Fatalf("expected cardId=4, got %q", got)
+	cardStr := attr(ev, "cardId")
+	cardID, err := strconv.Atoi(cardStr)
+	if err != nil || cardID < 0 || cardID > 51 {
+		t.Fatalf("expected valid cardId, got %q", cardStr)
 	}
 	if len(table.Hand.Board) != 1 {
 		t.Fatalf("expected board to have 1 card, got %d", len(table.Hand.Board))
 	}
+	if int(table.Hand.Board[0]) != cardID {
+		t.Fatalf("board[0] mismatch: board=%d eventCardId=%d", table.Hand.Board[0], cardID)
+	}
 }
 
 func TestDealer_SubmitShuffle_UpdatesDeck(t *testing.T) {
-	const height = int64(1)
+	height := int64(1)
 
 	// Player keys (toy).
 	pkAlice := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(999))
 	pkBob := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1001))
 	a, tableID := setupHeadsUpTableWithPK(t, base64.StdEncoding.EncodeToString(pkAlice.Bytes()), base64.StdEncoding.EncodeToString(pkBob.Bytes()))
 
-	epochID := uint64(1)
-	x := ocpcrypto.ScalarFromUint64(111)
-	beginEpoch := map[string]any{
-		"epochId":   epochID,
-		"threshold": 1,
-		"pkEpoch":   ocpcrypto.MulBase(x).Bytes(),
-		"members": []map[string]any{
-			{"validatorId": "v1", "index": uint32(1), "pubShare": ocpcrypto.MulBase(x).Bytes()},
-		},
-	}
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", beginEpoch), height))
+	_, _, height = setupDKGEpoch(t, a, height, []string{"v1"}, 1)
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
@@ -324,7 +457,7 @@ func TestDealer_SubmitShuffle_UpdatesDeck(t *testing.T) {
 		"round":        uint16(1),
 		"shufflerId":   "v1",
 		"proofShuffle": prove.ProofBytes,
-	}), height))
+	}), height, 0))
 
 	after0 := dh.Deck[0].C1
 	if string(after0) == string(before0) {
@@ -338,31 +471,23 @@ func TestDealer_SubmitShuffle_UpdatesDeck(t *testing.T) {
 }
 
 func TestDealer_SubmitEncShare_VerifiesEncShareProof(t *testing.T) {
-	const height = int64(1)
+	height := int64(1)
 
 	// Player key (toy).
 	pkAlice := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(999))
 	pkBob := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1001))
 	a, tableID := setupHeadsUpTableWithPK(t, base64.StdEncoding.EncodeToString(pkAlice.Bytes()), base64.StdEncoding.EncodeToString(pkBob.Bytes()))
 
-	epochID := uint64(1)
-	x := ocpcrypto.ScalarFromUint64(123)
-	beginEpoch := map[string]any{
-		"epochId":   epochID,
-		"threshold": 1,
-		"pkEpoch":   ocpcrypto.MulBase(x).Bytes(),
-		"members": []map[string]any{
-			{"validatorId": "v1", "index": uint32(1), "pubShare": ocpcrypto.MulBase(x).Bytes()},
-		},
-	}
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", beginEpoch), height))
+	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1"}, 1)
+	x := members[0].share
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 	handID := a.st.Tables[tableID].Hand.HandID
+	submitShuffleOnce(t, a, height, tableID, handID, "v1")
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,
-	}), height))
+	}), height, 0))
 
 	table := a.st.Tables[tableID]
 	dh := table.Hand.Dealer
@@ -379,33 +504,24 @@ func TestDealer_SubmitEncShare_VerifiesEncShareProof(t *testing.T) {
 }
 
 func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
-	const height = int64(1)
+	height := int64(1)
 
 	// Player keys (toy).
 	pkAlice := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(999))
 	pkBob := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1001))
 	a, tableID := setupHeadsUpTableWithPK(t, base64.StdEncoding.EncodeToString(pkAlice.Bytes()), base64.StdEncoding.EncodeToString(pkBob.Bytes()))
 
-	epochID := uint64(1)
-	x := ocpcrypto.ScalarFromUint64(777)
-	member := testMember{id: "v1", index: 1, share: x}
-	beginEpoch := map[string]any{
-		"epochId":   epochID,
-		"threshold": 1,
-		"pkEpoch":   ocpcrypto.MulBase(x).Bytes(),
-		"members": []map[string]any{
-			{"validatorId": "v1", "index": uint32(1), "pubShare": ocpcrypto.MulBase(x).Bytes()},
-		},
-	}
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", beginEpoch), height))
+	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1"}, 1)
+	member := members[0]
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 	table := a.st.Tables[tableID]
 	handID := table.Hand.HandID
+	submitShuffleOnce(t, a, height, tableID, handID, "v1")
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/finalize_deck", map[string]any{
 		"tableId": tableID,
 		"handId":  handID,
-	}), height))
+	}), height, 0))
 
 	// Provide encrypted shares for 4 hole cards (threshold 1).
 	dh := table.Hand.Dealer
@@ -428,8 +544,8 @@ func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
 	}
 
 	// Preflop: SB calls, BB checks -> await flop.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitFlop {
 		t.Fatalf("expected awaitFlop, got %q", table.Hand.Phase)
 	}
@@ -443,8 +559,8 @@ func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
 	}
 
 	// Flop: check/check -> await turn.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitTurn {
 		t.Fatalf("expected awaitTurn, got %q", table.Hand.Phase)
 	}
@@ -454,8 +570,8 @@ func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
 	if table.Hand.Phase != state.PhaseBetting || table.Hand.Street != state.StreetTurn {
 		t.Fatalf("expected betting turn, got phase=%q street=%q", table.Hand.Phase, table.Hand.Street)
 	}
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitRiver {
 		t.Fatalf("expected awaitRiver, got %q", table.Hand.Phase)
 	}
@@ -465,8 +581,8 @@ func TestDealer_FullHandFlow_HeadsUp_CheckDown_Settles(t *testing.T) {
 	if table.Hand.Phase != state.PhaseBetting || table.Hand.Street != state.StreetRiver {
 		t.Fatalf("expected betting river, got phase=%q street=%q", table.Hand.Phase, table.Hand.Street)
 	}
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitShowdown {
 		t.Fatalf("expected awaitShowdown, got %q", table.Hand.Phase)
 	}

@@ -80,8 +80,8 @@ func setupHeadsUpTable(t *testing.T) (a *OCPApp, tableID uint64) {
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
 
 	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
 		"creator":  "alice",
@@ -90,12 +90,12 @@ func setupHeadsUpTable(t *testing.T) (a *OCPApp, tableID uint64) {
 		"minBuyIn":   100,
 		"maxBuyIn":   1000,
 		"label":      "t",
-	}), height))
+	}), height, 0))
 	ev := findEvent(createRes.Events, "TableCreated")
 	tableID = parseU64(t, attr(ev, "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height, 0))
 
 	return a, tableID
 }
@@ -104,7 +104,7 @@ func TestStartHandHeadsUp_PostsBlindsAndDeals(t *testing.T) {
 	const height = int64(1)
 	a, tableID := setupHeadsUpTable(t)
 
-	startRes := mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	startRes := mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 	if findEvent(startRes.Events, "HandStarted") == nil {
 		t.Fatalf("expected HandStarted event")
 	}
@@ -162,9 +162,9 @@ func TestStartHandHeadsUp_PostsBlindsAndDeals(t *testing.T) {
 func TestCannotCheckFacingBet(t *testing.T) {
 	const height = int64(1)
 	a, tableID := setupHeadsUpTable(t)
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
-	res := a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height)
+	res := a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0)
 	if res.Code == 0 {
 		t.Fatalf("expected error")
 	}
@@ -176,12 +176,12 @@ func TestCannotCheckFacingBet(t *testing.T) {
 func TestCallThenCheck_AdvancesToFlopAndResetsRound(t *testing.T) {
 	const height = int64(1)
 	a, tableID := setupHeadsUpTable(t)
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
 	// SB calls.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height, 0))
 	// BB checks, completing preflop -> reveal flop.
-	res := mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	res := mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
 
 	if findEvent(res.Events, "StreetRevealed") == nil {
 		t.Fatalf("expected StreetRevealed event")
@@ -214,9 +214,9 @@ func TestCallThenCheck_AdvancesToFlopAndResetsRound(t *testing.T) {
 func TestFoldAwardsPotAndEndsHand(t *testing.T) {
 	const height = int64(1)
 	a, tableID := setupHeadsUpTable(t)
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
-	res := mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "fold"}), height))
+	res := mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "fold"}), height, 0))
 	if findEvent(res.Events, "HandCompleted") == nil {
 		t.Fatalf("expected HandCompleted event")
 	}
@@ -240,9 +240,9 @@ func TestStartHand_ExcludesZeroStackSeatsFromHandAndHoleEvents(t *testing.T) {
 	const height = int64(1)
 	a := newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
 
 	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
 		"creator":  "alice",
@@ -250,17 +250,17 @@ func TestStartHand_ExcludesZeroStackSeatsFromHandAndHoleEvents(t *testing.T) {
 		"bigBlind":   2,
 		"minBuyIn":   100,
 		"maxBuyIn":   1000,
-	}), height))
+	}), height, 0))
 	tableID := parseU64(t, attr(findEvent(createRes.Events, "TableCreated"), "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100}), height, 0))
 
 	// Simulate alice being busted but still seated.
 	a.st.Tables[tableID].Seats[0].Stack = 0
 
-	startRes := mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "bob", "tableId": tableID}), height))
+	startRes := mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "bob", "tableId": tableID}), height, 0))
 
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil {
@@ -295,9 +295,9 @@ func TestSidePots_ShowdownAwardsMainAndSidePotCorrectly(t *testing.T) {
 	a := newTestApp(t)
 
 	// Three players, one short-stacked to force a main+side pot.
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
 
 	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
 		"creator":   "alice",
@@ -305,14 +305,14 @@ func TestSidePots_ShowdownAwardsMainAndSidePotCorrectly(t *testing.T) {
 		"bigBlind":   2,
 		"minBuyIn":   1,
 		"maxBuyIn":   1000,
-	}), height))
+	}), height, 0))
 	tableID := parseU64(t, attr(findEvent(createRes.Events, "TableCreated"), "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 10}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 10}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100}), height, 0))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
 
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil {
@@ -368,18 +368,18 @@ func TestSidePots_ShowdownAwardsMainAndSidePotCorrectly(t *testing.T) {
 	table.Seats[2].Hole = [2]state.Card{state.Card(36), state.Card(44)}
 
 	// Preflop: Alice (all-in 10), Bob calls to 10, Charlie raises to 50, Bob calls to 50.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "raise", "amount": 10}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "raise", "amount": 50}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "raise", "amount": 10}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "raise", "amount": 50}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height, 0))
 
 	// Check down to showdown.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
 
 	// Hand should be complete and cleared.
 	if table.Hand != nil {

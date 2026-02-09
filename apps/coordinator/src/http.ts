@@ -26,6 +26,75 @@ const ArtifactPutSchema = z.object({
   meta: z.record(z.unknown()).optional()
 });
 
+const ShuffleArtifactPutSchema = z.object({
+  proofShuffleBase64: z.string().min(1),
+  mime: z.string().min(1).optional(),
+  meta: z.record(z.unknown()).optional()
+});
+
+type V0DealerEpoch = {
+  epochId: number;
+  threshold: number;
+  pkEpoch: string; // base64
+  members: Array<{ validatorId: string; index: number; pubShare: string }>;
+  slashed?: string[];
+};
+
+function asNumber(x: unknown): number | null {
+  if (typeof x === "number" && Number.isFinite(x)) return x;
+  if (typeof x === "string" && x.trim() !== "") {
+    const n = Number(x);
+    if (Number.isFinite(n)) return n;
+  }
+  return null;
+}
+
+function v0ExpectedRevealPos(table: any): number | null {
+  const h = table?.hand;
+  const dh = h?.dealer;
+  if (!h || !dh) return null;
+  if (!dh.finalized) return null;
+
+  const phase = String(h.phase ?? "");
+
+  if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver") {
+    const cursor = asNumber(dh.cursor) ?? 0;
+    const boardLen = Array.isArray(h.board) ? h.board.length : 0;
+    const pos = cursor + boardLen;
+    return Number.isFinite(pos) ? pos : null;
+  }
+
+  if (phase === "awaitShowdown") {
+    const holePos: unknown = dh.holePos;
+    if (!Array.isArray(holePos) || holePos.length !== 18) return null;
+
+    const reveals = new Set<number>();
+    if (Array.isArray(dh.reveals)) {
+      for (const r of dh.reveals as any[]) {
+        const p = asNumber(r?.pos);
+        if (p != null) reveals.add(p);
+      }
+    }
+
+    const eligible: number[] = [];
+    for (let seat = 0; seat < 9; seat++) {
+      if (!h.inHand?.[seat] || h.folded?.[seat]) continue;
+      for (let c = 0; c < 2; c++) {
+        const p = asNumber(holePos[seat * 2 + c]);
+        if (p == null || p === 255) continue;
+        eligible.push(p);
+      }
+    }
+    eligible.sort((a, b) => a - b);
+    for (const p of eligible) {
+      if (!reveals.has(p)) return p;
+    }
+    return null;
+  }
+
+  return null;
+}
+
 export function createHttpApp(opts: {
   config: CoordinatorConfig;
   store: CoordinatorStore;
@@ -68,6 +137,149 @@ export function createHttpApp(opts: {
     const t = store.getTable(tableId);
     if (!t) return res.status(404).json({ error: "not found" });
     return res.json({ table: t });
+  });
+
+  // ---- Appchain v0 helpers (CometBFT + ABCI scaffold) ----
+
+  app.get("/v1/appchain/v0/tables/:tableId", async (req, res) => {
+    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support v0 table queries" });
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    if (!tableId) return res.status(400).json({ error: "tableId required" });
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "not found" });
+    return res.json({ table });
+  });
+
+  app.get("/v1/appchain/v0/dealer/epoch", async (_req, res) => {
+    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support dealer epoch queries" });
+    const epoch = await chain.queryJson<V0DealerEpoch>("/dealer/epoch").catch(() => null);
+    if (!epoch) return res.status(404).json({ error: "no active epoch" });
+    return res.json({ epoch });
+  });
+
+  app.get("/v1/appchain/v0/tables/:tableId/dealer/next", async (req, res) => {
+    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support v0 dealer queries" });
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    if (!tableId) return res.status(400).json({ error: "tableId required" });
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "not found" });
+
+    const h = table?.hand;
+    const dh = h?.dealer;
+    const handId = asNumber(h?.handId);
+    const phase = String(h?.phase ?? "");
+
+    // Epoch is optional; used for "who" suggestions and threshold counts.
+    let epoch = await chain.queryJson<V0DealerEpoch>("/dealer/epoch").catch(() => null);
+    const dhEpochId = asNumber(dh?.epochId);
+    if (epoch && dhEpochId != null && asNumber(epoch.epochId) !== dhEpochId) {
+      epoch = null;
+    }
+    const slashed = new Set((epoch?.slashed ?? []).map((x) => String(x)));
+
+    if (!h || !dh || !handId) {
+      return res.json({
+        tableId,
+        action: { kind: "none" as const, reason: "no active dealer hand" }
+      });
+    }
+
+    if (phase === "shuffle") {
+      const shuffleStep = asNumber(dh.shuffleStep) ?? 0;
+      const nextRound = shuffleStep + 1;
+      const canFinalize = shuffleStep > 0;
+
+      let suggestedShuffler: string | null = null;
+      if (epoch?.members?.length) {
+        const qual = [...epoch.members]
+          .filter((m) => !slashed.has(String(m.validatorId)))
+          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0) || String(a.validatorId).localeCompare(String(b.validatorId)));
+        const pick = qual[shuffleStep];
+        suggestedShuffler = pick?.validatorId ?? null;
+      }
+
+      return res.json({
+        tableId,
+        handId,
+        action: {
+          kind: "shuffle" as const,
+          shuffleStep,
+          nextRound,
+          suggestedShuffler,
+          canFinalize
+        }
+      });
+    }
+
+    const pos = v0ExpectedRevealPos(table);
+    if (pos != null) {
+      const pubShares = Array.isArray(dh.pubShares) ? dh.pubShares : [];
+      const seen = new Set<string>();
+      for (const ps of pubShares) {
+        if (asNumber(ps?.pos) !== pos) continue;
+        const vid = String(ps?.validatorId ?? "");
+        if (vid) seen.add(vid);
+      }
+
+      const threshold = epoch ? asNumber(epoch.threshold) : null;
+      const missingValidatorIds = epoch?.members?.length
+        ? epoch.members
+            .filter((m) => !slashed.has(String(m.validatorId)))
+            .map((m) => m.validatorId)
+            .filter((vid) => !seen.has(String(vid)))
+        : null;
+
+      return res.json({
+        tableId,
+        handId,
+        action: {
+          kind: "reveal" as const,
+          pos,
+          havePubShares: seen.size,
+          threshold,
+          missingValidatorIds
+        }
+      });
+    }
+
+    return res.json({
+      tableId,
+      handId,
+      action: { kind: "none" as const, reason: "hand not awaiting dealer action" }
+    });
+  });
+
+  // Convenience: store a shuffle proof artifact using its sha256(proofBytes) hex as the artifactId.
+  // This lines up with the `proofHash` attribute emitted by the chain on `ShuffleAccepted`.
+  app.post("/v1/appchain/v0/artifacts/shuffle", (req, res) => {
+    const parsed = ShuffleArtifactPutSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+
+    const mime = parsed.data.mime ?? "application/octet-stream";
+    const bytes = Buffer.from(parsed.data.proofShuffleBase64, "base64");
+    if (bytes.length > config.artifactMaxBytes) {
+      return res.status(413).json({ error: "artifact too large" });
+    }
+
+    const sha256 = crypto.createHash("sha256").update(bytes).digest("hex");
+    const artifactId = sha256;
+
+    const nowMs = Date.now();
+    store.putArtifact({
+      artifactId,
+      kind: "shuffle",
+      mime,
+      bytes,
+      meta: parsed.data.meta ?? {},
+      createdAtMs: nowMs,
+      lastAccessAtMs: nowMs
+    });
+    ws.broadcast({ type: "artifact_stored", artifactId, kind: "shuffle", bytes: bytes.length, nowMs });
+    res.json({ ok: true, artifactId, kind: "shuffle", bytes: bytes.length });
   });
 
   app.post("/v1/seat-intents", (req, res) => {

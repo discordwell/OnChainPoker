@@ -687,7 +687,7 @@ func resetPostflopBettingRound(t *state.Table) {
 	h.ActionOn = nextActiveToAct(t, h, h.ButtonSeat)
 }
 
-func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8) ([]abci.Event, error) {
+func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8, nowUnix int64) ([]abci.Event, error) {
 	if t == nil || t.Hand == nil || t.Hand.Dealer == nil {
 		return nil, nil
 	}
@@ -744,6 +744,9 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8) ([]abci.E
 				}
 			}
 		}
+		if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
+			return nil, err
+		}
 		return events, nil
 
 	case state.PhaseAwaitShowdown:
@@ -789,6 +792,9 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8) ([]abci.E
 			return nil, err
 		} else if !more {
 			events = append(events, settleKnownShowdown(t)...)
+		}
+		if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
+			return nil, err
 		}
 		return events, nil
 	default:
@@ -947,7 +953,7 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 	return events
 }
 
-func applyAction(t *state.Table, action string, amount uint64) *abci.ExecTxResult {
+func applyAction(t *state.Table, action string, amount uint64, nowUnix int64) *abci.ExecTxResult {
 	h := t.Hand
 	if h == nil {
 		return &abci.ExecTxResult{Code: 1, Log: "no active hand"}
@@ -1005,6 +1011,9 @@ func applyAction(t *state.Table, action string, amount uint64) *abci.ExecTxResul
 	events := []abci.Event{}
 	_ = need // reserved for future event payloads
 	maybeAdvance(t, &events)
+	if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
+		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+	}
 
 	return &abci.ExecTxResult{Code: 0, Events: events}
 }

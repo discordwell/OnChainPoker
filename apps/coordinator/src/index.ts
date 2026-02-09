@@ -2,6 +2,7 @@ import dotenv from "dotenv";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
+import { CometChainAdapter } from "./chain/comet.js";
 import { MockChainAdapter } from "./chain/mock.js";
 import type { ChainAdapter } from "./chain/adapter.js";
 import { CoordinatorStore } from "./store.js";
@@ -18,6 +19,12 @@ switch (chainKind) {
   case "mock":
     chain = new MockChainAdapter();
     break;
+  case "comet": {
+    const rpcUrl = (process.env.COORDINATOR_COMET_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
+    const wsUrlRaw = (process.env.COORDINATOR_COMET_WS_URL ?? "").trim();
+    chain = new CometChainAdapter({ rpcUrl, wsUrl: wsUrlRaw || undefined });
+    break;
+  }
   default:
     throw new Error(`Unsupported COORDINATOR_CHAIN_ADAPTER: ${chainKind}`);
 }

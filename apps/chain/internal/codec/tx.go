@@ -74,19 +74,61 @@ type PokerActTx struct {
 	Amount  uint64 `json:"amount,omitempty"` // for bet/raise only: desired total street commitment ("BetTo")
 }
 
-// ---- Dealer (v0) ----
+// ---- Staking (v0) ----
 
-type DealerMember struct {
+// v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
+type StakingRegisterValidatorTx struct {
 	ValidatorID string `json:"validatorId"`
-	Index       uint32 `json:"index"`
-	PubShare    []byte `json:"pubShare"` // base64 in JSON
+	Power       uint64 `json:"power,omitempty"`
 }
 
+// ---- Dealer (v0) ----
+
 type DealerBeginEpochTx struct {
-	EpochID   uint64        `json:"epochId"`
-	Threshold uint8         `json:"threshold"`
-	PKEpoch   []byte        `json:"pkEpoch"` // base64 in JSON
-	Members   []DealerMember `json:"members"`
+	// If epochId is 0, the chain allocates the next epoch id deterministically.
+	EpochID uint64 `json:"epochId,omitempty"`
+
+	CommitteeSize uint32 `json:"committeeSize"`
+	Threshold     uint8  `json:"threshold"`
+
+	// Optional randomness beacon input used for deterministic committee sampling (opaque in v0).
+	RandEpoch []byte `json:"randEpoch,omitempty"` // base64 in JSON
+
+	// Optional DKG phase durations in blocks (v0 localnet). Defaults are used when omitted/zero.
+	CommitBlocks    uint64 `json:"commitBlocks,omitempty"`
+	ComplaintBlocks uint64 `json:"complaintBlocks,omitempty"`
+	RevealBlocks    uint64 `json:"revealBlocks,omitempty"`
+	FinalizeBlocks  uint64 `json:"finalizeBlocks,omitempty"`
+}
+
+type DealerDKGCommitTx struct {
+	EpochID     uint64   `json:"epochId"`
+	DealerID    string   `json:"dealerId"`
+	Commitments [][]byte `json:"commitments"` // base64 points (32 bytes each)
+}
+
+type DealerDKGComplaintMissingTx struct {
+	EpochID      uint64 `json:"epochId"`
+	ComplainerID string `json:"complainerId"`
+	DealerID     string `json:"dealerId"`
+}
+
+type DealerDKGComplaintInvalidTx struct {
+	EpochID      uint64 `json:"epochId"`
+	ComplainerID string `json:"complainerId"`
+	DealerID     string `json:"dealerId"`
+	ShareMsg     []byte `json:"shareMsg"` // opaque (v0)
+}
+
+type DealerDKGShareRevealTx struct {
+	EpochID  uint64 `json:"epochId"`
+	DealerID string `json:"dealerId"`
+	ToID     string `json:"toId"`
+	Share    []byte `json:"share"` // base64 scalar (32 bytes)
+}
+
+type DealerFinalizeEpochTx struct {
+	EpochID uint64 `json:"epochId"`
 }
 
 type DealerInitHandTx struct {
@@ -132,4 +174,9 @@ type DealerFinalizeRevealTx struct {
 	TableID uint64 `json:"tableId"`
 	HandID  uint64 `json:"handId"`
 	Pos     uint8  `json:"pos"`
+}
+
+type DealerTimeoutTx struct {
+	TableID uint64 `json:"tableId"`
+	HandID  uint64 `json:"handId"`
 }

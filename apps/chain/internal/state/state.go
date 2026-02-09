@@ -26,7 +26,7 @@ func NewState() *State {
 		NextTableID: 1,
 		Accounts:    map[string]uint64{},
 		Tables:      map[uint64]*Table{},
-		Dealer:      &DealerState{},
+		Dealer:      &DealerState{NextEpochID: 1},
 	}
 }
 
@@ -53,7 +53,10 @@ func Load(home string) (*State, error) {
 		st.NextTableID = 1
 	}
 	if st.Dealer == nil {
-		st.Dealer = &DealerState{}
+		st.Dealer = &DealerState{NextEpochID: 1}
+	}
+	if st.Dealer.NextEpochID == 0 {
+		st.Dealer.NextEpochID = 1
 	}
 	return &st, nil
 }
@@ -101,10 +104,10 @@ func (s *State) AppHash() []byte {
 	sort.Slice(tables, func(i, j int) bool { return tables[i].ID < tables[j].ID })
 
 	normalized := struct {
-		Height      int64       `json:"height"`
-		NextTableID uint64      `json:"nextTableId"`
-		Accounts    []accountKV `json:"accounts"`
-		Tables      []tableKV   `json:"tables"`
+		Height      int64        `json:"height"`
+		NextTableID uint64       `json:"nextTableId"`
+		Accounts    []accountKV  `json:"accounts"`
+		Tables      []tableKV    `json:"tables"`
 		Dealer      *DealerState `json:"dealer,omitempty"`
 	}{
 		Height:      s.Height,
@@ -180,13 +183,13 @@ type Seat struct {
 type HandPhase string
 
 const (
-	PhaseShuffle     HandPhase = "shuffle"
-	PhaseBetting  HandPhase = "betting"
-	PhaseAwaitFlop   HandPhase = "awaitFlop"
-	PhaseAwaitTurn   HandPhase = "awaitTurn"
-	PhaseAwaitRiver  HandPhase = "awaitRiver"
+	PhaseShuffle       HandPhase = "shuffle"
+	PhaseBetting       HandPhase = "betting"
+	PhaseAwaitFlop     HandPhase = "awaitFlop"
+	PhaseAwaitTurn     HandPhase = "awaitTurn"
+	PhaseAwaitRiver    HandPhase = "awaitRiver"
 	PhaseAwaitShowdown HandPhase = "awaitShowdown"
-	PhaseShowdown HandPhase = "showdown"
+	PhaseShowdown      HandPhase = "showdown"
 )
 
 type Street string
@@ -311,20 +314,99 @@ func DeterministicDeck(seed []byte) []Card {
 // ---- Dealer (v0) ----
 
 type DealerState struct {
+	// v0: staking is stubbed to a simple on-chain registry used by the Dealer module.
+	Validators []Validator `json:"validators,omitempty"`
+
+	// Next epoch id to allocate when starting DKG.
+	NextEpochID uint64 `json:"nextEpochId,omitempty"`
+
+	// Active, finalized epoch key material used by hands.
 	Epoch *DealerEpoch `json:"epoch,omitempty"`
+
+	// In-progress DKG for the next epoch.
+	DKG *DealerDKG `json:"dkg,omitempty"`
+}
+
+type ValidatorStatus string
+
+const (
+	ValidatorActive ValidatorStatus = "active"
+	ValidatorJailed ValidatorStatus = "jailed"
+)
+
+type Validator struct {
+	ValidatorID string          `json:"validatorId"`
+	Power       uint64          `json:"power,omitempty"`
+	Status      ValidatorStatus `json:"status"`
+	SlashCount  uint32          `json:"slashCount,omitempty"`
 }
 
 type DealerEpoch struct {
-	EpochID   uint64         `json:"epochId"`
-	Threshold uint8          `json:"threshold"`
-	PKEpoch   []byte         `json:"pkEpoch"` // 32-byte ristretto point
-	Members   []DealerMember `json:"members"`
+	EpochID        uint64 `json:"epochId"`
+	Threshold      uint8  `json:"threshold"`
+	PKEpoch        []byte `json:"pkEpoch"`                  // 32-byte ristretto point
+	TranscriptRoot []byte `json:"transcriptRoot,omitempty"` // sha256 hash (v0 placeholder)
+
+	// Slashed validatorIds (excluded from QUAL) for this epoch.
+	// Canonical ordering: lexicographically ascending by validatorId.
+	Slashed []string `json:"slashed,omitempty"`
+
+	Members []DealerMember `json:"members"`
 }
 
 type DealerMember struct {
 	ValidatorID string `json:"validatorId"`
 	Index       uint32 `json:"index"`    // Shamir x-coordinate (non-zero)
 	PubShare    []byte `json:"pubShare"` // 32-byte ristretto point (Y_i)
+}
+
+// DealerDKG tracks an in-progress Feldman-style DKG for the next epoch.
+//
+// v0 notes:
+// - Share delivery is off-chain. Complaints trigger on-chain share reveals.
+// - "Slashing" is modeled by jailing validators in the stub validator registry.
+type DealerDKG struct {
+	EpochID   uint64 `json:"epochId"`
+	Threshold uint8  `json:"threshold"`
+
+	// Deterministic committee sampled from Validators at BeginEpoch.
+	Members []DealerMember `json:"members"`
+
+	// DKG phase timing in block heights.
+	StartHeight       int64 `json:"startHeight"`
+	CommitDeadline    int64 `json:"commitDeadline"`
+	ComplaintDeadline int64 `json:"complaintDeadline"`
+	RevealDeadline    int64 `json:"revealDeadline"`
+	FinalizeDeadline  int64 `json:"finalizeDeadline"`
+
+	// Optional beacon value used for committee sampling (opaque, v0).
+	RandEpoch []byte `json:"randEpoch,omitempty"`
+
+	Commits    []DealerDKGCommit      `json:"commits,omitempty"`
+	Complaints []DealerDKGComplaint   `json:"complaints,omitempty"`
+	Reveals    []DealerDKGShareReveal `json:"reveals,omitempty"`
+	Slashed    []string               `json:"slashed,omitempty"` // validatorIds (sorted)
+}
+
+type DealerDKGCommit struct {
+	DealerID    string   `json:"dealerId"`
+	Commitments [][]byte `json:"commitments"` // length Threshold, each 32-byte point
+}
+
+type DealerDKGComplaint struct {
+	EpochID      uint64 `json:"epochId"`
+	ComplainerID string `json:"complainerId"`
+	DealerID     string `json:"dealerId"`
+	Kind         string `json:"kind"` // "missing" | "invalid"
+	// v0: invalid-share evidence is not authenticated yet; keep optional payload for forward-compat.
+	ShareMsg []byte `json:"shareMsg,omitempty"`
+}
+
+type DealerDKGShareReveal struct {
+	EpochID  uint64 `json:"epochId"`
+	DealerID string `json:"dealerId"`
+	ToID     string `json:"toId"`
+	Share    []byte `json:"share"` // 32-byte scalar
 }
 
 type DealerCiphertext struct {
@@ -358,12 +440,18 @@ type DealerHand struct {
 	EpochID uint64 `json:"epochId"`
 	PKHand  []byte `json:"pkHand"` // 32-byte point
 
-	DeckSize uint16            `json:"deckSize"`
+	DeckSize uint16             `json:"deckSize"`
 	Deck     []DealerCiphertext `json:"deck"`
 
 	ShuffleStep uint16 `json:"shuffleStep"`
 	Finalized   bool   `json:"finalized"`
 	Cursor      uint8  `json:"cursor"`
+
+	// Dealer liveness deadlines (unix seconds).
+	ShuffleDeadline    int64 `json:"shuffleDeadline,omitempty"`
+	HoleSharesDeadline int64 `json:"holeSharesDeadline,omitempty"`
+	RevealPos          uint8 `json:"revealPos,omitempty"` // 0..255; 255 = unset
+	RevealDeadline     int64 `json:"revealDeadline,omitempty"`
 
 	// Per-seat hole card deck positions, length 18: seat*2 + h -> pos (0..255). 255 = unset.
 	HolePos []uint8 `json:"holePos,omitempty"`
