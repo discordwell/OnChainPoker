@@ -762,6 +762,9 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8, nowUnix i
 		if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
 			return nil, err
 		}
+		if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
+			return nil, err
+		}
 		return events, nil
 
 	case state.PhaseAwaitShowdown:
@@ -809,6 +812,9 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8, nowUnix i
 			events = append(events, settleKnownShowdown(t)...)
 		}
 		if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
+			return nil, err
+		}
+		if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
 			return nil, err
 		}
 		return events, nil
@@ -1027,6 +1033,9 @@ func applyAction(t *state.Table, action string, amount uint64, nowUnix int64) *a
 	_ = need // reserved for future event payloads
 	maybeAdvance(t, &events)
 	if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
+		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+	}
+	if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
 		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 	}
 

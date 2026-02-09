@@ -1523,6 +1523,9 @@ func dealerSubmitEncShare(st *state.State, t *state.Table, msg codec.DealerSubmi
 			if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
 				return nil, err
 			}
+			if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
+				return nil, err
+			}
 			ev.Events = append(ev.Events, abci.Event{
 				Type: "HoleCardsReady",
 				Attributes: []abci.EventAttribute{
@@ -1760,7 +1763,7 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 
 	events := []abci.Event{
 		{
-			Type: "TimeoutApplied",
+			Type: "DealerTimeoutApplied",
 			Attributes: []abci.EventAttribute{
 				{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
 				{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},

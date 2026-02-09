@@ -473,6 +473,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 			}
 		}
 
+		if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		return ev
 
 	case "poker/act":
@@ -521,6 +524,71 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 				{Key: "actionOn", Value: fmt.Sprintf("%d", h.ActionOn), Index: true},
 			},
 		})
+		return res
+
+	case "poker/tick":
+		var msg codec.PokerTickTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad poker/tick value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		if t.Hand == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "no active hand"}
+		}
+		h := t.Hand
+		if h.Phase != state.PhaseBetting {
+			return &abci.ExecTxResult{Code: 1, Log: "hand not in betting phase"}
+		}
+		if h.ActionOn < 0 || h.ActionOn >= 9 || t.Seats[h.ActionOn] == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "invalid actionOn seat"}
+		}
+
+		// Defensive: older saved states may not have the deadline initialized.
+		if h.ActionDeadline == 0 {
+			if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			return &abci.ExecTxResult{Code: 0}
+		}
+		if nowUnix < h.ActionDeadline {
+			return &abci.ExecTxResult{Code: 1, Log: "action not timed out"}
+		}
+
+		actorSeat := h.ActionOn
+		player := t.Seats[actorSeat].Player
+		action := "fold"
+		if toCall(h, actorSeat) == 0 {
+			action = "check"
+		}
+
+		res := applyAction(t, action, 0, nowUnix)
+		if res.Code != 0 {
+			return res
+		}
+
+		attrs := []abci.EventAttribute{
+			{Key: "tableId", Value: fmt.Sprintf("%d", msg.TableID), Index: true},
+			{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+			{Key: "seat", Value: fmt.Sprintf("%d", actorSeat), Index: true},
+			{Key: "player", Value: player, Index: true},
+			{Key: "action", Value: action, Index: true},
+		}
+		if t.Hand != nil {
+			attrs = append(attrs,
+				abci.EventAttribute{Key: "phase", Value: string(t.Hand.Phase), Index: true},
+				abci.EventAttribute{Key: "street", Value: string(t.Hand.Street), Index: true},
+				abci.EventAttribute{Key: "actionOn", Value: fmt.Sprintf("%d", t.Hand.ActionOn), Index: true},
+			)
+		}
+		res.Events = append([]abci.Event{
+			{
+				Type:       "TimeoutApplied",
+				Attributes: attrs,
+			},
+		}, res.Events...)
 		return res
 
 	case "staking/register_validator":

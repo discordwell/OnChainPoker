@@ -134,13 +134,13 @@ func (s *State) AppHash() []byte {
 	sort.Slice(tables, func(i, j int) bool { return tables[i].ID < tables[j].ID })
 
 	normalized := struct {
-		Height      int64        `json:"height"`
-		NextTableID uint64       `json:"nextTableId"`
-		Accounts    []accountKV  `json:"accounts"`
+		Height      int64          `json:"height"`
+		NextTableID uint64         `json:"nextTableId"`
+		Accounts    []accountKV    `json:"accounts"`
 		AccountKeys []accountKeyKV `json:"accountKeys,omitempty"`
-		NonceMax    []nonceKV    `json:"nonceMax,omitempty"`
-		Tables      []tableKV    `json:"tables"`
-		Dealer      *DealerState `json:"dealer,omitempty"`
+		NonceMax    []nonceKV      `json:"nonceMax,omitempty"`
+		Tables      []tableKV      `json:"tables"`
+		Dealer      *DealerState   `json:"dealer,omitempty"`
 	}{
 		Height:      s.Height,
 		NextTableID: s.NextTableID,
@@ -184,7 +184,10 @@ type TableParams struct {
 	MinBuyIn   uint64 `json:"minBuyIn"`
 	MaxBuyIn   uint64 `json:"maxBuyIn"`
 
-	// v0 localnet: timeouts/rake are accepted at table creation but not yet enforced.
+	// v0 localnet:
+	// - actionTimeoutSecs is enforced via `poker/tick` + `hand.actionDeadline`.
+	// - dealerTimeoutSecs is enforced by the Dealer module (see `dealer/timeout`).
+	// - playerBond/rake are accepted but not yet enforced.
 	ActionTimeoutSecs uint64 `json:"actionTimeoutSecs,omitempty"`
 	DealerTimeoutSecs uint64 `json:"dealerTimeoutSecs,omitempty"`
 	PlayerBond        uint64 `json:"playerBond,omitempty"`
@@ -252,6 +255,9 @@ type Hand struct {
 
 	// Betting state.
 	ActionOn int `json:"actionOn"` // 0..8, or -1 if no action (showdown)
+	// ActionDeadline is the unix second timestamp at/after which the chain may
+	// auto-apply a default action via poker/tick. 0 means "unset".
+	ActionDeadline int64 `json:"actionDeadline,omitempty"`
 
 	BetTo        uint64 `json:"betTo"`
 	MinRaiseSize uint64 `json:"minRaiseSize"`

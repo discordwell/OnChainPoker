@@ -24,7 +24,7 @@ Out of scope:
 
 ## Known Gaps / TODOs
 
-- Player action timeouts are specified but not yet wired in the v0 chain runtime:
-  - `actionTimeoutSecs` is accepted/stored, but there is no `PokerTable.Tick` tx in v0.
+- Player action timeouts (`docs/SPEC.md` 5.5) are now wired in v0:
+  - `poker/tick` applies deterministic default actions once `hand.actionDeadline` passes.
+  - `actionTimeoutSecs` is enforced via `hand.actionDeadline` (unix seconds).
 - `bank/mint` is devnet-only and currently unauthenticated; MUST NOT exist in production builds.
-

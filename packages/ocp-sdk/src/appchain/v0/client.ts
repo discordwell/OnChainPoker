@@ -25,6 +25,7 @@ import type {
   DealerSubmitShuffleTx,
   DealerTimeoutTx,
   PokerActTx,
+  PokerTickTx,
   PokerCreateTableTx,
   PokerSitTx,
   PokerStartHandTx,
@@ -124,6 +125,10 @@ export class OcpV0Client {
 
   pokerAct(value: PokerActTx): Promise<BroadcastTxCommitResult> {
     return this.broadcastTxEnvelope({ type: "poker/act", value });
+  }
+
+  pokerTick(value: PokerTickTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "poker/tick", value });
   }
 
   stakingRegisterValidator(value: StakingRegisterValidatorTx): Promise<BroadcastTxCommitResult> {

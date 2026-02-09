@@ -7,6 +7,7 @@ import (
 )
 
 const defaultDealerTimeoutSecs uint64 = 120
+const defaultActionTimeoutSecs uint64 = 30
 
 func tableDealerTimeoutSecs(t *state.Table) uint64 {
 	if t == nil {
@@ -16,6 +17,16 @@ func tableDealerTimeoutSecs(t *state.Table) uint64 {
 		return defaultDealerTimeoutSecs
 	}
 	return t.Params.DealerTimeoutSecs
+}
+
+func tableActionTimeoutSecs(t *state.Table) uint64 {
+	if t == nil {
+		return defaultActionTimeoutSecs
+	}
+	if t.Params.ActionTimeoutSecs == 0 {
+		return defaultActionTimeoutSecs
+	}
+	return t.Params.ActionTimeoutSecs
 }
 
 func setRevealDeadlineIfAwaiting(t *state.Table, nowUnix int64) error {
@@ -40,5 +51,25 @@ func setRevealDeadlineIfAwaiting(t *state.Table, nowUnix int64) error {
 	}
 	dh.RevealPos = pos
 	dh.RevealDeadline = nowUnix + int64(to)
+	return nil
+}
+
+func setActionDeadlineIfBetting(t *state.Table, nowUnix int64) error {
+	if t == nil || t.Hand == nil {
+		return nil
+	}
+	h := t.Hand
+
+	// Clear deadline outside of betting (no player action).
+	if h.Phase != state.PhaseBetting || h.ActionOn < 0 || h.ActionOn >= 9 {
+		h.ActionDeadline = 0
+		return nil
+	}
+
+	to := tableActionTimeoutSecs(t)
+	if to == 0 {
+		return fmt.Errorf("invalid actionTimeoutSecs")
+	}
+	h.ActionDeadline = nowUnix + int64(to)
 	return nil
 }

@@ -58,6 +58,10 @@ export type PokerActTx = {
   amount?: number;
 };
 
+export type PokerTickTx = {
+  tableId: number;
+};
+
 // ---- Staking (v0) ----
 
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
@@ -255,6 +259,7 @@ export type HandView = {
   smallBlindSeat: number;
   bigBlindSeat: number;
   actionOn: number;
+  actionDeadline?: number; // unix seconds
   betTo: number;
   minRaiseSize: number;
   intervalId: number;

@@ -93,6 +93,10 @@ type PokerActTx struct {
 	Amount  uint64 `json:"amount,omitempty"` // for bet/raise only: desired total street commitment ("BetTo")
 }
 
+type PokerTickTx struct {
+	TableID uint64 `json:"tableId"`
+}
+
 // ---- Staking (v0) ----
 
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
