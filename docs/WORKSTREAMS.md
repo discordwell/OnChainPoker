@@ -3,7 +3,9 @@
 Date: 2026-02-08
 Status: Draft
 
-This repo currently contains an EVM prototype (`packages/contracts`, `apps/web`). The non-negotiable "contract is the dealer and nobody can know unrevealed cards" requirement implies an appchain / specialized execution environment (see `docs/SPEC.md`). This document decomposes the appchain build into parallelizable workstreams with crisp interfaces.
+This repo previously contained an EVM prototype; it has been archived under `deprecated/evm`.
+The non-negotiable "contract is the dealer and nobody can know unrevealed cards" requirement implies an appchain / specialized execution environment (see `docs/SPEC.md`).
+This document decomposes the appchain build into parallelizable workstreams with crisp interfaces.
 
 ## Global Constraints (Must Hold Across All Tracks)
 

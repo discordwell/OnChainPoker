@@ -316,7 +316,9 @@ This query is sufficient to implement event subscription by polling. WebSocket/s
 
 ## 5. Appendix: EVM Prototype (PokerVault)
 
-The current EVM prototype (`packages/contracts`) is a settlement layer for **off-chain dealt** poker.
+**Deprecated.** The EVM prototype has been archived under `deprecated/evm` and is not part of the active workspace/CI.
+
+The EVM prototype (`deprecated/evm/packages/contracts`) is a settlement layer for **off-chain dealt** poker.
 It is not the confidential-dealing appchain described above, but it *does* define a client protocol
 worth capturing for SDK support.
 

@@ -36,6 +36,3 @@ jobs:
 
       - name: Unit Tests + Build
         run: pnpm test
-
-      - name: Integration Smoke
-        run: pnpm test:integration
