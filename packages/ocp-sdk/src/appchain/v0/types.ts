@@ -41,6 +41,10 @@ export type PokerActTx = {
   player: string;
   tableId: number;
   action: "fold" | "check" | "call" | "bet" | "raise";
+  /**
+   * For bet/raise only: the desired total street commitment ("BetTo"), not a delta.
+   * Example: facing betTo=10 with streetCommit=2, a raise to 50 is { action:"raise", amount:50 }.
+   */
   amount?: number;
 };
 
@@ -54,29 +58,40 @@ export type TableParams = {
   bigBlind: number;
   minBuyIn: number;
   maxBuyIn: number;
+  actionTimeoutSecs?: number;
+  dealerTimeoutSecs?: number;
+  playerBond?: number;
+  rakeBps?: number;
 };
 
 export type SeatView = {
   player: string;
   pk?: string;
   stack: number;
-  inHand: boolean;
-  folded: boolean;
-  allIn: boolean;
-  betThisRound: number;
-  actedThisRound: boolean;
   hole: [number, number];
 };
 
 export type HandView = {
   handId: number;
-  phase: "Preflop" | "Flop" | "Turn" | "River" | "Showdown" | string;
-  pot: number;
+  phase: "betting" | "showdown" | string;
+  street: "preflop" | "flop" | "turn" | "river" | string;
+  buttonSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  actionOn: number;
+  betTo: number;
+  minRaiseSize: number;
+  intervalId: number;
+  lastIntervalActed: number[]; // length 9
+  streetCommit: number[]; // length 9
+  totalCommit: number[]; // length 9
+  inHand: boolean[]; // length 9
+  folded: boolean[]; // length 9
+  allIn: boolean[]; // length 9
+  pots?: Array<{ amount: number; eligibleSeats: number[] }>;
   deck: number[];
   deckCursor: number;
   board: number[];
-  currentBet: number;
-  actingSeat: number;
 };
 
 export type TableView = {

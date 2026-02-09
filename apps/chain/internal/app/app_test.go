@@ -125,14 +125,11 @@ func TestStartHandHeadsUp_PostsBlindsAndDeals(t *testing.T) {
 	}
 	hand := table.Hand
 
-	if hand.Phase != state.PhasePreflop {
-		t.Fatalf("expected preflop phase, got %q", hand.Phase)
+	if hand.Phase != state.PhaseBetting || hand.Street != state.StreetPreflop {
+		t.Fatalf("expected betting preflop, got phase=%q street=%q", hand.Phase, hand.Street)
 	}
-	if hand.Pot != 3 {
-		t.Fatalf("expected pot=3, got %d", hand.Pot)
-	}
-	if hand.CurrentBet != 2 {
-		t.Fatalf("expected currentBet=2, got %d", hand.CurrentBet)
+	if hand.BetTo != 2 {
+		t.Fatalf("expected betTo=2, got %d", hand.BetTo)
 	}
 	if hand.DeckCursor != 4 {
 		t.Fatalf("expected deckCursor=4 after dealing 4 cards, got %d", hand.DeckCursor)
@@ -145,8 +142,8 @@ func TestStartHandHeadsUp_PostsBlindsAndDeals(t *testing.T) {
 	if table.ButtonSeat != 0 {
 		t.Fatalf("expected buttonSeat=0, got %d", table.ButtonSeat)
 	}
-	if hand.ActingSeat != 0 {
-		t.Fatalf("expected actingSeat=0 (SB) in heads-up preflop, got %d", hand.ActingSeat)
+	if hand.ActionOn != 0 {
+		t.Fatalf("expected actionOn=0 (SB) in heads-up preflop, got %d", hand.ActionOn)
 	}
 
 	s0 := table.Seats[0]
@@ -154,11 +151,11 @@ func TestStartHandHeadsUp_PostsBlindsAndDeals(t *testing.T) {
 	if s0 == nil || s1 == nil {
 		t.Fatalf("expected two seats")
 	}
-	if s0.Stack != 99 || s0.BetThisRound != 1 {
-		t.Fatalf("seat0 expected stack=99 bet=1, got stack=%d bet=%d", s0.Stack, s0.BetThisRound)
+	if s0.Stack != 99 || hand.StreetCommit[0] != 1 || hand.TotalCommit[0] != 1 {
+		t.Fatalf("seat0 expected stack=99 commit=1, got stack=%d streetCommit=%d totalCommit=%d", s0.Stack, hand.StreetCommit[0], hand.TotalCommit[0])
 	}
-	if s1.Stack != 98 || s1.BetThisRound != 2 {
-		t.Fatalf("seat1 expected stack=98 bet=2, got stack=%d bet=%d", s1.Stack, s1.BetThisRound)
+	if s1.Stack != 98 || hand.StreetCommit[1] != 2 || hand.TotalCommit[1] != 2 {
+		t.Fatalf("seat1 expected stack=98 commit=2, got stack=%d streetCommit=%d totalCommit=%d", s1.Stack, hand.StreetCommit[1], hand.TotalCommit[1])
 	}
 }
 
@@ -195,25 +192,21 @@ func TestCallThenCheck_AdvancesToFlopAndResetsRound(t *testing.T) {
 		t.Fatalf("expected active hand")
 	}
 	h := table.Hand
-	if h.Phase != state.PhaseFlop {
-		t.Fatalf("expected flop phase, got %q", h.Phase)
+	if h.Phase != state.PhaseBetting || h.Street != state.StreetFlop {
+		t.Fatalf("expected betting flop, got phase=%q street=%q", h.Phase, h.Street)
 	}
 	if len(h.Board) != 3 {
 		t.Fatalf("expected 3 board cards on flop, got %d", len(h.Board))
 	}
-	if h.CurrentBet != 0 {
-		t.Fatalf("expected currentBet reset to 0, got %d", h.CurrentBet)
+	if h.BetTo != 0 {
+		t.Fatalf("expected betTo reset to 0, got %d", h.BetTo)
 	}
-	if h.ActingSeat != 1 {
-		t.Fatalf("expected actingSeat=1 (BB) postflop in heads-up, got %d", h.ActingSeat)
+	if h.ActionOn != 1 {
+		t.Fatalf("expected actionOn=1 (BB) postflop in heads-up, got %d", h.ActionOn)
 	}
 	for i := 0; i < 2; i++ {
-		s := table.Seats[i]
-		if s == nil {
-			t.Fatalf("missing seat %d", i)
-		}
-		if s.BetThisRound != 0 || s.ActedThisRound {
-			t.Fatalf("expected round reset for seat %d, got bet=%d acted=%v", i, s.BetThisRound, s.ActedThisRound)
+		if h.StreetCommit[i] != 0 || h.LastIntervalActed[i] != -1 {
+			t.Fatalf("expected round reset for seat %d, got streetCommit=%d lastActed=%d", i, h.StreetCommit[i], h.LastIntervalActed[i])
 		}
 	}
 }
@@ -273,8 +266,8 @@ func TestStartHand_ExcludesZeroStackSeatsFromHandAndHoleEvents(t *testing.T) {
 	if table == nil || table.Hand == nil {
 		t.Fatalf("expected active hand")
 	}
-	if table.Seats[0].InHand {
-		t.Fatalf("expected zero-stack seat to be excluded from InHand")
+	if table.Hand.InHand[0] {
+		t.Fatalf("expected zero-stack seat to be excluded from hand.inHand")
 	}
 
 	holes := map[int]bool{}
@@ -294,5 +287,113 @@ func TestStartHand_ExcludesZeroStackSeatsFromHandAndHoleEvents(t *testing.T) {
 	}
 	if !holes[1] || !holes[2] {
 		t.Fatalf("expected hole cards for seats 1 and 2; got=%v", holes)
+	}
+}
+
+func TestSidePots_ShowdownAwardsMainAndSidePotCorrectly(t *testing.T) {
+	const height = int64(1)
+	a := newTestApp(t)
+
+	// Three players, one short-stacked to force a main+side pot.
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height))
+
+	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
+		"creator":   "alice",
+		"smallBlind": 1,
+		"bigBlind":   2,
+		"minBuyIn":   1,
+		"maxBuyIn":   1000,
+	}), height))
+	tableID := parseU64(t, attr(findEvent(createRes.Events, "TableCreated"), "tableId"))
+
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 10}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100}), height))
+
+	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+
+	table := a.st.Tables[tableID]
+	if table == nil || table.Hand == nil {
+		t.Fatalf("expected active hand")
+	}
+	h := table.Hand
+
+	// First hand: button is lowest-index funded seat (0). With 3 players: SB=1, BB=2, action starts at 0.
+	if h.ButtonSeat != 0 || h.SmallBlindSeat != 1 || h.BigBlindSeat != 2 || h.ActionOn != 0 {
+		t.Fatalf("unexpected positions: button=%d sb=%d bb=%d actionOn=%d", h.ButtonSeat, h.SmallBlindSeat, h.BigBlindSeat, h.ActionOn)
+	}
+	if h.DeckCursor != 6 {
+		t.Fatalf("expected deckCursor=6 after dealing 6 cards, got %d", h.DeckCursor)
+	}
+
+	// Override the dealer stub deck + hole cards to make a deterministic flush showdown:
+	// Board: 2h 5h 8h Jh 3c (four hearts), so the heart kicker decides.
+	// Alice: Ah (wins main), Bob: Kh (wins side vs Charlie: Qh).
+	prefix := []state.Card{
+		// Hole cards (dealing order: SB, BB, BTN, SB, BB, BTN).
+		state.Card(37), // Kh -> bob
+		state.Card(36), // Qh -> charlie
+		state.Card(38), // Ah -> alice
+		state.Card(5),  // 7c -> bob
+		state.Card(44), // 7s -> charlie
+		state.Card(18), // 7d -> alice
+		// Board runout (no burn in v0 dealer stub).
+		state.Card(26), // 2h
+		state.Card(29), // 5h
+		state.Card(32), // 8h
+		state.Card(35), // Jh
+		state.Card(1),  // 3c
+	}
+	seen := make([]bool, 52)
+	deck := make([]state.Card, 0, 52)
+	for _, c := range prefix {
+		if seen[int(c)] {
+			t.Fatalf("duplicate in prefix: %d", c)
+		}
+		seen[int(c)] = true
+		deck = append(deck, c)
+	}
+	for i := 0; i < 52; i++ {
+		if seen[i] {
+			continue
+		}
+		deck = append(deck, state.Card(i))
+	}
+	h.Deck = deck
+	h.DeckCursor = 6 // after dealing 6 hole cards
+	table.Seats[0].Hole = [2]state.Card{state.Card(38), state.Card(18)}
+	table.Seats[1].Hole = [2]state.Card{state.Card(37), state.Card(5)}
+	table.Seats[2].Hole = [2]state.Card{state.Card(36), state.Card(44)}
+
+	// Preflop: Alice (all-in 10), Bob calls to 10, Charlie raises to 50, Bob calls to 50.
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "raise", "amount": 10}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "raise", "amount": 50}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height))
+
+	// Check down to showdown.
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "check"}), height))
+	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height))
+
+	// Hand should be complete and cleared.
+	if table.Hand != nil {
+		t.Fatalf("expected hand to be cleared after showdown")
+	}
+
+	// Pots: main=30 to alice; side=80 to bob.
+	if table.Seats[0].Stack != 30 {
+		t.Fatalf("alice stack mismatch: got %d want 30", table.Seats[0].Stack)
+	}
+	if table.Seats[1].Stack != 130 {
+		t.Fatalf("bob stack mismatch: got %d want 130", table.Seats[1].Stack)
+	}
+	if table.Seats[2].Stack != 50 {
+		t.Fatalf("charlie stack mismatch: got %d want 50", table.Seats[2].Stack)
 	}
 }

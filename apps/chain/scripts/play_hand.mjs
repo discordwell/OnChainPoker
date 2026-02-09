@@ -45,11 +45,10 @@ function seatPlayer(table, seatIdx) {
 
 function toCallForSeat(table, seatIdx) {
   const h = table.hand;
-  const s = table.seats?.[seatIdx];
-  if (!h || !s) return 0;
-  const currentBet = Number(h.currentBet ?? 0);
-  const betThisRound = Number(s.betThisRound ?? 0);
-  return Math.max(0, currentBet - betThisRound);
+  if (!h) return 0;
+  const betTo = Number(h.betTo ?? 0);
+  const streetCommit = Number(h.streetCommit?.[seatIdx] ?? 0);
+  return Math.max(0, betTo - streetCommit);
 }
 
 async function main() {
@@ -84,8 +83,8 @@ async function main() {
     const table = await abciQuery(`/table/${tableId}`);
     if (!table?.hand) break;
 
-    const actingSeat = Number(table.hand.actingSeat ?? -1);
-    if (actingSeat < 0) throw new Error(`hand stuck: actingSeat=${actingSeat}`);
+    const actingSeat = Number(table.hand.actionOn ?? -1);
+    if (actingSeat < 0) throw new Error(`hand stuck: actionOn=${actingSeat}`);
 
     const player = seatPlayer(table, actingSeat);
     if (!player) throw new Error(`no player at actingSeat=${actingSeat}`);

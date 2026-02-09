@@ -71,5 +71,5 @@ type PokerActTx struct {
 	Player  string `json:"player"`
 	TableID uint64 `json:"tableId"`
 	Action  string `json:"action"`           // fold|check|call|bet|raise
-	Amount  uint64 `json:"amount,omitempty"` // for bet/raise only (delta chips in v0)
+	Amount  uint64 `json:"amount,omitempty"` // for bet/raise only: desired total street commitment ("BetTo")
 }

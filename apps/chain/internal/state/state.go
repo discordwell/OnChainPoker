@@ -138,6 +138,12 @@ type TableParams struct {
 	BigBlind   uint64 `json:"bigBlind"`
 	MinBuyIn   uint64 `json:"minBuyIn"`
 	MaxBuyIn   uint64 `json:"maxBuyIn"`
+
+	// v0 localnet: timeouts/rake are accepted at table creation but not yet enforced.
+	ActionTimeoutSecs uint64 `json:"actionTimeoutSecs,omitempty"`
+	DealerTimeoutSecs uint64 `json:"dealerTimeoutSecs,omitempty"`
+	PlayerBond        uint64 `json:"playerBond,omitempty"`
+	RakeBps           uint32 `json:"rakeBps,omitempty"`
 }
 
 type Table struct {
@@ -159,38 +165,64 @@ type Seat struct {
 
 	Stack uint64 `json:"stack"`
 
-	InHand         bool   `json:"inHand"`
-	Folded         bool   `json:"folded"`
-	AllIn          bool   `json:"allIn"`
-	BetThisRound   uint64 `json:"betThisRound"`
-	ActedThisRound bool   `json:"actedThisRound"`
-
+	// DealerStub (v0): public hole cards stored on-chain for now.
 	Hole [2]Card `json:"hole"`
 }
 
 type HandPhase string
 
 const (
-	PhasePreflop  HandPhase = "Preflop"
-	PhaseFlop     HandPhase = "Flop"
-	PhaseTurn     HandPhase = "Turn"
-	PhaseRiver    HandPhase = "River"
-	PhaseShowdown HandPhase = "Showdown"
+	PhaseBetting  HandPhase = "betting"
+	PhaseShowdown HandPhase = "showdown"
 )
+
+type Street string
+
+const (
+	StreetPreflop Street = "preflop"
+	StreetFlop    Street = "flop"
+	StreetTurn    Street = "turn"
+	StreetRiver   Street = "river"
+)
+
+type Pot struct {
+	Amount        uint64 `json:"amount"`
+	EligibleSeats []int  `json:"eligibleSeats"`
+}
 
 type Hand struct {
 	HandID uint64    `json:"handId"`
 	Phase  HandPhase `json:"phase"`
+	Street Street    `json:"street"`
 
-	Pot uint64 `json:"pot"`
+	// Positional state (0..8).
+	ButtonSeat     int `json:"buttonSeat"`
+	SmallBlindSeat int `json:"smallBlindSeat"`
+	BigBlindSeat   int `json:"bigBlindSeat"`
 
+	// Betting state.
+	ActionOn int `json:"actionOn"` // 0..8, or -1 if no action (showdown)
+
+	BetTo        uint64 `json:"betTo"`
+	MinRaiseSize uint64 `json:"minRaiseSize"`
+
+	IntervalID        uint32 `json:"intervalId"`
+	LastIntervalActed [9]int `json:"lastIntervalActed"`
+
+	StreetCommit [9]uint64 `json:"streetCommit"`
+	TotalCommit  [9]uint64 `json:"totalCommit"`
+
+	InHand [9]bool `json:"inHand"`
+	Folded [9]bool `json:"folded"`
+	AllIn  [9]bool `json:"allIn"`
+
+	// Populated at showdown (purely derived from TotalCommit+Folded).
+	Pots []Pot `json:"pots,omitempty"`
+
+	// DealerStub (v0): deterministic deck + public board stored on-chain.
 	Deck       []Card `json:"deck"`
 	DeckCursor uint8  `json:"deckCursor"`
-
-	Board []Card `json:"board"`
-
-	CurrentBet uint64 `json:"currentBet"`
-	ActingSeat int    `json:"actingSeat"`
+	Board      []Card `json:"board"`
 }
 
 type Card uint8 // 0..51

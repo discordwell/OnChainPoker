@@ -214,6 +214,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 				BigBlind:   msg.BigBlind,
 				MinBuyIn:   msg.MinBuyIn,
 				MaxBuyIn:   msg.MaxBuyIn,
+
+				ActionTimeoutSecs: msg.ActionTO,
+				DealerTimeoutSecs: msg.DealerTO,
+				PlayerBond:        msg.PlayerBond,
+				RakeBps:           msg.RakeBps,
 			},
 			NextHandID: 1,
 			ButtonSeat: -1,
@@ -281,73 +286,95 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			return &abci.ExecTxResult{Code: 1, Log: "need at least 2 players with chips"}
 		}
 
-		// Advance button to next occupied seat (or first if unset).
+		// Advance button to next funded seat (or first if unset).
 		if t.ButtonSeat < 0 {
 			t.ButtonSeat = activeSeats[0]
 		} else {
 			t.ButtonSeat = nextOccupiedSeat(t, t.ButtonSeat)
 		}
 
-		// Reset per-seat flags.
+		// Clear any previous hole cards.
 		for i := 0; i < 9; i++ {
 			if t.Seats[i] == nil {
 				continue
 			}
-			s := t.Seats[i]
-			// Only funded seats participate in the hand.
-			s.InHand = s.Stack > 0
-			s.Folded = false
-			s.AllIn = false
-			s.BetThisRound = 0
-			s.ActedThisRound = false
-			s.Hole = [2]state.Card{}
+			t.Seats[i].Hole = [2]state.Card{}
 		}
 
 		// Deterministic deck seed = H(height||tableId||handId).
 		seed := []byte(fmt.Sprintf("%d|%d|%d", height, msg.TableID, handId))
 		deck := state.DeterministicDeck(seed)
 
-		h := &state.Hand{
-			HandID:     handId,
-			Phase:      state.PhasePreflop,
-			Pot:        0,
-			Deck:       deck,
-			DeckCursor: 0,
-			Board:      []state.Card{},
-			CurrentBet: 0,
-			ActingSeat: -1,
-		}
-		t.Hand = h
-
-		// Post blinds.
+		// Determine blinds and build initial hand state.
 		sbSeat, bbSeat := blindSeats(t)
 		if sbSeat < 0 || bbSeat < 0 {
 			return &abci.ExecTxResult{Code: 1, Log: "cannot determine blinds"}
 		}
-		if err := postBlind(t, sbSeat, t.Params.SmallBlind); err != nil {
+
+		var inHand [9]bool
+		for i := 0; i < 9; i++ {
+			if t.Seats[i] != nil && t.Seats[i].Stack > 0 {
+				inHand[i] = true
+			}
+		}
+
+		var lastActed [9]int
+		for i := 0; i < 9; i++ {
+			lastActed[i] = -1
+		}
+
+		h := &state.Hand{
+			HandID:         handId,
+			Phase:          state.PhaseBetting,
+			Street:         state.StreetPreflop,
+			ButtonSeat:     t.ButtonSeat,
+			SmallBlindSeat: sbSeat,
+			BigBlindSeat:   bbSeat,
+			ActionOn:       -1,
+			BetTo:          0,
+			MinRaiseSize:   t.Params.BigBlind,
+			IntervalID:     0,
+			LastIntervalActed: lastActed,
+			Deck:              deck,
+			DeckCursor:         0,
+			Board:              []state.Card{},
+		}
+		// Note: the remaining fixed-size arrays default to zero values.
+		h.InHand = inHand
+		t.Hand = h
+
+		// Post blinds (all-in if short).
+		if err := postBlindCommit(t, sbSeat, t.Params.SmallBlind); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "small blind: " + err.Error()}
 		}
-		if err := postBlind(t, bbSeat, t.Params.BigBlind); err != nil {
+		if err := postBlindCommit(t, bbSeat, t.Params.BigBlind); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "big blind: " + err.Error()}
 		}
-		h.CurrentBet = t.Seats[bbSeat].BetThisRound
+		h.BetTo = h.StreetCommit[bbSeat]
+		h.MinRaiseSize = t.Params.BigBlind
 
 		// Deal hole cards (public in DealerStub).
 		dealHoleCards(t)
 
-		// Set acting seat.
-		h.ActingSeat = firstToActPreflop(t, sbSeat, bbSeat)
+		// Preflop action starts left of the big blind.
+		h.ActionOn = nextActiveToAct(t, h, bbSeat)
 
 		ev := okEvent("HandStarted", map[string]string{
-			"tableId":    fmt.Sprintf("%d", msg.TableID),
-			"handId":     fmt.Sprintf("%d", handId),
-			"buttonSeat": fmt.Sprintf("%d", t.ButtonSeat),
-			"smallBlind": fmt.Sprintf("%d", sbSeat),
-			"bigBlind":   fmt.Sprintf("%d", bbSeat),
-			"actingSeat": fmt.Sprintf("%d", h.ActingSeat),
+			"tableId":        fmt.Sprintf("%d", msg.TableID),
+			"handId":         fmt.Sprintf("%d", handId),
+			"buttonSeat":     fmt.Sprintf("%d", t.ButtonSeat),
+			"smallBlindSeat": fmt.Sprintf("%d", sbSeat),
+			"bigBlindSeat":   fmt.Sprintf("%d", bbSeat),
+			"actionOn":       fmt.Sprintf("%d", h.ActionOn),
 		})
 		// Emit hole cards as part of the tx (public dealing stub).
 		ev.Events = append(ev.Events, holeCardEvents(msg.TableID, handId, t)...)
+
+		// If no action is possible (everyone all-in), run out and settle immediately.
+		if h.ActionOn == -1 {
+			ev.Events = append(ev.Events, runoutAndSettleHand(t)...)
+		}
+
 		return ev
 
 	case "poker/act":
@@ -363,10 +390,10 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			return &abci.ExecTxResult{Code: 1, Log: "no active hand"}
 		}
 		h := t.Hand
-		if h.ActingSeat < 0 || h.ActingSeat >= 9 || t.Seats[h.ActingSeat] == nil {
-			return &abci.ExecTxResult{Code: 1, Log: "invalid acting seat"}
+		if h.ActionOn < 0 || h.ActionOn >= 9 || t.Seats[h.ActionOn] == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "invalid actionOn seat"}
 		}
-		if t.Seats[h.ActingSeat].Player != msg.Player {
+		if t.Seats[h.ActionOn].Player != msg.Player {
 			return &abci.ExecTxResult{Code: 1, Log: "not your turn"}
 		}
 		res := applyAction(t, msg.Action, msg.Amount)
@@ -380,9 +407,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 				{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
 				{Key: "player", Value: msg.Player, Index: true},
 				{Key: "action", Value: msg.Action, Index: true},
+				// Semantics: for bet/raise, amount is the desired total street commitment ("BetTo").
 				{Key: "amount", Value: fmt.Sprintf("%d", msg.Amount), Index: false},
 				{Key: "phase", Value: string(h.Phase), Index: true},
-				{Key: "actingSeat", Value: fmt.Sprintf("%d", h.ActingSeat), Index: true},
+				{Key: "street", Value: string(h.Street), Index: true},
+				{Key: "actionOn", Value: fmt.Sprintf("%d", h.ActionOn), Index: true},
 			},
 		})
 		return res
