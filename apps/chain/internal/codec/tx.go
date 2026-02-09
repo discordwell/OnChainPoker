@@ -49,6 +49,14 @@ type BankSendTx struct {
 	Amount uint64 `json:"amount"`
 }
 
+// ---- Auth (v0) ----
+
+// v0: account pubkey registration for tx authentication.
+type AuthRegisterAccountTx struct {
+	Account string `json:"account"`
+	PubKey  []byte `json:"pubKey"` // base64 (32 bytes)
+}
+
 // ---- Poker ----
 
 type PokerCreateTableTx struct {

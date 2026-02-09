@@ -164,6 +164,29 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 	}
 
 	switch env.Type {
+	case "auth/register_account":
+		var msg codec.AuthRegisterAccountTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad auth/register_account value"}
+		}
+		if err := requireRegisterAccountAuth(env, msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		// Idempotent registration; key rotation is out of scope for v0.
+		if existing := a.st.AccountKeys[msg.Account]; len(existing) != 0 {
+			if string(existing) != string(msg.PubKey) {
+				return &abci.ExecTxResult{Code: 1, Log: "account pubKey already set (rotation not supported in v0)"}
+			}
+			return okEvent("AccountKeyRegistered", map[string]string{
+				"account":  msg.Account,
+				"existing": "true",
+			})
+		}
+		a.st.AccountKeys[msg.Account] = append([]byte(nil), msg.PubKey...)
+		return okEvent("AccountKeyRegistered", map[string]string{
+			"account": msg.Account,
+		})
+
 	case "bank/mint":
 		var msg codec.BankMintTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
@@ -186,6 +209,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if msg.From == "" || msg.To == "" || msg.Amount == 0 {
 			return &abci.ExecTxResult{Code: 1, Log: "missing from/to/amount"}
 		}
+		if err := requireAccountAuth(a.st, env, msg.From); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		if err := a.st.Debit(msg.From, msg.Amount); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
@@ -203,6 +229,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		}
 		if msg.Creator == "" {
 			return &abci.ExecTxResult{Code: 1, Log: "missing creator"}
+		}
+		if err := requireAccountAuth(a.st, env, msg.Creator); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		maxPlayers := msg.MaxPlayers
 		if maxPlayers == 0 {
@@ -254,6 +283,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if msg.Player == "" {
 			return &abci.ExecTxResult{Code: 1, Log: "missing player"}
 		}
+		if err := requireAccountAuth(a.st, env, msg.Player); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
@@ -301,9 +333,18 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad poker/start_hand value"}
 		}
+		if msg.Caller == "" {
+			return &abci.ExecTxResult{Code: 1, Log: "missing caller"}
+		}
+		if err := requireAccountAuth(a.st, env, msg.Caller); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		if seatOfPlayer(t, msg.Caller) < 0 {
+			return &abci.ExecTxResult{Code: 1, Log: "caller not seated at table"}
 		}
 		if t.Hand != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "hand already in progress"}
@@ -438,6 +479,12 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		var msg codec.PokerActTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad poker/act value"}
+		}
+		if msg.Player == "" {
+			return &abci.ExecTxResult{Code: 1, Log: "missing player"}
+		}
+		if err := requireAccountAuth(a.st, env, msg.Player); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		t := a.st.Tables[msg.TableID]
 		if t == nil {

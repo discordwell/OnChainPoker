@@ -6,6 +6,7 @@ import type {
   AbciEventAttribute,
   AbciQueryResult,
   AccountView,
+  AuthRegisterAccountTx,
   BankMintTx,
   BankSendTx,
   BroadcastTxCommitResult,
@@ -90,6 +91,16 @@ export class OcpV0Client {
   }
 
   // --- OCP v0 tx helpers ---
+
+  /**
+   * v0 account key registration for tx authentication.
+   *
+   * Note: the chain verifies this tx is signed by `value.account` using `value.pubKey`;
+   * callers should broadcast a signed envelope via `broadcastTxEnvelope()`.
+   */
+  authRegisterAccount(value: AuthRegisterAccountTx): Promise<BroadcastTxCommitResult> {
+    return this.broadcastTxEnvelope({ type: "auth/register_account", value });
+  }
 
   bankMint(value: BankMintTx): Promise<BroadcastTxCommitResult> {
     return this.broadcastTxEnvelope({ type: "bank/mint", value });
@@ -188,8 +199,8 @@ export class OcpV0Client {
   }
 
   async broadcastTxEnvelope(env: TxEnvelope): Promise<BroadcastTxCommitResult> {
-    // v0 localnet has no auth/nonce; CometBFT rejects identical tx bytes via its tx cache.
-    // Add an ignored-by-app nonce to keep bytes unique.
+    // v0 localnet: optional tx auth. CometBFT rejects identical tx bytes via its tx cache,
+    // so we always include a nonce to keep bytes unique.
     const hasAuth = env.signer != null || env.sig != null;
     const nonce = env.nonce ?? `${Date.now()}-${++this.txNonce}`;
     if (hasAuth && !env.nonce) {

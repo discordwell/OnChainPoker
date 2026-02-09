@@ -58,21 +58,26 @@ func TestMultiwayAllIn_ThreeSidePots_AwardedCorrectly(t *testing.T) {
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "dave", "amount": 1000}), height, 0))
 
-	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
+	registerTestAccount(t, a, height, "alice")
+	registerTestAccount(t, a, height, "bob")
+	registerTestAccount(t, a, height, "charlie")
+	registerTestAccount(t, a, height, "dave")
+
+	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
 		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   1,
 		"maxBuyIn":   1000,
-	}), height, 0))
+	}, "alice"), height, 0))
 	tableID := parseU64(t, attr(findEvent(createRes.Events, "TableCreated"), "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 10}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 20}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 50}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "dave", "tableId": tableID, "seat": 3, "buyIn": 50}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 10}, "alice"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 20}, "bob"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 50}, "charlie"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "dave", "tableId": tableID, "seat": 3, "buyIn": 50}, "dave"), height, 0))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}, "alice"), height, 0))
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil {
 		t.Fatalf("expected active hand")
@@ -126,10 +131,10 @@ func TestMultiwayAllIn_ThreeSidePots_AwardedCorrectly(t *testing.T) {
 	// - Alice calls all-in 10.
 	// - Bob calls all-in 20 (including his SB).
 	// - Charlie calls all-in 50 (including his BB), completing the action and triggering runout+settlement.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "dave", "tableId": tableID, "action": "raise", "amount": 50}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}), height, 0))
-	final := mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "call"}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "dave", "tableId": tableID, "action": "raise", "amount": 50}, "dave"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}, "alice"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "call"}, "bob"), height, 0))
+	final := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "call"}, "charlie"), height, 0))
 
 	if findEvent(final.Events, "HandCompleted") == nil {
 		t.Fatalf("expected HandCompleted on final action")

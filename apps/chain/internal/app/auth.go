@@ -91,3 +91,47 @@ func requireRegisterValidatorAuth(env codec.TxEnvelope, msg codec.StakingRegiste
 	return nil
 }
 
+func requireRegisterAccountAuth(env codec.TxEnvelope, msg codec.AuthRegisterAccountTx) error {
+	if msg.Account == "" {
+		return fmt.Errorf("missing account")
+	}
+	if len(msg.PubKey) != ed25519.PublicKeySize {
+		return fmt.Errorf("pubKey must be %d bytes", ed25519.PublicKeySize)
+	}
+	if err := requireSignedEnvelope(env); err != nil {
+		return err
+	}
+	if env.Signer != msg.Account {
+		return fmt.Errorf("tx signer mismatch: signer=%q want=%q", env.Signer, msg.Account)
+	}
+	pub := ed25519.PublicKey(msg.PubKey)
+	msgBytes := txAuthSignBytesV0(env.Type, env.Value, env.Nonce, env.Signer)
+	if !ed25519.Verify(pub, msgBytes, env.Sig) {
+		return fmt.Errorf("invalid signature")
+	}
+	return nil
+}
+
+func requireAccountAuth(st *state.State, env codec.TxEnvelope, account string) error {
+	if st == nil {
+		return fmt.Errorf("state is nil")
+	}
+	if account == "" {
+		return fmt.Errorf("missing account")
+	}
+	if err := requireSignedEnvelope(env); err != nil {
+		return err
+	}
+	if env.Signer != account {
+		return fmt.Errorf("tx signer mismatch: signer=%q want=%q", env.Signer, account)
+	}
+	pub := st.AccountKeys[account]
+	if len(pub) != ed25519.PublicKeySize {
+		return fmt.Errorf("account %q missing pubKey (auth/register_account required)", account)
+	}
+	msg := txAuthSignBytesV0(env.Type, env.Value, env.Nonce, env.Signer)
+	if !ed25519.Verify(ed25519.PublicKey(pub), msg, env.Sig) {
+		return fmt.Errorf("invalid signature")
+	}
+	return nil
+}

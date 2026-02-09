@@ -1,10 +1,51 @@
 #!/usr/bin/env node
 
 import process from "node:process";
+import { createHash, generateKeyPairSync, sign as cryptoSign } from "node:crypto";
 
 import { OcpV0Client } from "../packages/ocp-sdk/dist/index.js";
 
 const RPC = process.env.OCP_RPC ?? "http://127.0.0.1:26657";
+
+function b64(bytes) {
+  return Buffer.from(bytes).toString("base64");
+}
+
+function b64urlToBytes(str) {
+  const s = String(str);
+  const pad = "=".repeat((4 - (s.length % 4)) % 4);
+  const b64 = s.replace(/-/g, "+").replace(/_/g, "/") + pad;
+  return new Uint8Array(Buffer.from(b64, "base64"));
+}
+
+// v0 tx auth: ed25519 signature over (type, nonce, signer, sha256(valueJson)).
+let txNonceCtr = 0;
+function nextTxNonce() {
+  return `${Date.now()}-${++txNonceCtr}`;
+}
+
+function txAuthSignBytesV0({ type, value, nonce, signer }) {
+  const valueBytes = Buffer.from(JSON.stringify(value), "utf8");
+  const valueHash = createHash("sha256").update(valueBytes).digest();
+  return Buffer.concat([
+    Buffer.from("ocp/tx/v0", "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(type), "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(nonce), "utf8"),
+    Buffer.from([0]),
+    Buffer.from(String(signer), "utf8"),
+    Buffer.from([0]),
+    valueHash,
+  ]);
+}
+
+function signedEnv({ type, value, signerId, signerSk }) {
+  const nonce = nextTxNonce();
+  const msg = txAuthSignBytesV0({ type, value, nonce, signer: signerId });
+  const sig = cryptoSign(null, msg, signerSk);
+  return { type, value, nonce, signer: signerId, sig: b64(sig) };
+}
 
 function seatPlayer(table, seatIdx) {
   const s = table?.seats?.[seatIdx];
@@ -51,28 +92,85 @@ async function main() {
   const ALICE = "alice";
   const BOB = "bob";
 
+  // v0: register account pubkeys so player txs can be authenticated on-chain.
+  const aliceKeys = generateKeyPairSync("ed25519");
+  const bobKeys = generateKeyPairSync("ed25519");
+  const alicePkBytes = b64urlToBytes(aliceKeys.publicKey.export({ format: "jwk" }).x);
+  const bobPkBytes = b64urlToBytes(bobKeys.publicKey.export({ format: "jwk" }).x);
+  if (alicePkBytes.length !== 32 || bobPkBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
+
   await ocp.bankMint({ to: ALICE, amount: 100000 });
   await ocp.bankMint({ to: BOB, amount: 100000 });
 
-  const createRes = await ocp.pokerCreateTable({
-    creator: ALICE,
-    smallBlind: 1,
-    bigBlind: 2,
-    minBuyIn: 100,
-    maxBuyIn: 100000,
-    label: "localnet"
-  });
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "auth/register_account",
+      value: { account: ALICE, pubKey: b64(alicePkBytes) },
+      signerId: ALICE,
+      signerSk: aliceKeys.privateKey,
+    })
+  );
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "auth/register_account",
+      value: { account: BOB, pubKey: b64(bobPkBytes) },
+      signerId: BOB,
+      signerSk: bobKeys.privateKey,
+    })
+  );
+
+  const createRes = await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/create_table",
+      value: {
+        creator: ALICE,
+        smallBlind: 1,
+        bigBlind: 2,
+        minBuyIn: 100,
+        maxBuyIn: 100000,
+        label: "localnet",
+      },
+      signerId: ALICE,
+      signerSk: aliceKeys.privateKey,
+    })
+  );
 
   const tableId = parseTableIdFromTxResult(createRes.tx_result ?? createRes.deliver_tx);
 
-  await ocp.pokerSit({ player: ALICE, tableId, seat: 0, buyIn: 1000 });
-  await ocp.pokerSit({ player: BOB, tableId, seat: 1, buyIn: 1000 });
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/sit",
+      value: { player: ALICE, tableId, seat: 0, buyIn: 1000 },
+      signerId: ALICE,
+      signerSk: aliceKeys.privateKey,
+    })
+  );
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/sit",
+      value: { player: BOB, tableId, seat: 1, buyIn: 1000 },
+      signerId: BOB,
+      signerSk: bobKeys.privateKey,
+    })
+  );
 
-  const startRes = await ocp.pokerStartHand({ caller: ALICE, tableId });
+  const startRes = await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/start_hand",
+      value: { caller: ALICE, tableId },
+      signerId: ALICE,
+      signerSk: aliceKeys.privateKey,
+    })
+  );
   const hole = parseHoleCardsFromTxResult(startRes.tx_result ?? startRes.deliver_tx);
 
   // eslint-disable-next-line no-console
   console.log(JSON.stringify({ tableId, hole }, null, 2));
+
+  const signingKeyByPlayer = new Map([
+    [ALICE, aliceKeys.privateKey],
+    [BOB, bobKeys.privateKey],
+  ]);
 
   for (let i = 0; i < 200; i++) {
     const table = await ocp.getTable(tableId);
@@ -87,7 +185,16 @@ async function main() {
     const toCall = toCallForSeat(table, actingSeat);
     const action = toCall === 0 ? "check" : "call";
 
-    await ocp.pokerAct({ player, tableId, action });
+    const signerSk = signingKeyByPlayer.get(player);
+    if (!signerSk) throw new Error(`missing signer key for player=${player}`);
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "poker/act",
+        value: { player, tableId, action },
+        signerId: player,
+        signerSk,
+      })
+    );
   }
 
   const finalTable = await ocp.getTable(tableId);

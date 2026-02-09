@@ -26,6 +26,21 @@ func occupiedSeatsWithStack(t *state.Table) []int {
 	return out
 }
 
+func seatOfPlayer(t *state.Table, player string) int {
+	if t == nil || player == "" {
+		return -1
+	}
+	for i := 0; i < 9; i++ {
+		if t.Seats[i] == nil {
+			continue
+		}
+		if t.Seats[i].Player == player {
+			return i
+		}
+	}
+	return -1
+}
+
 // nextOccupiedSeat returns the next *funded* seat (clockwise).
 func nextOccupiedSeat(t *state.Table, from int) int {
 	for step := 1; step <= 9; step++ {

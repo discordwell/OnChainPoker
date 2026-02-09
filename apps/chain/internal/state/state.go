@@ -15,6 +15,7 @@ type State struct {
 
 	NextTableID uint64            `json:"nextTableId"`
 	Accounts    map[string]uint64 `json:"accounts"`
+	AccountKeys map[string][]byte `json:"accountKeys,omitempty"` // addr -> ed25519 pubkey (32 bytes)
 	Tables      map[uint64]*Table `json:"tables"`
 
 	Dealer *DealerState `json:"dealer,omitempty"`
@@ -25,6 +26,7 @@ func NewState() *State {
 		Height:      0,
 		NextTableID: 1,
 		Accounts:    map[string]uint64{},
+		AccountKeys: map[string][]byte{},
 		Tables:      map[uint64]*Table{},
 		Dealer:      &DealerState{NextEpochID: 1},
 	}
@@ -45,6 +47,9 @@ func Load(home string) (*State, error) {
 	}
 	if st.Accounts == nil {
 		st.Accounts = map[string]uint64{}
+	}
+	if st.AccountKeys == nil {
+		st.AccountKeys = map[string][]byte{}
 	}
 	if st.Tables == nil {
 		st.Tables = map[uint64]*Table{}
@@ -86,6 +91,10 @@ func (s *State) AppHash() []byte {
 		Addr    string `json:"addr"`
 		Balance uint64 `json:"balance"`
 	}
+	type accountKeyKV struct {
+		Addr   string `json:"addr"`
+		PubKey []byte `json:"pubKey"`
+	}
 	type tableKV struct {
 		ID    uint64 `json:"id"`
 		Table *Table `json:"table"`
@@ -97,6 +106,12 @@ func (s *State) AppHash() []byte {
 	}
 	sort.Slice(accounts, func(i, j int) bool { return accounts[i].Addr < accounts[j].Addr })
 
+	accountKeys := make([]accountKeyKV, 0, len(s.AccountKeys))
+	for k, v := range s.AccountKeys {
+		accountKeys = append(accountKeys, accountKeyKV{Addr: k, PubKey: v})
+	}
+	sort.Slice(accountKeys, func(i, j int) bool { return accountKeys[i].Addr < accountKeys[j].Addr })
+
 	tables := make([]tableKV, 0, len(s.Tables))
 	for id, t := range s.Tables {
 		tables = append(tables, tableKV{ID: id, Table: t})
@@ -107,12 +122,14 @@ func (s *State) AppHash() []byte {
 		Height      int64        `json:"height"`
 		NextTableID uint64       `json:"nextTableId"`
 		Accounts    []accountKV  `json:"accounts"`
+		AccountKeys []accountKeyKV `json:"accountKeys,omitempty"`
 		Tables      []tableKV    `json:"tables"`
 		Dealer      *DealerState `json:"dealer,omitempty"`
 	}{
 		Height:      s.Height,
 		NextTableID: s.NextTableID,
 		Accounts:    accounts,
+		AccountKeys: accountKeys,
 		Tables:      tables,
 		Dealer:      s.Dealer,
 	}

@@ -19,20 +19,24 @@ func setupThreeHandedTableWithPK(t *testing.T, pkAliceB64, pkBobB64, pkCharlieB6
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
 
-	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
+	registerTestAccount(t, a, height, "alice")
+	registerTestAccount(t, a, height, "bob")
+	registerTestAccount(t, a, height, "charlie")
+
+	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
 		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   100,
 		"maxBuyIn":   1000,
 		"label":      "t",
-	}), height, 0))
+	}, "alice"), height, 0))
 	ev := findEvent(createRes.Events, "TableCreated")
 	tableID = parseU64(t, attr(ev, "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100, "pkPlayer": pkAliceB64}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100, "pkPlayer": pkBobB64}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100, "pkPlayer": pkCharlieB64}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": 100, "pkPlayer": pkAliceB64}, "alice"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": 100, "pkPlayer": pkBobB64}, "bob"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "charlie", "tableId": tableID, "seat": 2, "buyIn": 100, "pkPlayer": pkCharlieB64}, "charlie"), height, 0))
 
 	return a, tableID
 }
@@ -53,7 +57,7 @@ func TestDealer_ShowdownRevealOrdering_3Handed_FoldSkipsSeat(t *testing.T) {
 	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1"}, 1)
 	member := members[0]
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}, "alice"), height, 0))
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil {
 		t.Fatalf("expected active hand")
@@ -89,9 +93,9 @@ func TestDealer_ShowdownRevealOrdering_3Handed_FoldSkipsSeat(t *testing.T) {
 	}
 
 	// Preflop: BTN calls, SB folds, BB checks -> await flop.
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "fold"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "call"}, "alice"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "bob", "tableId": tableID, "action": "fold"}, "bob"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}, "charlie"), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitFlop {
 		t.Fatalf("expected awaitFlop, got %q", table.Hand.Phase)
 	}
@@ -105,8 +109,8 @@ func TestDealer_ShowdownRevealOrdering_3Handed_FoldSkipsSeat(t *testing.T) {
 	}
 
 	// Flop: check/check -> await turn (action starts left of button, skipping the folded SB).
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}, "charlie"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}, "alice"), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitTurn {
 		t.Fatalf("expected awaitTurn, got %q", table.Hand.Phase)
 	}
@@ -116,8 +120,8 @@ func TestDealer_ShowdownRevealOrdering_3Handed_FoldSkipsSeat(t *testing.T) {
 	if table.Hand.Phase != state.PhaseBetting || table.Hand.Street != state.StreetTurn {
 		t.Fatalf("expected betting turn, got phase=%q street=%q", table.Hand.Phase, table.Hand.Street)
 	}
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}, "charlie"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}, "alice"), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitRiver {
 		t.Fatalf("expected awaitRiver, got %q", table.Hand.Phase)
 	}
@@ -127,8 +131,8 @@ func TestDealer_ShowdownRevealOrdering_3Handed_FoldSkipsSeat(t *testing.T) {
 	if table.Hand.Phase != state.PhaseBetting || table.Hand.Street != state.StreetRiver {
 		t.Fatalf("expected betting river, got phase=%q street=%q", table.Hand.Phase, table.Hand.Street)
 	}
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "charlie", "tableId": tableID, "action": "check"}, "charlie"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/act", map[string]any{"player": "alice", "tableId": tableID, "action": "check"}, "alice"), height, 0))
 	if table.Hand.Phase != state.PhaseAwaitShowdown {
 		t.Fatalf("expected awaitShowdown, got %q", table.Hand.Phase)
 	}

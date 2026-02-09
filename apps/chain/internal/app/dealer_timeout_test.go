@@ -16,8 +16,10 @@ func setupHeadsUpTableWithPKAndDealerTO(t *testing.T, pkAliceB64, pkBobB64 strin
 
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
 	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
+	registerTestAccount(t, a, height, "alice")
+	registerTestAccount(t, a, height, "bob")
 
-	createRes := mustOk(t, a.deliverTx(txBytes(t, "poker/create_table", map[string]any{
+	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
 		"creator":           "alice",
 		"smallBlind":        1,
 		"bigBlind":          2,
@@ -25,12 +27,12 @@ func setupHeadsUpTableWithPKAndDealerTO(t *testing.T, pkAliceB64, pkBobB64 strin
 		"maxBuyIn":          maxBuyIn,
 		"dealerTimeoutSecs": dealerTO,
 		"label":             "t",
-	}), height))
+	}, "alice"), height))
 	ev := findEvent(createRes.Events, "TableCreated")
 	tableID = parseU64(t, attr(ev, "tableId"))
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": buyInAlice, "pkPlayer": pkAliceB64}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": buyInBob, "pkPlayer": pkBobB64}), height))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "alice", "tableId": tableID, "seat": 0, "buyIn": buyInAlice, "pkPlayer": pkAliceB64}, "alice"), height))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/sit", map[string]any{"player": "bob", "tableId": tableID, "seat": 1, "buyIn": buyInBob, "pkPlayer": pkBobB64}, "bob"), height))
 
 	return a, tableID
 }
@@ -54,7 +56,7 @@ func TestDealerTimeout_Shuffle_SlashesExpectedShufflerAndAllowsNext(t *testing.T
 
 	_, _, height = setupDKGEpoch(t, a, height, []string{"v1", "v2", "v3"}, 2)
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}, "alice"), height))
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
 		t.Fatalf("expected dealer hand state")
@@ -122,7 +124,7 @@ func TestDealerTimeout_Reveal_SlashesMissingAndFinalizesReveal(t *testing.T) {
 
 	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1", "v2", "v3"}, 2)
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}, "alice"), height))
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
 		t.Fatalf("expected dealer hand state")
@@ -205,7 +207,7 @@ func TestDealerTimeout_HoleShares_AbortsAndRefunds(t *testing.T) {
 
 	epochID, members, height := setupDKGEpoch(t, a, height, []string{"v1", "v2", "v3"}, 2)
 
-	mustOk(t, a.deliverTx(txBytes(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}), height))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{"caller": "alice", "tableId": tableID}, "alice"), height))
 	table := a.st.Tables[tableID]
 	if table == nil || table.Hand == nil || table.Hand.Dealer == nil {
 		t.Fatalf("expected dealer hand state")

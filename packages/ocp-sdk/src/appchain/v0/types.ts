@@ -13,6 +13,13 @@ export type TxEnvelope<TValue extends Json = Json> = {
 export type BankMintTx = { to: string; amount: number };
 export type BankSendTx = { from: string; to: string; amount: number };
 
+// ---- Auth (v0) ----
+
+export type AuthRegisterAccountTx = {
+  account: string;
+  pubKey: string; // base64 (32 bytes)
+};
+
 export type PokerCreateTableTx = {
   creator: string;
   smallBlind: number;

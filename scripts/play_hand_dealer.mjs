@@ -332,32 +332,68 @@ async function main() {
   const players = names.slice(0, numPlayers).map((player, i) => {
     const sk = randomScalarNonzero();
     const pk = mulBase(sk);
-    return { player, seat: i, sk, pk };
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const jwk = publicKey.export({ format: "jwk" });
+    const pkSignBytes = b64urlToBytes(jwk.x);
+    if (pkSignBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
+    return { player, seat: i, sk, pk, signSk: privateKey, signPkBytes };
   });
 
   for (const p of players) await ocp.bankMint({ to: p.player, amount: 100000 });
 
-  const createRes = await ocp.pokerCreateTable({
-    creator: players[0].player,
-    smallBlind: 1,
-    bigBlind: 2,
-    minBuyIn: 100,
-    maxBuyIn: 100000,
-    label: "dealer-mode-localnet",
-  });
+  for (const p of players) {
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "auth/register_account",
+        value: { account: p.player, pubKey: b64(p.signPkBytes) },
+        signerId: p.player,
+        signerSk: p.signSk,
+      })
+    );
+  }
+
+  const createRes = await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/create_table",
+      value: {
+        creator: players[0].player,
+        smallBlind: 1,
+        bigBlind: 2,
+        minBuyIn: 100,
+        maxBuyIn: 100000,
+        label: "dealer-mode-localnet",
+      },
+      signerId: players[0].player,
+      signerSk: players[0].signSk,
+    })
+  );
   const tableId = parseTableIdFromTxResult(createRes.tx_result ?? createRes.deliver_tx);
 
   for (const p of players) {
-    await ocp.pokerSit({
-      player: p.player,
-      tableId,
-      seat: p.seat,
-      buyIn: 1000,
-      pkPlayer: b64(groupElementToBytes(p.pk)),
-    });
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "poker/sit",
+        value: {
+          player: p.player,
+          tableId,
+          seat: p.seat,
+          buyIn: 1000,
+          pkPlayer: b64(groupElementToBytes(p.pk)),
+        },
+        signerId: p.player,
+        signerSk: p.signSk,
+      })
+    );
   }
 
-  const startRes = await ocp.pokerStartHand({ caller: players[0].player, tableId });
+  const startRes = await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "poker/start_hand",
+      value: { caller: players[0].player, tableId },
+      signerId: players[0].player,
+      signerSk: players[0].signSk,
+    })
+  );
   const handIdFromEvent = parseHandStartedFromTxResult(startRes.tx_result ?? startRes.deliver_tx);
 
   let table = await ocp.getTable(tableId);
@@ -388,7 +424,8 @@ async function main() {
 
     const seed = randomBytes(32);
     const { proofBytes } = shuffleProveV1(pkHand, deckIn, { rounds: shuffleRounds, seed });
-    const shuffler = committee[(step - 1) % committee.length]!;
+    const shuffler = committee[(step - 1) % committee.length];
+    if (!shuffler) throw new Error("missing shuffler");
 
     await ocp.broadcastTxEnvelope(
       signedEnv({
@@ -423,7 +460,9 @@ async function main() {
       const pos = Number(holePos[p.seat * 2 + c] ?? 255);
       if (!Number.isFinite(pos) || pos < 0) throw new Error(`invalid holePos for seat=${p.seat} c=${c}`);
 
-      const c1Cipher = deck[pos]!.c1;
+      const ct = deck[pos];
+      if (!ct) throw new Error(`missing ciphertext at pos=${pos}`);
+      const c1Cipher = ct.c1;
       for (const m of shareMembers) {
         const xHand = scalarMul(m.skShare, k);
         const yHand = mulBase(xHand);
@@ -474,6 +513,7 @@ async function main() {
     for (let c = 0; c < 2; c++) {
       const pos = Number(holePos[p.seat * 2 + c] ?? 255);
       const ct = deck[pos];
+      if (!ct) throw new Error(`missing ciphertext at pos=${pos}`);
 
       const sharesForPos = encSharesAll
         .filter((es) => Number(es.pos) === pos && es.pkPlayer === b64(groupElementToBytes(p.pk)))
@@ -486,12 +526,15 @@ async function main() {
 
       let combined = GroupElement.zero();
       for (let i = 0; i < sharesForPos.length; i++) {
-        const es = sharesForPos[i]!;
+        const es = sharesForPos[i];
+        if (!es) throw new Error(`missing encShare at i=${i}`);
         const bytes = unb64(es.encShare);
         const u = groupElementFromBytes(bytes.slice(0, 32));
         const v = groupElementFromBytes(bytes.slice(32, 64));
         const di = pointSub(v, mulPoint(u, p.sk));
-        combined = pointAdd(combined, mulPoint(di, lambdas[i]!));
+        const lambda = lambdas[i];
+        if (lambda == null) throw new Error(`missing lagrange coefficient at i=${i}`);
+        combined = pointAdd(combined, mulPoint(di, lambda));
       }
 
       const pt = pointSub(ct.c2, combined);
@@ -534,14 +577,25 @@ async function main() {
 
       const toCall = toCallForSeat(table, actingSeat);
       const action = toCall === 0 ? "check" : "call";
-      await ocp.pokerAct({ player, tableId, action });
+      const p = players.find((x) => x.player === player);
+      if (!p) throw new Error(`missing signer key for player=${player}`);
+      await ocp.broadcastTxEnvelope(
+        signedEnv({
+          type: "poker/act",
+          value: { player, tableId, action },
+          signerId: player,
+          signerSk: p.signSk,
+        })
+      );
       continue;
     }
 
     if (phase.startsWith("await")) {
       const pos = dealerExpectedPos(table);
       if (pos === null) throw new Error(`await phase ${phase} but no reveal pos found`);
-      const c1Cipher = deck[pos]!.c1;
+      const ct = deck[pos];
+      if (!ct) throw new Error(`missing ciphertext at pos=${pos}`);
+      const c1Cipher = ct.c1;
 
       for (const m of shareMembers) {
         const xHand = scalarMul(m.skShare, k);
