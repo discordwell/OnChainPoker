@@ -16,9 +16,11 @@ function b64urlToBytes(str) {
 }
 
 // v0 tx auth: ed25519 signature over (type, nonce, signer, sha256(valueJson)).
-let txNonceCtr = 0;
+let txNonceCtr = 0n;
 function nextTxNonce() {
-  return `${Date.now()}-${++txNonceCtr}`;
+  // Numeric u64 string, strictly increasing for replay protection.
+  txNonceCtr++;
+  return (BigInt(Date.now()) * 1000000n + txNonceCtr).toString();
 }
 
 function txAuthSignBytesV0({ type, value, nonce, signer }) {

@@ -169,7 +169,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad auth/register_account value"}
 		}
-		if err := requireRegisterAccountAuth(env, msg); err != nil {
+		if err := requireRegisterAccountAuth(a.st, env, msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		// Idempotent registration; key rotation is out of scope for v0.
@@ -528,7 +528,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad staking/register_validator value"}
 		}
-		if err := requireRegisterValidatorAuth(env, msg); err != nil {
+		if err := requireRegisterValidatorAuth(a.st, env, msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		ev, err := stakingRegisterValidator(a.st, msg)

@@ -16,6 +16,7 @@ type State struct {
 	NextTableID uint64            `json:"nextTableId"`
 	Accounts    map[string]uint64 `json:"accounts"`
 	AccountKeys map[string][]byte `json:"accountKeys,omitempty"` // addr -> ed25519 pubkey (32 bytes)
+	NonceMax    map[string]uint64 `json:"nonceMax,omitempty"`    // signer -> last accepted tx.nonce (u64), for replay protection
 	Tables      map[uint64]*Table `json:"tables"`
 
 	Dealer *DealerState `json:"dealer,omitempty"`
@@ -27,6 +28,7 @@ func NewState() *State {
 		NextTableID: 1,
 		Accounts:    map[string]uint64{},
 		AccountKeys: map[string][]byte{},
+		NonceMax:    map[string]uint64{},
 		Tables:      map[uint64]*Table{},
 		Dealer:      &DealerState{NextEpochID: 1},
 	}
@@ -50,6 +52,9 @@ func Load(home string) (*State, error) {
 	}
 	if st.AccountKeys == nil {
 		st.AccountKeys = map[string][]byte{}
+	}
+	if st.NonceMax == nil {
+		st.NonceMax = map[string]uint64{}
 	}
 	if st.Tables == nil {
 		st.Tables = map[uint64]*Table{}
@@ -95,6 +100,10 @@ func (s *State) AppHash() []byte {
 		Addr   string `json:"addr"`
 		PubKey []byte `json:"pubKey"`
 	}
+	type nonceKV struct {
+		Signer string `json:"signer"`
+		Nonce  uint64 `json:"nonce"`
+	}
 	type tableKV struct {
 		ID    uint64 `json:"id"`
 		Table *Table `json:"table"`
@@ -112,6 +121,12 @@ func (s *State) AppHash() []byte {
 	}
 	sort.Slice(accountKeys, func(i, j int) bool { return accountKeys[i].Addr < accountKeys[j].Addr })
 
+	nonces := make([]nonceKV, 0, len(s.NonceMax))
+	for k, v := range s.NonceMax {
+		nonces = append(nonces, nonceKV{Signer: k, Nonce: v})
+	}
+	sort.Slice(nonces, func(i, j int) bool { return nonces[i].Signer < nonces[j].Signer })
+
 	tables := make([]tableKV, 0, len(s.Tables))
 	for id, t := range s.Tables {
 		tables = append(tables, tableKV{ID: id, Table: t})
@@ -123,6 +138,7 @@ func (s *State) AppHash() []byte {
 		NextTableID uint64       `json:"nextTableId"`
 		Accounts    []accountKV  `json:"accounts"`
 		AccountKeys []accountKeyKV `json:"accountKeys,omitempty"`
+		NonceMax    []nonceKV    `json:"nonceMax,omitempty"`
 		Tables      []tableKV    `json:"tables"`
 		Dealer      *DealerState `json:"dealer,omitempty"`
 	}{
@@ -130,6 +146,7 @@ func (s *State) AppHash() []byte {
 		NextTableID: s.NextTableID,
 		Accounts:    accounts,
 		AccountKeys: accountKeys,
+		NonceMax:    nonces,
 		Tables:      tables,
 		Dealer:      s.Dealer,
 	}

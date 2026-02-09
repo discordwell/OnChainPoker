@@ -15,7 +15,7 @@ type TxEnvelope struct {
 	Value json.RawMessage `json:"value"`
 
 	// v0 tx auth (optional):
-	// - Nonce: included in the signed message to prevent CometBFT tx-cache collisions.
+	// - Nonce: included in the signed message for replay protection (must increase per signer).
 	// - Signer: logical signer id (validatorId for validator-signed txs).
 	// - Sig: Ed25519 signature over (type, nonce, signer, sha256(value)).
 	//

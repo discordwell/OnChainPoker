@@ -48,7 +48,7 @@ func txBytesSigned(t *testing.T, typ string, value any, signerID string) []byte 
 	}
 	_, priv := testEd25519Key(signerID)
 	valueBytes := mustMarshal(t, value)
-	nonce := fmt.Sprintf("test-%d", atomic.AddUint64(&testTxNonce, 1))
+	nonce := fmt.Sprintf("%d", atomic.AddUint64(&testTxNonce, 1))
 	msg := txAuthSignBytesV0(typ, valueBytes, nonce, signerID)
 	sig := ed25519.Sign(priv, msg)
 

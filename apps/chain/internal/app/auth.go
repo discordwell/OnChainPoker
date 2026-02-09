@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
+	"strconv"
 
 	"onchainpoker/apps/chain/internal/codec"
 	"onchainpoker/apps/chain/internal/state"
@@ -43,6 +44,31 @@ func requireSignedEnvelope(env codec.TxEnvelope) error {
 	return nil
 }
 
+func consumeTxNonce(st *state.State, signer string, nonce string) error {
+	if st == nil {
+		return fmt.Errorf("state is nil")
+	}
+	if signer == "" {
+		return fmt.Errorf("missing signer")
+	}
+	if nonce == "" {
+		return fmt.Errorf("missing tx.nonce")
+	}
+	n, err := strconv.ParseUint(nonce, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid tx.nonce: must be base-10 uint64")
+	}
+	if st.NonceMax == nil {
+		st.NonceMax = map[string]uint64{}
+	}
+	last := st.NonceMax[signer]
+	if n <= last {
+		return fmt.Errorf("replayed tx.nonce: got=%d last=%d", n, last)
+	}
+	st.NonceMax[signer] = n
+	return nil
+}
+
 func requireValidatorAuth(st *state.State, env codec.TxEnvelope, validatorID string) error {
 	if st == nil {
 		return fmt.Errorf("state is nil")
@@ -67,10 +93,13 @@ func requireValidatorAuth(st *state.State, env codec.TxEnvelope, validatorID str
 	if !ed25519.Verify(ed25519.PublicKey(v.PubKey), msg, env.Sig) {
 		return fmt.Errorf("invalid signature")
 	}
+	if err := consumeTxNonce(st, env.Signer, env.Nonce); err != nil {
+		return err
+	}
 	return nil
 }
 
-func requireRegisterValidatorAuth(env codec.TxEnvelope, msg codec.StakingRegisterValidatorTx) error {
+func requireRegisterValidatorAuth(st *state.State, env codec.TxEnvelope, msg codec.StakingRegisterValidatorTx) error {
 	if msg.ValidatorID == "" {
 		return fmt.Errorf("missing validatorId")
 	}
@@ -88,10 +117,13 @@ func requireRegisterValidatorAuth(env codec.TxEnvelope, msg codec.StakingRegiste
 	if !ed25519.Verify(pub, msgBytes, env.Sig) {
 		return fmt.Errorf("invalid signature")
 	}
+	if err := consumeTxNonce(st, env.Signer, env.Nonce); err != nil {
+		return err
+	}
 	return nil
 }
 
-func requireRegisterAccountAuth(env codec.TxEnvelope, msg codec.AuthRegisterAccountTx) error {
+func requireRegisterAccountAuth(st *state.State, env codec.TxEnvelope, msg codec.AuthRegisterAccountTx) error {
 	if msg.Account == "" {
 		return fmt.Errorf("missing account")
 	}
@@ -108,6 +140,9 @@ func requireRegisterAccountAuth(env codec.TxEnvelope, msg codec.AuthRegisterAcco
 	msgBytes := txAuthSignBytesV0(env.Type, env.Value, env.Nonce, env.Signer)
 	if !ed25519.Verify(pub, msgBytes, env.Sig) {
 		return fmt.Errorf("invalid signature")
+	}
+	if err := consumeTxNonce(st, env.Signer, env.Nonce); err != nil {
+		return err
 	}
 	return nil
 }
@@ -132,6 +167,9 @@ func requireAccountAuth(st *state.State, env codec.TxEnvelope, account string) e
 	msg := txAuthSignBytesV0(env.Type, env.Value, env.Nonce, env.Signer)
 	if !ed25519.Verify(ed25519.PublicKey(pub), msg, env.Sig) {
 		return fmt.Errorf("invalid signature")
+	}
+	if err := consumeTxNonce(st, env.Signer, env.Nonce); err != nil {
+		return err
 	}
 	return nil
 }

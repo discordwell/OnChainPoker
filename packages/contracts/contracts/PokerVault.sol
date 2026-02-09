@@ -14,6 +14,7 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 contract PokerVault is Ownable, EIP712 {
     using SafeERC20 for IERC20;
 
+    error EmptyPlayers();
     error LengthMismatch();
     error DeadlineExpired(uint256 deadline);
     error HandAlreadyApplied(bytes32 handId);
@@ -46,9 +47,11 @@ contract PokerVault is Ownable, EIP712 {
     }
 
     function deposit(uint256 amount) external {
+        uint256 beforeBal = token.balanceOf(address(this));
         token.safeTransferFrom(msg.sender, address(this), amount);
-        balanceOf[msg.sender] += amount;
-        emit Deposit(msg.sender, amount);
+        uint256 received = token.balanceOf(address(this)) - beforeBal;
+        balanceOf[msg.sender] += received;
+        emit Deposit(msg.sender, received);
     }
 
     function withdraw(uint256 amount) external {
@@ -79,6 +82,7 @@ contract PokerVault is Ownable, EIP712 {
         if (handApplied[handId]) revert HandAlreadyApplied(handId);
         if (block.timestamp > deadline) revert DeadlineExpired(deadline);
         if (players.length != deltas.length || players.length != signatures.length) revert LengthMismatch();
+        if (players.length == 0) revert EmptyPlayers();
 
         // n is small (poker table), O(n^2) duplicate detection is fine.
         for (uint256 i = 0; i < players.length; i++) {
