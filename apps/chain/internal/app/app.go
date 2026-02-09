@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	abci "github.com/cometbft/cometbft/abci/types"
 
 	"onchainpoker/apps/chain/internal/codec"
+	"onchainpoker/apps/chain/internal/ocpcrypto"
 	"onchainpoker/apps/chain/internal/state"
 )
 
@@ -254,9 +256,23 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		if err := a.st.Debit(msg.Player, msg.BuyIn); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
+		var pkPlayer []byte
+		if strings.TrimSpace(msg.PKPlayer) != "" {
+			b, err := base64.StdEncoding.DecodeString(msg.PKPlayer)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: "invalid pkPlayer: must be base64"}
+			}
+			if len(b) != ocpcrypto.PointBytes {
+				return &abci.ExecTxResult{Code: 1, Log: "invalid pkPlayer: must decode to 32 bytes"}
+			}
+			if _, err := ocpcrypto.PointFromBytesCanonical(b); err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: "invalid pkPlayer point"}
+			}
+			pkPlayer = b
+		}
 		t.Seats[msg.Seat] = &state.Seat{
 			Player: msg.Player,
-			PK:     msg.PKPlayer,
+			PK:     pkPlayer,
 			Stack:  msg.BuyIn,
 		}
 		return okEvent("PlayerSat", map[string]string{
@@ -286,6 +302,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			return &abci.ExecTxResult{Code: 1, Log: "need at least 2 players with chips"}
 		}
 
+		epoch := a.st.Dealer.Epoch
+		useDealer := epoch != nil
+
 		// Advance button to next funded seat (or first if unset).
 		if t.ButtonSeat < 0 {
 			t.ButtonSeat = activeSeats[0]
@@ -300,10 +319,6 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			}
 			t.Seats[i].Hole = [2]state.Card{}
 		}
-
-		// Deterministic deck seed = H(height||tableId||handId).
-		seed := []byte(fmt.Sprintf("%d|%d|%d", height, msg.TableID, handId))
-		deck := state.DeterministicDeck(seed)
 
 		// Determine blinds and build initial hand state.
 		sbSeat, bbSeat := blindSeats(t)
@@ -321,6 +336,13 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		var lastActed [9]int
 		for i := 0; i < 9; i++ {
 			lastActed[i] = -1
+		}
+
+		var deck []state.Card
+		if !useDealer {
+			// DealerStub: deterministic deck seed = H(height||tableId||handId).
+			seed := []byte(fmt.Sprintf("%d|%d|%d", height, msg.TableID, handId))
+			deck = state.DeterministicDeck(seed)
 		}
 
 		h := &state.Hand{
@@ -353,10 +375,7 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 		h.BetTo = h.StreetCommit[bbSeat]
 		h.MinRaiseSize = t.Params.BigBlind
 
-		// Deal hole cards (public in DealerStub).
-		dealHoleCards(t)
-
-		// Preflop action starts left of the big blind.
+		// Preflop action starts left of the big blind (even if we are still shuffling / dealing privately).
 		h.ActionOn = nextActiveToAct(t, h, bbSeat)
 
 		ev := okEvent("HandStarted", map[string]string{
@@ -367,12 +386,36 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			"bigBlindSeat":   fmt.Sprintf("%d", bbSeat),
 			"actionOn":       fmt.Sprintf("%d", h.ActionOn),
 		})
-		// Emit hole cards as part of the tx (public dealing stub).
-		ev.Events = append(ev.Events, holeCardEvents(msg.TableID, handId, t)...)
-
-		// If no action is possible (everyone all-in), run out and settle immediately.
-		if h.ActionOn == -1 {
-			ev.Events = append(ev.Events, runoutAndSettleHand(t)...)
+		if useDealer {
+			// Dealer module: start in shuffle/deal phase, initialize the encrypted deck.
+			for i := 0; i < 9; i++ {
+				if !h.InHand[i] {
+					continue
+				}
+				if t.Seats[i] == nil || len(t.Seats[i].PK) != ocpcrypto.PointBytes {
+					return &abci.ExecTxResult{Code: 1, Log: fmt.Sprintf("seat %d missing pk; required for dealer mode", i)}
+				}
+			}
+			h.Phase = state.PhaseShuffle
+			initEv, err := dealerInitHand(a.st, t, codec.DealerInitHandTx{
+				TableID:  msg.TableID,
+				HandID:   handId,
+				EpochID:  epoch.EpochID,
+				DeckSize: 0,
+			})
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			ev.Events = append(ev.Events, initEv.Events...)
+		} else {
+			// DealerStub: deal hole cards publicly.
+			dealHoleCards(t)
+			// Emit hole cards as part of the tx (public dealing stub).
+			ev.Events = append(ev.Events, holeCardEvents(msg.TableID, handId, t)...)
+			// If no action is possible (everyone all-in), run out and settle immediately.
+			if h.ActionOn == -1 {
+				ev.Events = append(ev.Events, runoutAndSettleHand(t)...)
+			}
 		}
 
 		return ev
@@ -390,6 +433,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			return &abci.ExecTxResult{Code: 1, Log: "no active hand"}
 		}
 		h := t.Hand
+		if h.Phase != state.PhaseBetting {
+			return &abci.ExecTxResult{Code: 1, Log: "hand not in betting phase"}
+		}
 		if h.ActionOn < 0 || h.ActionOn >= 9 || t.Seats[h.ActionOn] == nil {
 			return &abci.ExecTxResult{Code: 1, Log: "invalid actionOn seat"}
 		}
@@ -415,6 +461,107 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64) *abci.ExecTxResult {
 			},
 		})
 		return res
+
+	case "dealer/begin_epoch":
+		var msg codec.DealerBeginEpochTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/begin_epoch value"}
+		}
+		ev, err := dealerBeginEpoch(a.st, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/init_hand":
+		var msg codec.DealerInitHandTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/init_hand value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerInitHand(a.st, t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/submit_shuffle":
+		var msg codec.DealerSubmitShuffleTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_shuffle value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerSubmitShuffle(t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/finalize_deck":
+		var msg codec.DealerFinalizeDeckTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/finalize_deck value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerFinalizeDeck(t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/submit_pub_share":
+		var msg codec.DealerSubmitPubShareTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_pub_share value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerSubmitPubShare(a.st, t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/submit_enc_share":
+		var msg codec.DealerSubmitEncShareTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/submit_enc_share value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerSubmitEncShare(a.st, t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
+
+	case "dealer/finalize_reveal":
+		var msg codec.DealerFinalizeRevealTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/finalize_reveal value"}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		ev, err := dealerFinalizeReveal(a.st, t, msg)
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		return ev
 
 	default:
 		return &abci.ExecTxResult{Code: 1, Log: "unknown tx type: " + env.Type}

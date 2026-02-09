@@ -73,3 +73,63 @@ type PokerActTx struct {
 	Action  string `json:"action"`           // fold|check|call|bet|raise
 	Amount  uint64 `json:"amount,omitempty"` // for bet/raise only: desired total street commitment ("BetTo")
 }
+
+// ---- Dealer (v0) ----
+
+type DealerMember struct {
+	ValidatorID string `json:"validatorId"`
+	Index       uint32 `json:"index"`
+	PubShare    []byte `json:"pubShare"` // base64 in JSON
+}
+
+type DealerBeginEpochTx struct {
+	EpochID   uint64        `json:"epochId"`
+	Threshold uint8         `json:"threshold"`
+	PKEpoch   []byte        `json:"pkEpoch"` // base64 in JSON
+	Members   []DealerMember `json:"members"`
+}
+
+type DealerInitHandTx struct {
+	TableID  uint64 `json:"tableId"`
+	HandID   uint64 `json:"handId"`
+	EpochID  uint64 `json:"epochId"`
+	DeckSize uint16 `json:"deckSize,omitempty"` // default 52
+}
+
+type DealerSubmitShuffleTx struct {
+	TableID    uint64 `json:"tableId"`
+	HandID     uint64 `json:"handId"`
+	Round      uint16 `json:"round"`
+	ShufflerID string `json:"shufflerId"`
+	ProofBytes []byte `json:"proofShuffle"` // base64 in JSON
+}
+
+type DealerFinalizeDeckTx struct {
+	TableID uint64 `json:"tableId"`
+	HandID  uint64 `json:"handId"`
+}
+
+type DealerSubmitPubShareTx struct {
+	TableID     uint64 `json:"tableId"`
+	HandID      uint64 `json:"handId"`
+	Pos         uint8  `json:"pos"`
+	ValidatorID string `json:"validatorId"`
+	Share       []byte `json:"pubShare"`   // base64 in JSON
+	Proof       []byte `json:"proofShare"` // base64 in JSON
+}
+
+type DealerSubmitEncShareTx struct {
+	TableID     uint64 `json:"tableId"`
+	HandID      uint64 `json:"handId"`
+	Pos         uint8  `json:"pos"`
+	ValidatorID string `json:"validatorId"`
+	PKPlayer    []byte `json:"pkPlayer"`      // base64 in JSON
+	EncShare    []byte `json:"encShare"`      // base64 in JSON (64 bytes u||v)
+	Proof       []byte `json:"proofEncShare"` // base64 in JSON
+}
+
+type DealerFinalizeRevealTx struct {
+	TableID uint64 `json:"tableId"`
+	HandID  uint64 `json:"handId"`
+	Pos     uint8  `json:"pos"`
+}

@@ -501,6 +501,25 @@ func maybeAdvance(t *state.Table, events *[]abci.Event) {
 	// End of betting street: return any uncalled excess, then advance.
 	returnUncalledStreetExcess(t)
 
+	// Dealer module: do not reveal from a plaintext deck. Enter a reveal phase and
+	// require `dealer/finalize_reveal` to append the next public cards.
+	if h.Dealer != nil {
+		h.ActionOn = -1
+		switch h.Street {
+		case state.StreetPreflop:
+			h.Phase = state.PhaseAwaitFlop
+		case state.StreetFlop:
+			h.Phase = state.PhaseAwaitTurn
+		case state.StreetTurn:
+			h.Phase = state.PhaseAwaitRiver
+		case state.StreetRiver:
+			h.Phase = state.PhaseAwaitShowdown
+		default:
+			h.Phase = state.PhaseAwaitShowdown
+		}
+		return
+	}
+
 	if h.Street == state.StreetRiver {
 		*events = append(*events, runoutAndSettleHand(t)...)
 		return
@@ -518,6 +537,414 @@ func maybeAdvance(t *state.Table, events *[]abci.Event) {
 	if t.Hand != nil && t.Hand.ActionOn == -1 {
 		*events = append(*events, runoutAndSettleHand(t)...)
 	}
+}
+
+func appendStreetRevealedEvent(t *state.Table, street string, cards []state.Card, events *[]abci.Event) {
+	h := t.Hand
+	if h == nil {
+		return
+	}
+	cardStrs := make([]string, 0, len(cards))
+	for _, c := range cards {
+		cardStrs = append(cardStrs, c.String())
+	}
+	*events = append(*events, abci.Event{
+		Type: "StreetRevealed",
+		Attributes: []abci.EventAttribute{
+			{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+			{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+			{Key: "street", Value: street, Index: true},
+			{Key: "cards", Value: strings.Join(cardStrs, ","), Index: false},
+		},
+	})
+}
+
+func dealerHasRevealForPos(dh *state.DealerHand, pos uint8) bool {
+	if dh == nil {
+		return false
+	}
+	for _, r := range dh.Reveals {
+		if r.Pos == pos {
+			return true
+		}
+	}
+	return false
+}
+
+func dealerEligibleShowdownHolePositions(t *state.Table) ([]uint8, error) {
+	if t == nil || t.Hand == nil || t.Hand.Dealer == nil {
+		return nil, fmt.Errorf("missing dealer hand")
+	}
+	h := t.Hand
+	dh := h.Dealer
+	if len(dh.HolePos) != 18 {
+		return nil, fmt.Errorf("holePos not initialized")
+	}
+
+	pos := make([]uint8, 0, 18)
+	for seat := 0; seat < 9; seat++ {
+		if !h.InHand[seat] || h.Folded[seat] {
+			continue
+		}
+		for c := 0; c < 2; c++ {
+			p := dh.HolePos[seat*2+c]
+			if p == 255 {
+				return nil, fmt.Errorf("holePos unset for seat %d", seat)
+			}
+			pos = append(pos, p)
+		}
+	}
+
+	sort.Slice(pos, func(i, j int) bool { return pos[i] < pos[j] })
+	return pos, nil
+}
+
+func dealerNextShowdownHolePos(t *state.Table) (uint8, bool, error) {
+	pos, err := dealerEligibleShowdownHolePositions(t)
+	if err != nil {
+		return 0, false, err
+	}
+	dh := t.Hand.Dealer
+	for _, p := range pos {
+		if !dealerHasRevealForPos(dh, p) {
+			return p, true, nil
+		}
+	}
+	return 0, false, nil
+}
+
+func dealerExpectedRevealPos(t *state.Table) (uint8, bool, error) {
+	if t == nil || t.Hand == nil || t.Hand.Dealer == nil {
+		return 0, false, nil
+	}
+	h := t.Hand
+	dh := h.Dealer
+	if !dh.Finalized {
+		return 0, false, fmt.Errorf("deck not finalized")
+	}
+	if len(dh.Deck) == 0 {
+		return 0, false, fmt.Errorf("empty dealer deck")
+	}
+
+	switch h.Phase {
+	case state.PhaseAwaitFlop:
+		if len(h.Board) > 2 {
+			return 0, false, fmt.Errorf("awaitFlop but board has %d cards", len(h.Board))
+		}
+		pos := dh.Cursor + uint8(len(h.Board))
+		if int(pos) >= len(dh.Deck) {
+			return 0, false, fmt.Errorf("board pos out of bounds")
+		}
+		return pos, true, nil
+	case state.PhaseAwaitTurn:
+		if len(h.Board) != 3 {
+			return 0, false, fmt.Errorf("awaitTurn but board has %d cards", len(h.Board))
+		}
+		pos := dh.Cursor + uint8(len(h.Board))
+		if int(pos) >= len(dh.Deck) {
+			return 0, false, fmt.Errorf("board pos out of bounds")
+		}
+		return pos, true, nil
+	case state.PhaseAwaitRiver:
+		if len(h.Board) != 4 {
+			return 0, false, fmt.Errorf("awaitRiver but board has %d cards", len(h.Board))
+		}
+		pos := dh.Cursor + uint8(len(h.Board))
+		if int(pos) >= len(dh.Deck) {
+			return 0, false, fmt.Errorf("board pos out of bounds")
+		}
+		return pos, true, nil
+	case state.PhaseAwaitShowdown:
+		if len(h.Board) != 5 {
+			return 0, false, fmt.Errorf("awaitShowdown but board has %d cards", len(h.Board))
+		}
+		p, ok, err := dealerNextShowdownHolePos(t)
+		if err != nil {
+			return 0, false, err
+		}
+		if !ok {
+			return 0, false, nil
+		}
+		return p, true, nil
+	default:
+		return 0, false, nil
+	}
+}
+
+func resetPostflopBettingRound(t *state.Table) {
+	h := t.Hand
+	if h == nil {
+		return
+	}
+	h.BetTo = 0
+	h.MinRaiseSize = t.Params.BigBlind
+	h.IntervalID = 0
+	for i := 0; i < 9; i++ {
+		h.StreetCommit[i] = 0
+		h.LastIntervalActed[i] = -1
+	}
+	// Postflop action starts left of the button.
+	h.ActionOn = nextActiveToAct(t, h, h.ButtonSeat)
+}
+
+func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8) ([]abci.Event, error) {
+	if t == nil || t.Hand == nil || t.Hand.Dealer == nil {
+		return nil, nil
+	}
+	h := t.Hand
+	dh := h.Dealer
+
+	events := []abci.Event{}
+
+	switch h.Phase {
+	case state.PhaseAwaitFlop, state.PhaseAwaitTurn, state.PhaseAwaitRiver:
+		if !dh.Finalized {
+			return nil, fmt.Errorf("deck not finalized")
+		}
+		expectPos := dh.Cursor + uint8(len(h.Board))
+		if pos != expectPos {
+			return nil, fmt.Errorf("unexpected reveal pos: expected %d got %d", expectPos, pos)
+		}
+		h.Board = append(h.Board, state.Card(cardID))
+		switch h.Phase {
+		case state.PhaseAwaitFlop:
+			if len(h.Board) == 3 {
+				appendStreetRevealedEvent(t, "flop", h.Board[:3], &events)
+				h.Street = state.StreetFlop
+				if countWithChips(t, h) < 2 {
+					h.Phase = state.PhaseAwaitTurn
+					h.ActionOn = -1
+				} else {
+					h.Phase = state.PhaseBetting
+					resetPostflopBettingRound(t)
+				}
+			}
+		case state.PhaseAwaitTurn:
+			if len(h.Board) == 4 {
+				appendStreetRevealedEvent(t, "turn", []state.Card{h.Board[3]}, &events)
+				h.Street = state.StreetTurn
+				if countWithChips(t, h) < 2 {
+					h.Phase = state.PhaseAwaitRiver
+					h.ActionOn = -1
+				} else {
+					h.Phase = state.PhaseBetting
+					resetPostflopBettingRound(t)
+				}
+			}
+		case state.PhaseAwaitRiver:
+			if len(h.Board) == 5 {
+				appendStreetRevealedEvent(t, "river", []state.Card{h.Board[4]}, &events)
+				h.Street = state.StreetRiver
+				if countWithChips(t, h) < 2 {
+					h.Phase = state.PhaseAwaitShowdown
+					h.ActionOn = -1
+				} else {
+					h.Phase = state.PhaseBetting
+					resetPostflopBettingRound(t)
+				}
+			}
+		}
+		return events, nil
+
+	case state.PhaseAwaitShowdown:
+		// Map deck pos -> seat+hole index.
+		if len(dh.HolePos) != 18 {
+			return nil, fmt.Errorf("holePos not initialized")
+		}
+		seat := -1
+		holeIdx := -1
+		for s := 0; s < 9; s++ {
+			if !h.InHand[s] || h.Folded[s] {
+				continue
+			}
+			for c := 0; c < 2; c++ {
+				if dh.HolePos[s*2+c] == pos {
+					seat = s
+					holeIdx = c
+					break
+				}
+			}
+			if seat != -1 {
+				break
+			}
+		}
+		if seat == -1 || holeIdx == -1 || t.Seats[seat] == nil {
+			return nil, fmt.Errorf("pos %d is not a revealable hole card", pos)
+		}
+
+		t.Seats[seat].Hole[holeIdx] = state.Card(cardID)
+		events = append(events, abci.Event{
+			Type: "HoleCardRevealed",
+			Attributes: []abci.EventAttribute{
+				{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+				{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+				{Key: "seat", Value: fmt.Sprintf("%d", seat), Index: true},
+				{Key: "player", Value: t.Seats[seat].Player, Index: true},
+				{Key: "card", Value: state.Card(cardID).String(), Index: false},
+			},
+		})
+
+		// If all eligible hole cards are now public, settle immediately.
+		if _, more, err := dealerNextShowdownHolePos(t); err != nil {
+			return nil, err
+		} else if !more {
+			events = append(events, settleKnownShowdown(t)...)
+		}
+		return events, nil
+	default:
+		return nil, fmt.Errorf("hand not in an await phase")
+	}
+}
+
+func settleKnownShowdown(t *state.Table) []abci.Event {
+	h := t.Hand
+	if h == nil {
+		return nil
+	}
+
+	events := []abci.Event{}
+
+	h.Phase = state.PhaseShowdown
+	h.ActionOn = -1
+
+	if len(h.Board) < 5 {
+		handId := h.HandID
+		t.Hand = nil
+		events = append(events, abci.Event{
+			Type: "HandAborted",
+			Attributes: []abci.EventAttribute{
+				{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+				{Key: "handId", Value: fmt.Sprintf("%d", handId), Index: true},
+				{Key: "reason", Value: "missing board cards", Index: false},
+			},
+		})
+		return events
+	}
+
+	var eligible [9]bool
+	for i := 0; i < 9; i++ {
+		eligible[i] = h.InHand[i] && !h.Folded[i]
+	}
+
+	pots := computeSidePots(h.TotalCommit, eligible)
+	h.Pots = pots
+
+	events = append(events, abci.Event{
+		Type: "ShowdownReached",
+		Attributes: []abci.EventAttribute{
+			{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+			{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+			{Key: "pots", Value: fmt.Sprintf("%d", len(pots)), Index: false},
+		},
+	})
+
+	board5 := h.Board
+	if len(board5) > 5 {
+		board5 = board5[:5]
+	}
+
+	potWinners := make([][]int, len(pots))
+	for potIdx, pot := range pots {
+		if pot.Amount == 0 || len(pot.EligibleSeats) == 0 {
+			continue
+		}
+
+		holeBySeat := make(map[int][2]state.Card, len(pot.EligibleSeats))
+		for _, seat := range pot.EligibleSeats {
+			if seat < 0 || seat > 8 {
+				continue
+			}
+			s := t.Seats[seat]
+			if s == nil {
+				continue
+			}
+			holeBySeat[seat] = s.Hole
+		}
+
+		if len(pot.EligibleSeats) == 1 {
+			potWinners[potIdx] = []int{pot.EligibleSeats[0]}
+		} else {
+			winners, err := holdem.Winners(board5, holeBySeat)
+			if err != nil {
+				// Something is inconsistent (duplicate cards, invalid ids). Refund all commits and abort.
+				for i := 0; i < 9; i++ {
+					if t.Seats[i] == nil {
+						continue
+					}
+					t.Seats[i].Stack += h.TotalCommit[i]
+				}
+				handId := h.HandID
+				for i := 0; i < 9; i++ {
+					if t.Seats[i] == nil {
+						continue
+					}
+					t.Seats[i].Hole = [2]state.Card{}
+				}
+				t.Hand = nil
+				events = append(events, abci.Event{
+					Type: "HandAborted",
+					Attributes: []abci.EventAttribute{
+						{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+						{Key: "handId", Value: fmt.Sprintf("%d", handId), Index: true},
+						{Key: "reason", Value: "showdown-eval-error: " + err.Error(), Index: false},
+					},
+				})
+				return events
+			}
+			potWinners[potIdx] = winners
+		}
+	}
+
+	// Award pots.
+	for potIdx, pot := range pots {
+		winners := potWinners[potIdx]
+		if pot.Amount == 0 || len(pot.EligibleSeats) == 0 || len(winners) == 0 {
+			continue
+		}
+		share := pot.Amount / uint64(len(winners))
+		rem := pot.Amount % uint64(len(winners))
+		for i, seat := range winners {
+			if t.Seats[seat] == nil {
+				continue
+			}
+			t.Seats[seat].Stack += share
+			if i == 0 {
+				t.Seats[seat].Stack += rem
+			}
+		}
+
+		events = append(events, abci.Event{
+			Type: "PotAwarded",
+			Attributes: []abci.EventAttribute{
+				{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+				{Key: "handId", Value: fmt.Sprintf("%d", h.HandID), Index: true},
+				{Key: "potIndex", Value: fmt.Sprintf("%d", potIdx), Index: true},
+				{Key: "amount", Value: fmt.Sprintf("%d", pot.Amount), Index: false},
+				{Key: "eligibleSeats", Value: joinSeats(pot.EligibleSeats), Index: false},
+				{Key: "winners", Value: joinSeats(winners), Index: false},
+			},
+		})
+	}
+
+	handId := h.HandID
+	// Clear any public hole cards (DealerStub + showdown reveal).
+	for i := 0; i < 9; i++ {
+		if t.Seats[i] == nil {
+			continue
+		}
+		t.Seats[i].Hole = [2]state.Card{}
+	}
+	t.Hand = nil
+
+	events = append(events, abci.Event{
+		Type: "HandCompleted",
+		Attributes: []abci.EventAttribute{
+			{Key: "tableId", Value: fmt.Sprintf("%d", t.ID), Index: true},
+			{Key: "handId", Value: fmt.Sprintf("%d", handId), Index: true},
+			{Key: "reason", Value: "showdown", Index: true},
+		},
+	})
+	return events
 }
 
 func applyAction(t *state.Table, action string, amount uint64) *abci.ExecTxResult {

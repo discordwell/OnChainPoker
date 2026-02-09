@@ -16,6 +16,8 @@ type State struct {
 	NextTableID uint64            `json:"nextTableId"`
 	Accounts    map[string]uint64 `json:"accounts"`
 	Tables      map[uint64]*Table `json:"tables"`
+
+	Dealer *DealerState `json:"dealer,omitempty"`
 }
 
 func NewState() *State {
@@ -24,6 +26,7 @@ func NewState() *State {
 		NextTableID: 1,
 		Accounts:    map[string]uint64{},
 		Tables:      map[uint64]*Table{},
+		Dealer:      &DealerState{},
 	}
 }
 
@@ -48,6 +51,9 @@ func Load(home string) (*State, error) {
 	}
 	if st.NextTableID == 0 {
 		st.NextTableID = 1
+	}
+	if st.Dealer == nil {
+		st.Dealer = &DealerState{}
 	}
 	return &st, nil
 }
@@ -99,11 +105,13 @@ func (s *State) AppHash() []byte {
 		NextTableID uint64      `json:"nextTableId"`
 		Accounts    []accountKV `json:"accounts"`
 		Tables      []tableKV   `json:"tables"`
+		Dealer      *DealerState `json:"dealer,omitempty"`
 	}{
 		Height:      s.Height,
 		NextTableID: s.NextTableID,
 		Accounts:    accounts,
 		Tables:      tables,
+		Dealer:      s.Dealer,
 	}
 
 	b, _ := json.Marshal(normalized)
@@ -161,7 +169,7 @@ type Table struct {
 
 type Seat struct {
 	Player string `json:"player"`
-	PK     string `json:"pk,omitempty"`
+	PK     []byte `json:"pk,omitempty"` // 32-byte ristretto point (base64 in JSON)
 
 	Stack uint64 `json:"stack"`
 
@@ -172,7 +180,12 @@ type Seat struct {
 type HandPhase string
 
 const (
+	PhaseShuffle     HandPhase = "shuffle"
 	PhaseBetting  HandPhase = "betting"
+	PhaseAwaitFlop   HandPhase = "awaitFlop"
+	PhaseAwaitTurn   HandPhase = "awaitTurn"
+	PhaseAwaitRiver  HandPhase = "awaitRiver"
+	PhaseAwaitShowdown HandPhase = "awaitShowdown"
 	PhaseShowdown HandPhase = "showdown"
 )
 
@@ -223,6 +236,9 @@ type Hand struct {
 	Deck       []Card `json:"deck"`
 	DeckCursor uint8  `json:"deckCursor"`
 	Board      []Card `json:"board"`
+
+	// Dealer module (v0): confidential dealing artifacts (not yet wired into gameplay).
+	Dealer *DealerHand `json:"dealer,omitempty"`
 }
 
 type Card uint8 // 0..51
@@ -290,4 +306,69 @@ func DeterministicDeck(seed []byte) []Card {
 		deck[i], deck[j] = deck[j], deck[i]
 	}
 	return deck
+}
+
+// ---- Dealer (v0) ----
+
+type DealerState struct {
+	Epoch *DealerEpoch `json:"epoch,omitempty"`
+}
+
+type DealerEpoch struct {
+	EpochID   uint64         `json:"epochId"`
+	Threshold uint8          `json:"threshold"`
+	PKEpoch   []byte         `json:"pkEpoch"` // 32-byte ristretto point
+	Members   []DealerMember `json:"members"`
+}
+
+type DealerMember struct {
+	ValidatorID string `json:"validatorId"`
+	Index       uint32 `json:"index"`    // Shamir x-coordinate (non-zero)
+	PubShare    []byte `json:"pubShare"` // 32-byte ristretto point (Y_i)
+}
+
+type DealerCiphertext struct {
+	C1 []byte `json:"c1"` // 32-byte ristretto point
+	C2 []byte `json:"c2"` // 32-byte ristretto point
+}
+
+type DealerPubShare struct {
+	Pos         uint8  `json:"pos"`
+	ValidatorID string `json:"validatorId"`
+	Index       uint32 `json:"index"`
+	Share       []byte `json:"share"` // 32-byte point (d_i = x_i*c1)
+	Proof       []byte `json:"proof"` // Chaum-Pedersen proof bytes
+}
+
+type DealerReveal struct {
+	Pos    uint8 `json:"pos"`
+	CardID uint8 `json:"cardId"`
+}
+
+type DealerEncShare struct {
+	Pos         uint8  `json:"pos"`
+	ValidatorID string `json:"validatorId"`
+	Index       uint32 `json:"index"`
+	PKPlayer    []byte `json:"pkPlayer"` // 32-byte point
+	EncShare    []byte `json:"encShare"` // 64 bytes (u||v)
+	Proof       []byte `json:"proof"`    // verifiable encryption proof bytes
+}
+
+type DealerHand struct {
+	EpochID uint64 `json:"epochId"`
+	PKHand  []byte `json:"pkHand"` // 32-byte point
+
+	DeckSize uint16            `json:"deckSize"`
+	Deck     []DealerCiphertext `json:"deck"`
+
+	ShuffleStep uint16 `json:"shuffleStep"`
+	Finalized   bool   `json:"finalized"`
+	Cursor      uint8  `json:"cursor"`
+
+	// Per-seat hole card deck positions, length 18: seat*2 + h -> pos (0..255). 255 = unset.
+	HolePos []uint8 `json:"holePos,omitempty"`
+
+	PubShares []DealerPubShare `json:"pubShares,omitempty"`
+	EncShares []DealerEncShare `json:"encShares,omitempty"`
+	Reveals   []DealerReveal   `json:"reveals,omitempty"`
 }
