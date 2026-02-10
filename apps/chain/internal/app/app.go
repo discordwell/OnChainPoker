@@ -299,7 +299,16 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if msg.BuyIn < t.Params.MinBuyIn || msg.BuyIn > t.Params.MaxBuyIn {
 			return &abci.ExecTxResult{Code: 1, Log: "buy-in out of range"}
 		}
-		if err := a.st.Debit(msg.Player, msg.BuyIn); err != nil {
+
+		bond := t.Params.PlayerBond
+		total := msg.BuyIn
+		if bond != 0 {
+			if total > ^uint64(0)-bond {
+				return &abci.ExecTxResult{Code: 1, Log: "buyIn + bond overflows uint64"}
+			}
+			total += bond
+		}
+		if err := a.st.Debit(msg.Player, total); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		var pkPlayer []byte
@@ -320,12 +329,14 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 			Player: msg.Player,
 			PK:     pkPlayer,
 			Stack:  msg.BuyIn,
+			Bond:   bond,
 		}
 		return okEvent("PlayerSat", map[string]string{
 			"tableId": fmt.Sprintf("%d", msg.TableID),
 			"seat":    fmt.Sprintf("%d", msg.Seat),
 			"player":  msg.Player,
 			"buyIn":   fmt.Sprintf("%d", msg.BuyIn),
+			"bond":    fmt.Sprintf("%d", bond),
 		})
 
 	case "poker/start_hand":
@@ -476,6 +487,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err := setActionDeadlineIfBetting(t, nowUnix); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
+		if t.Hand == nil {
+			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
+		}
 		return ev
 
 	case "poker/act":
@@ -524,6 +538,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 				{Key: "actionOn", Value: fmt.Sprintf("%d", h.ActionOn), Index: true},
 			},
 		})
+		if t.Hand == nil {
+			res.Events = append(res.Events, ejectBondlessSeats(a.st, t)...)
+		}
 		return res
 
 	case "poker/tick":
@@ -557,11 +574,27 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 			return &abci.ExecTxResult{Code: 1, Log: "action not timed out"}
 		}
 
+		handID := h.HandID
 		actorSeat := h.ActionOn
 		player := t.Seats[actorSeat].Player
 		action := "fold"
 		if toCall(h, actorSeat) == 0 {
 			action = "check"
+		}
+
+		// v0: slash a per-player bond on timeouts (if configured on the table).
+		slashAmt := uint64(0)
+		seatState := t.Seats[actorSeat]
+		if seatState != nil && seatState.Bond != 0 {
+			slashUnit := t.Params.BigBlind
+			if slashUnit == 0 {
+				slashUnit = 1
+			}
+			slashAmt = slashUnit
+			if slashAmt > seatState.Bond {
+				slashAmt = seatState.Bond
+			}
+			seatState.Bond -= slashAmt
 		}
 
 		res := applyAction(t, action, 0, nowUnix)
@@ -583,13 +616,79 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 				abci.EventAttribute{Key: "actionOn", Value: fmt.Sprintf("%d", t.Hand.ActionOn), Index: true},
 			)
 		}
-		res.Events = append([]abci.Event{
+
+		prefix := []abci.Event{
 			{
 				Type:       "TimeoutApplied",
 				Attributes: attrs,
 			},
-		}, res.Events...)
+		}
+		if slashAmt != 0 {
+			remaining := uint64(0)
+			if seatState != nil {
+				remaining = seatState.Bond
+			}
+			prefix = append(prefix, abci.Event{
+				Type: "PlayerSlashed",
+				Attributes: []abci.EventAttribute{
+					{Key: "tableId", Value: fmt.Sprintf("%d", msg.TableID), Index: true},
+					{Key: "handId", Value: fmt.Sprintf("%d", handID), Index: true},
+					{Key: "seat", Value: fmt.Sprintf("%d", actorSeat), Index: true},
+					{Key: "player", Value: player, Index: true},
+					{Key: "reason", Value: "action-timeout", Index: false},
+					{Key: "amount", Value: fmt.Sprintf("%d", slashAmt), Index: false},
+					{Key: "bondRemaining", Value: fmt.Sprintf("%d", remaining), Index: false},
+				},
+			})
+		}
+
+		res.Events = append(prefix, res.Events...)
+		if t.Hand == nil {
+			res.Events = append(res.Events, ejectBondlessSeats(a.st, t)...)
+		}
 		return res
+
+	case "poker/leave":
+		var msg codec.PokerLeaveTx
+		if err := json.Unmarshal(env.Value, &msg); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: "bad poker/leave value"}
+		}
+		if msg.Player == "" {
+			return &abci.ExecTxResult{Code: 1, Log: "missing player"}
+		}
+		if err := requireAccountAuth(a.st, env, msg.Player); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		t := a.st.Tables[msg.TableID]
+		if t == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "table not found"}
+		}
+		seat := seatOfPlayer(t, msg.Player)
+		if seat < 0 || seat >= 9 || t.Seats[seat] == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "player not seated at table"}
+		}
+		if t.Hand != nil && t.Hand.InHand[seat] {
+			return &abci.ExecTxResult{Code: 1, Log: "cannot leave during active hand"}
+		}
+		s := t.Seats[seat]
+		amount := s.Stack
+		if s.Bond != 0 {
+			if amount > ^uint64(0)-s.Bond {
+				return &abci.ExecTxResult{Code: 1, Log: "stack + bond overflows uint64"}
+			}
+			amount += s.Bond
+		}
+		a.st.Credit(msg.Player, amount)
+		t.Seats[seat] = nil
+
+		return okEvent("PlayerLeft", map[string]string{
+			"tableId": fmt.Sprintf("%d", msg.TableID),
+			"seat":    fmt.Sprintf("%d", seat),
+			"player":  msg.Player,
+			"stack":   fmt.Sprintf("%d", s.Stack),
+			"bond":    fmt.Sprintf("%d", s.Bond),
+			"amount":  fmt.Sprintf("%d", amount),
+		})
 
 	case "staking/register_validator":
 		var msg codec.StakingRegisterValidatorTx
@@ -833,6 +932,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
+		if t.Hand == nil {
+			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
+		}
 		return ev
 
 	case "dealer/timeout":
@@ -847,6 +949,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		ev, err := dealerTimeout(a.st, t, msg, nowUnix)
 		if err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		if t.Hand == nil {
+			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
 		}
 		return ev
 

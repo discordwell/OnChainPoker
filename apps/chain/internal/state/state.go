@@ -212,6 +212,7 @@ type Seat struct {
 	PK     []byte `json:"pk,omitempty"` // 32-byte ristretto point (base64 in JSON)
 
 	Stack uint64 `json:"stack"`
+	Bond  uint64 `json:"bond,omitempty"` // slashable bond escrowed at the table
 
 	// DealerStub (v0): public hole cards stored on-chain for now.
 	Hole [2]Card `json:"hole"`

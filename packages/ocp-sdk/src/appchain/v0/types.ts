@@ -62,6 +62,11 @@ export type PokerTickTx = {
   tableId: number;
 };
 
+export type PokerLeaveTx = {
+  player: string;
+  tableId: number;
+};
+
 // ---- Staking (v0) ----
 
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
@@ -209,6 +214,7 @@ export type SeatView = {
   player: string;
   pk?: string;
   stack: number;
+  bond?: number;
   hole: [number, number];
 };
 

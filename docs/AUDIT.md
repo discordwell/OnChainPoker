@@ -27,4 +27,8 @@ Out of scope:
 - Player action timeouts (`docs/SPEC.md` 5.5) are now wired in v0:
   - `poker/tick` applies deterministic default actions once `hand.actionDeadline` passes.
   - `actionTimeoutSecs` is enforced via `hand.actionDeadline` (unix seconds).
+- Player bonds are now partially enforced in v0 (anti-grief / devnet):
+  - `playerBond` is debited on `poker/sit` and stored as `seat.bond`.
+  - `poker/tick` slashes bond on timeouts and emits `PlayerSlashed`.
+  - Seats with depleted bond are ejected between hands (`PlayerEjected`) and remaining stack is returned to bank balance.
 - `bank/mint` is devnet-only and currently unauthenticated; MUST NOT exist in production builds.

@@ -97,6 +97,11 @@ type PokerTickTx struct {
 	TableID uint64 `json:"tableId"`
 }
 
+type PokerLeaveTx struct {
+	Player  string `json:"player"`
+	TableID uint64 `json:"tableId"`
+}
+
 // ---- Staking (v0) ----
 
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).

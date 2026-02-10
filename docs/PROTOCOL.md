@@ -69,6 +69,7 @@ The remainder of this section describes the *logical* txs. For the concrete v0 d
 - `PokerTable.Sit` -> `poker/sit`
 - `PokerTable.StartHand` -> `poker/start_hand`
 - `PokerTable.Act` -> `poker/act`
+- `PokerTable.Leave` -> `poker/leave`
 - `PokerTable.Tick` -> `poker/tick`
 
 And for devnet-only funding:
