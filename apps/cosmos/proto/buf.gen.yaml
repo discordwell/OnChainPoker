@@ -1,0 +1,13 @@
+version: v1
+plugins:
+  - name: gogo
+    path: /Users/discordwell/go/bin/protoc-gen-gogo
+    out: ..
+    opt:
+      - plugins=grpc
+      - Mgoogle/protobuf/any.proto=github.com/cosmos/gogoproto/types/any
+  - name: grpc-gateway
+    path: /Users/discordwell/go/bin/protoc-gen-grpc-gateway
+    out: ..
+    opt:
+      - logtostderr=true

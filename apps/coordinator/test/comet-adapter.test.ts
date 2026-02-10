@@ -45,3 +45,21 @@ test("CometChainAdapter: v0EventsToChainEvents maps ABCI events", () => {
   assert.deepEqual(out[0]!.data, { tableId: "7", handId: "42", actionOn: "3" });
 });
 
+test("CometChainAdapter: v0EventsToChainEvents decodes base64 event attrs when needed", () => {
+  const events = [
+    {
+      type: "HandStarted",
+      attributes: [
+        // "tableId" -> "dGFibGVJZA==", "7" -> "Nw=="
+        { key: "dGFibGVJZA==", value: "Nw==" },
+        // "handId" -> "aGFuZElk", "42" -> "NDI="
+        { key: "aGFuZElk", value: "NDI=" }
+      ]
+    }
+  ];
+  const out = v0EventsToChainEvents(events as any, { eventIndexStart: 1, timeMs: 123 });
+  assert.equal(out.length, 1);
+  assert.equal(out[0]!.tableId, "7");
+  assert.equal(out[0]!.handId, "42");
+  assert.deepEqual(out[0]!.data, { tableId: "7", handId: "42" });
+});

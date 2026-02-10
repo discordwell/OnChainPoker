@@ -8,7 +8,7 @@
     "dev": "tsx src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "test": "node --test --import tsx test/coordinator-outage.test.ts test/comet-adapter.test.ts"
+    "test": "node --test --import tsx test/coordinator-outage.test.ts test/comet-adapter.test.ts test/cosmos-adapter.test.ts"
   },
   "dependencies": {
     "cors": "^2.8.5",

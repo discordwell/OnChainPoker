@@ -1,0 +1,209 @@
+syntax = "proto3";
+
+package onchainpoker.dealer.v1;
+
+option go_package = "x/dealer/types";
+option (gogoproto.equal_all) = true;
+
+import "gogoproto/gogo.proto";
+import "cosmos/msg/v1/msg.proto";
+import "cosmos_proto/cosmos.proto";
+
+// Msg defines the x/dealer Msg service.
+service Msg {
+  option (cosmos.msg.v1.service) = true;
+
+  rpc BeginEpoch(MsgBeginEpoch) returns (MsgBeginEpochResponse);
+  rpc DkgCommit(MsgDkgCommit) returns (MsgDkgCommitResponse);
+  rpc DkgComplaintMissing(MsgDkgComplaintMissing) returns (MsgDkgComplaintMissingResponse);
+  rpc DkgComplaintInvalid(MsgDkgComplaintInvalid) returns (MsgDkgComplaintInvalidResponse);
+  rpc DkgShareReveal(MsgDkgShareReveal) returns (MsgDkgShareRevealResponse);
+  rpc FinalizeEpoch(MsgFinalizeEpoch) returns (MsgFinalizeEpochResponse);
+  rpc DkgTimeout(MsgDkgTimeout) returns (MsgDkgTimeoutResponse);
+
+  rpc InitHand(MsgInitHand) returns (MsgInitHandResponse);
+  rpc SubmitShuffle(MsgSubmitShuffle) returns (MsgSubmitShuffleResponse);
+  rpc FinalizeDeck(MsgFinalizeDeck) returns (MsgFinalizeDeckResponse);
+  rpc SubmitPubShare(MsgSubmitPubShare) returns (MsgSubmitPubShareResponse);
+  rpc SubmitEncShare(MsgSubmitEncShare) returns (MsgSubmitEncShareResponse);
+  rpc FinalizeReveal(MsgFinalizeReveal) returns (MsgFinalizeRevealResponse);
+  rpc Timeout(MsgTimeout) returns (MsgTimeoutResponse);
+}
+
+message MsgBeginEpoch {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // If epoch_id is 0, the chain allocates next epoch id deterministically.
+  uint64 epoch_id = 2;
+  uint32 committee_size = 3;
+  uint32 threshold = 4;
+
+  // Optional randomness input used for deterministic committee sampling (devnet).
+  bytes rand_epoch = 5;
+
+  // Optional DKG phase durations in blocks.
+  uint64 commit_blocks = 6;
+  uint64 complaint_blocks = 7;
+  uint64 reveal_blocks = 8;
+  uint64 finalize_blocks = 9;
+}
+
+message MsgBeginEpochResponse {}
+
+message MsgDkgCommit {
+  option (cosmos.msg.v1.signer) = "dealer";
+  option (gogoproto.goproto_getters) = false;
+
+  string dealer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  repeated bytes commitments = 3;
+}
+
+message MsgDkgCommitResponse {}
+
+message MsgDkgComplaintMissing {
+  option (cosmos.msg.v1.signer) = "complainer";
+  option (gogoproto.goproto_getters) = false;
+
+  string complainer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  string dealer = 3 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+}
+
+message MsgDkgComplaintMissingResponse {}
+
+message MsgDkgComplaintInvalid {
+  option (cosmos.msg.v1.signer) = "complainer";
+  option (gogoproto.goproto_getters) = false;
+
+  string complainer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  string dealer = 3 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  bytes share_msg = 4;
+}
+
+message MsgDkgComplaintInvalidResponse {}
+
+message MsgDkgShareReveal {
+  option (cosmos.msg.v1.signer) = "dealer";
+  option (gogoproto.goproto_getters) = false;
+
+  string dealer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  string to = 3 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  bytes share = 4;
+}
+
+message MsgDkgShareRevealResponse {}
+
+message MsgFinalizeEpoch {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 epoch_id = 2;
+}
+
+message MsgFinalizeEpochResponse {}
+
+message MsgDkgTimeout {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 epoch_id = 2;
+}
+
+message MsgDkgTimeoutResponse {}
+
+message MsgInitHand {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+  uint64 epoch_id = 4;
+  uint32 deck_size = 5; // default 52
+}
+
+message MsgInitHandResponse {}
+
+message MsgSubmitShuffle {
+  option (cosmos.msg.v1.signer) = "shuffler";
+  option (gogoproto.goproto_getters) = false;
+
+  string shuffler = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+  uint32 round = 4;
+  bytes proof_shuffle = 5;
+}
+
+message MsgSubmitShuffleResponse {}
+
+message MsgFinalizeDeck {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+}
+
+message MsgFinalizeDeckResponse {}
+
+message MsgSubmitPubShare {
+  option (cosmos.msg.v1.signer) = "validator";
+  option (gogoproto.goproto_getters) = false;
+
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+  uint32 pos = 4;
+  bytes pub_share = 5;
+  bytes proof_share = 6;
+}
+
+message MsgSubmitPubShareResponse {}
+
+message MsgSubmitEncShare {
+  option (cosmos.msg.v1.signer) = "validator";
+  option (gogoproto.goproto_getters) = false;
+
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+  uint32 pos = 4;
+  bytes pk_player = 5;
+  bytes enc_share = 6;
+  bytes proof_enc_share = 7;
+}
+
+message MsgSubmitEncShareResponse {}
+
+message MsgFinalizeReveal {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+  uint32 pos = 4;
+}
+
+message MsgFinalizeRevealResponse {}
+
+message MsgTimeout {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+  uint64 table_id = 2;
+  uint64 hand_id = 3;
+}
+
+message MsgTimeoutResponse {}

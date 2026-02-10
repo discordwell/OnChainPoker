@@ -1,0 +1,12 @@
+version: v1
+plugins:
+  - name: ts_proto
+    path: ../../../packages/ocp-sdk/node_modules/.bin/protoc-gen-ts_proto
+    out: ../../../packages/ocp-sdk/src/cosmos/gen
+    opt:
+      - esModuleInterop=true
+      - forceLong=string
+      - importSuffix=.js
+      - outputServices=none
+      - useOptionals=none
+

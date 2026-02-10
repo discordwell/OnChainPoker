@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package onchainpoker.poker.v1;
+
+option go_package = "x/poker/types";
+option (gogoproto.equal_all) = true;
+
+import "gogoproto/gogo.proto";
+import "cosmos/query/v1/query.proto";
+import "google/api/annotations.proto";
+
+import "onchainpoker/poker/v1/poker.proto";
+
+service Query {
+  rpc Table(QueryTableRequest) returns (QueryTableResponse) {
+    option (google.api.http).get = "/onchainpoker/poker/v1/tables/{table_id}";
+  }
+  rpc Tables(QueryTablesRequest) returns (QueryTablesResponse) {
+    option (google.api.http).get = "/onchainpoker/poker/v1/tables";
+  }
+}
+
+message QueryTableRequest {
+  uint64 table_id = 1;
+}
+
+message QueryTableResponse {
+  Table table = 1 [(gogoproto.nullable) = false];
+}
+
+message QueryTablesRequest {}
+
+message QueryTablesResponse {
+  repeated uint64 table_ids = 1;
+}

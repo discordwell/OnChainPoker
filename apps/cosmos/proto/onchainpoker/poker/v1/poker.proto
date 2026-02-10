@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package onchainpoker.poker.v1;
+
+option go_package = "x/poker/types";
+option (gogoproto.equal_all) = true;
+
+import "gogoproto/gogo.proto";
+
+// GenesisState defines the x/poker module genesis state.
+message GenesisState {
+  uint64 next_table_id = 1;
+  repeated Table tables = 2 [(gogoproto.nullable) = false];
+}
+
+message TableParams {
+  uint32 max_players = 1; // currently only 9 is supported
+  uint64 small_blind = 2;
+  uint64 big_blind = 3;
+  uint64 min_buy_in = 4;
+  uint64 max_buy_in = 5;
+
+  uint64 action_timeout_secs = 6;
+  uint64 dealer_timeout_secs = 7;
+  uint64 player_bond = 8;
+  uint32 rake_bps = 9;
+}
+
+message Seat {
+  string player = 1;
+  bytes pk = 2; // 32-byte ristretto point (player DKG key)
+
+  uint64 stack = 3;
+  uint64 bond = 4;
+
+  // Public hole cards (set during showdown reveal). Unknown cards are stored as 0.
+  repeated uint32 hole = 5;
+}
+
+enum HandPhase {
+  HAND_PHASE_UNSPECIFIED = 0;
+  HAND_PHASE_SHUFFLE = 1;
+  HAND_PHASE_BETTING = 2;
+  HAND_PHASE_AWAIT_FLOP = 3;
+  HAND_PHASE_AWAIT_TURN = 4;
+  HAND_PHASE_AWAIT_RIVER = 5;
+  HAND_PHASE_AWAIT_SHOWDOWN = 6;
+  HAND_PHASE_SHOWDOWN = 7;
+}
+
+enum Street {
+  STREET_UNSPECIFIED = 0;
+  STREET_PREFLOP = 1;
+  STREET_FLOP = 2;
+  STREET_TURN = 3;
+  STREET_RIVER = 4;
+}
+
+// DealerMeta is the minimal dealer state needed by the poker state machine.
+// Encrypted deck/shares are stored in x/dealer.
+message DealerMeta {
+  uint64 epoch_id = 1;
+  uint32 deck_size = 2;
+
+  bool deck_finalized = 3;
+
+  // Hole card deck positions for seats, length 18: [seat0_card0, seat0_card1, seat1_card0, ...].
+  // Value 255 means unset.
+  repeated uint32 hole_pos = 4;
+
+  // Cursor points to the next board card position in the dealer deck (after hole card assignment).
+  uint32 cursor = 5;
+
+  // RevealPos is the currently expected reveal position (255 means "not awaiting").
+  uint32 reveal_pos = 6;
+  int64 reveal_deadline = 7; // unix seconds
+}
+
+message Hand {
+  uint64 hand_id = 1;
+
+  HandPhase phase = 2;
+  Street street = 3;
+
+  int32 button_seat = 4;
+  int32 small_blind_seat = 5;
+  int32 big_blind_seat = 6;
+
+  // ActionOn is the seat index that must act next, or -1.
+  int32 action_on = 7;
+
+  uint64 bet_to = 8;
+  uint64 min_raise_size = 9;
+  uint64 interval_id = 10;
+
+  // Per-seat arrays. Each must have length 9.
+  repeated bool in_hand = 11;
+  repeated bool folded = 12;
+  repeated bool all_in = 13;
+  repeated uint64 street_commit = 14;
+  repeated uint64 total_commit = 15;
+  repeated int32 last_interval_acted = 16;
+
+  // Public board cards (card ids 0..51).
+  repeated uint32 board = 17;
+
+  // Poker action timeout.
+  int64 action_deadline = 18; // unix seconds
+
+  // Dealer integration.
+  DealerMeta dealer = 19 [(gogoproto.nullable) = true];
+}
+
+message Table {
+  uint64 id = 1;
+  string creator = 2;
+  string label = 3;
+  TableParams params = 4 [(gogoproto.nullable) = false];
+
+  // Fixed-size (9) seats. Empty seats have an empty `player` string.
+  repeated Seat seats = 5 [(gogoproto.nullable) = true];
+
+  uint64 next_hand_id = 6;
+  int32 button_seat = 7;
+  Hand hand = 8 [(gogoproto.nullable) = true];
+}

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package onchainpoker.poker.module.v1;
+
+option go_package = "x/poker/module/v1;modulev1";
+
+import "cosmos/app/v1alpha1/module.proto";
+import "gogoproto/gogo.proto";
+
+option (gogoproto.equal_all) = true;
+
+// Module is the appmodule config object for x/poker.
+//
+// It is intentionally empty for now; add fields as module-level params/wiring needs grow.
+message Module {
+  option (cosmos.app.v1alpha1.module) = {
+    go_import: "onchainpoker/apps/cosmos/x/poker"
+  };
+}

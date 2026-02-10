@@ -1,0 +1,136 @@
+syntax = "proto3";
+
+package onchainpoker.dealer.v1;
+
+option go_package = "x/dealer/types";
+option (gogoproto.equal_all) = true;
+
+import "gogoproto/gogo.proto";
+
+message GenesisState {
+  uint64 next_epoch_id = 1;
+  DealerEpoch epoch = 2 [(gogoproto.nullable) = true];
+  DealerDKG dkg = 3 [(gogoproto.nullable) = true];
+}
+
+message DealerMember {
+  // Validator operator address (valoper).
+  string validator = 1;
+
+  // Shamir x-coordinate (non-zero).
+  uint32 index = 2;
+
+  // 32-byte ristretto point (Y_i), set at epoch finalize.
+  bytes pub_share = 3;
+
+  // 32-byte ed25519 consensus pubkey snapshot (for DKG share-msg signatures).
+  bytes cons_pubkey = 4;
+
+  // Consensus power at committee selection time (used for slashing distribution height/power).
+  int64 power = 5;
+}
+
+message DealerEpoch {
+  uint64 epoch_id = 1;
+  uint32 threshold = 2;
+
+  // 32-byte ristretto point.
+  bytes pk_epoch = 3;
+
+  // sha256 (v0 placeholder) over the accepted transcript view.
+  bytes transcript_root = 4;
+
+  // Distribution/obligation height captured at committee selection time (typically the DKG start height).
+  // Used for slashing so validators cannot evade by unbonding immediately after being selected.
+  int64 start_height = 7;
+
+  // Canonical ordering: lexicographically ascending by validator.
+  repeated string slashed = 5;
+
+  repeated DealerMember members = 6 [(gogoproto.nullable) = false];
+}
+
+message DealerDKGCommit {
+  string dealer = 1;
+  repeated bytes commitments = 2;
+}
+
+message DealerDKGComplaint {
+  uint64 epoch_id = 1;
+  string complainer = 2;
+  string dealer = 3;
+  string kind = 4; // "missing" | "invalid"
+  bytes share_msg = 5;
+}
+
+message DealerDKGShareReveal {
+  uint64 epoch_id = 1;
+  string dealer = 2;
+  string to = 3;
+  bytes share = 4;
+}
+
+message DealerDKG {
+  uint64 epoch_id = 1;
+  uint32 threshold = 2;
+
+  repeated DealerMember members = 3 [(gogoproto.nullable) = false];
+
+  int64 start_height = 4;
+  int64 commit_deadline = 5;
+  int64 complaint_deadline = 6;
+  int64 reveal_deadline = 7;
+  int64 finalize_deadline = 8;
+
+  bytes rand_epoch = 9;
+
+  repeated DealerDKGCommit commits = 10 [(gogoproto.nullable) = false];
+  repeated DealerDKGComplaint complaints = 11 [(gogoproto.nullable) = false];
+  repeated DealerDKGShareReveal reveals = 12 [(gogoproto.nullable) = false];
+  repeated string slashed = 13;
+}
+
+message DealerCiphertext {
+  bytes c1 = 1;
+  bytes c2 = 2;
+}
+
+message DealerPubShare {
+  uint32 pos = 1;
+  string validator = 2;
+  uint32 index = 3;
+  bytes share = 4;
+  bytes proof = 5;
+}
+
+message DealerEncShare {
+  uint32 pos = 1;
+  string validator = 2;
+  uint32 index = 3;
+  bytes pk_player = 4;
+  bytes enc_share = 5; // 64 bytes u||v
+  bytes proof = 6;     // 160 bytes
+}
+
+message DealerReveal {
+  uint32 pos = 1;
+  uint32 card_id = 2; // 0..51
+}
+
+message DealerHand {
+  uint64 epoch_id = 1;
+  bytes pk_hand = 2;
+  uint32 deck_size = 3;
+
+  repeated DealerCiphertext deck = 4 [(gogoproto.nullable) = false];
+
+  uint32 shuffle_step = 5;
+  bool finalized = 6;
+
+  int64 shuffle_deadline = 7;     // unix seconds
+  int64 hole_shares_deadline = 8; // unix seconds
+
+  repeated DealerPubShare pub_shares = 9 [(gogoproto.nullable) = false];
+  repeated DealerEncShare enc_shares = 10 [(gogoproto.nullable) = false];
+  repeated DealerReveal reveals = 11 [(gogoproto.nullable) = false];
+}

@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "bash apps/chain/scripts/localnet.sh",
     "localnet": "bash apps/chain/scripts/localnet.sh",
+    "cosmos:localnet": "bash apps/cosmos/scripts/localnet.sh",
+    "cosmos:multinet": "bash apps/cosmos/scripts/multinet.sh",
+    "cosmos:faucet": "bash apps/cosmos/scripts/faucet.sh",
     "test:unit": "pnpm -C packages/poker-engine test && pnpm -C packages/holdem-eval test && pnpm -C packages/ocp-crypto test && pnpm -C packages/dkg test && pnpm -C packages/ocp-shuffle test && pnpm -C packages/ocp-sdk test && pnpm -C apps/sim test && pnpm -C apps/coordinator test && pnpm chain:test",
     "test": "pnpm test:unit",
     "chain:test": "cd apps/chain && go test ./...",
@@ -18,6 +21,7 @@
     "ws5:bench": "pnpm -C packages/ocp-shuffle bench",
     "ws7:play_hand": "pnpm sdk:build && node scripts/play_hand.mjs",
     "ws7:play_hand_dealer": "pnpm -C packages/ocp-crypto build && pnpm -C packages/ocp-shuffle build && pnpm sdk:build && node scripts/play_hand_dealer.mjs",
+    "ws7:play_hand_cosmos": "pnpm -C packages/ocp-crypto build && pnpm sdk:build && node scripts/play_hand_cosmos.mjs",
     "ws9:test": "pnpm -C apps/sim test",
     "ws9:sim": "pnpm -C apps/sim sim",
     "coordinator:dev": "node scripts/coordinator.mjs dev",

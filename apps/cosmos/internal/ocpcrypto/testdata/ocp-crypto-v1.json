@@ -1,0 +1,38 @@
+{
+  "suite": "ocp-crypto-v1/ristretto255-sha512",
+  "hashToScalar": [
+    {
+      "domain": "ocp/v1/test/hashToScalar",
+      "messagesHex": [
+        "0x00010203",
+        "0x090909"
+      ],
+      "scalarHexLE": "0xfede755aa630ab7c215304f5cbd4b3e81a1929d6c662c0006f594a8e9bdaae0e"
+    },
+    {
+      "domain": "ocp/v1/test/hashToScalar",
+      "messagesHex": [
+        "0x68656c6c6f00"
+      ],
+      "scalarHexLE": "0x126c69b53bfe2e2eb2fd6d777cc8a1af9c564eb1df1c1696e197a24dd2da2c0e"
+    }
+  ],
+  "elgamal": [
+    {
+      "skHexLE": "0x15cd5b0700000000000000000000000000000000000000000000000000000000",
+      "pkHex": "0x2c96eb89bbb2e9892e8e8a23e866c27a97df00bd7de2ad92cb61a78442b0a92e",
+      "messageHex": "0x0a2eed1b898602b77f3014a936fc6182de5b0854d171ca63a52b6db1d9d33254",
+      "rHexLE": "0xb168de3a00000000000000000000000000000000000000000000000000000000",
+      "c1Hex": "0x887cea99116e3c8d880902a14124602ba104610821c91ee30dab9da60354eb20",
+      "c2Hex": "0xa4c3c58ba7b0ccedee90cf181efbc127b742501cd6deb13f4c7c38bb1bef9d35"
+    }
+  ],
+  "chaumPedersen": [
+    {
+      "yHex": "0x2c96eb89bbb2e9892e8e8a23e866c27a97df00bd7de2ad92cb61a78442b0a92e",
+      "c1Hex": "0x887cea99116e3c8d880902a14124602ba104610821c91ee30dab9da60354eb20",
+      "dHex": "0xdc4d74ea4308cf7776e2192e40148980fc743ff2c221fb0a6c005516205fef3d",
+      "proofHex": "0x92aa2797e966a444a5c29fa69fc4929d8e12cadf30e4f53c0619d0d4548ef2413cf239eebb1b5d4e753a8853f26eb3c0009d476be2fa4af65c4299eba141fe69649641d74213d431de5db045ec833fdc414b572f06e5f6fc4dcaa5f471466b0a"
+    }
+  ]
+}

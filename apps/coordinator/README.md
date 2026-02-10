@@ -45,3 +45,19 @@ To run against the local appchain (`apps/chain` localnet):
 ```bash
 COORDINATOR_CHAIN_ADAPTER=comet COORDINATOR_COMET_RPC_URL=http://127.0.0.1:26657 pnpm coordinator:dev
 ```
+
+To run against the Cosmos SDK chain (requires RPC + LCD/API enabled):
+
+```bash
+COORDINATOR_CHAIN_ADAPTER=cosmos \\
+  COORDINATOR_COSMOS_RPC_URL=http://127.0.0.1:26657 \\
+  COORDINATOR_COSMOS_LCD_URL=http://127.0.0.1:1317 \\
+  pnpm coordinator:dev
+```
+
+Notes:
+
+- Cosmos mode expects `x/poker` to expose grpc-gateway routes:
+  - `GET /onchainpoker/poker/v1/tables`
+  - `GET /onchainpoker/poker/v1/tables/{table_id}`
+- Events should include `tableId` (and optionally `handId`) attributes for routing.

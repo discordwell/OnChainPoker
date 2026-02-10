@@ -54,3 +54,8 @@ venv/
 # OCP chain localnet (WS6)
 apps/chain/.ocp*/
 apps/chain/bin/
+
+# OCP Cosmos localnet (Option C)
+apps/cosmos/.ocp*/
+apps/cosmos/bin/
+apps/cosmos/ocpd

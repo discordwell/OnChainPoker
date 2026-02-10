@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./config.js";
 import { CometChainAdapter } from "./chain/comet.js";
+import { CosmosChainAdapter } from "./chain/cosmos.js";
 import { MockChainAdapter } from "./chain/mock.js";
 import type { ChainAdapter } from "./chain/adapter.js";
 import { CoordinatorStore } from "./store.js";
@@ -23,6 +24,13 @@ switch (chainKind) {
     const rpcUrl = (process.env.COORDINATOR_COMET_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
     const wsUrlRaw = (process.env.COORDINATOR_COMET_WS_URL ?? "").trim();
     chain = new CometChainAdapter({ rpcUrl, wsUrl: wsUrlRaw || undefined });
+    break;
+  }
+  case "cosmos": {
+    const rpcUrl = (process.env.COORDINATOR_COSMOS_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
+    const lcdUrl = (process.env.COORDINATOR_COSMOS_LCD_URL ?? "").trim() || "http://127.0.0.1:1317";
+    const wsUrlRaw = (process.env.COORDINATOR_COSMOS_WS_URL ?? "").trim();
+    chain = new CosmosChainAdapter({ rpcUrl, lcdUrl, wsUrl: wsUrlRaw || undefined });
     break;
   }
   default:

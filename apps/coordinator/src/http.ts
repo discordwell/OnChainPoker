@@ -142,7 +142,9 @@ export function createHttpApp(opts: {
   // ---- Appchain v0 helpers (CometBFT + ABCI scaffold) ----
 
   app.get("/v1/appchain/v0/tables/:tableId", async (req, res) => {
-    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support v0 table queries" });
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support v0 table queries" });
+    }
 
     const tableId = String(req.params.tableId ?? "").trim();
     if (!tableId) return res.status(400).json({ error: "tableId required" });
@@ -153,14 +155,18 @@ export function createHttpApp(opts: {
   });
 
   app.get("/v1/appchain/v0/dealer/epoch", async (_req, res) => {
-    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support dealer epoch queries" });
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support dealer epoch queries" });
+    }
     const epoch = await chain.queryJson<V0DealerEpoch>("/dealer/epoch").catch(() => null);
     if (!epoch) return res.status(404).json({ error: "no active epoch" });
     return res.json({ epoch });
   });
 
   app.get("/v1/appchain/v0/tables/:tableId/dealer/next", async (req, res) => {
-    if (!chain.queryJson) return res.status(400).json({ error: "chain adapter does not support v0 dealer queries" });
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support v0 dealer queries" });
+    }
 
     const tableId = String(req.params.tableId ?? "").trim();
     if (!tableId) return res.status(400).json({ error: "tableId required" });

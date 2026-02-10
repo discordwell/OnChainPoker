@@ -14,6 +14,7 @@ New work should target the appchain runtime + protocol (`apps/chain`, `docs/SPEC
 ## Repo Layout
 
 - `apps/chain`: v0 appchain scaffold (Go, CometBFT + ABCI)
+- `apps/cosmos`: Cosmos SDK chain scaffold (Go, ocpd)
 - `apps/coordinator`: optional untrusted coordinator (UX only)
 - `apps/sim`: deterministic simulator + byzantine scenarios
 - `packages/poker-engine`: deterministic 9-max NLH state machine (timeouts, side pots, etc)
@@ -57,6 +58,23 @@ Optional (insecure): if you started the chain with `OCP_UNSAFE_ALLOW_DEALER_STUB
 ```bash
 pnpm ws7:play_hand
 ```
+
+## Run Cosmos Localnet + Scripted Poker Txs
+
+Terminal 1:
+
+```bash
+pnpm cosmos:localnet
+```
+
+Terminal 2:
+
+```bash
+pnpm ws7:play_hand_cosmos
+```
+
+This submits poker module txs via CosmJS + protobuf signing and queries state via LCD.
+Note: progressing past `HAND_PHASE_SHUFFLE` requires validator-signed `x/dealer` messages (committee/dealer pipeline).
 
 ## Tests
 

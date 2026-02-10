@@ -34,11 +34,41 @@ function extractTxResult(msg: CometWsMsg): any | null {
   return null;
 }
 
+function maybeBase64ToUtf8(s: string): string {
+  // Cosmos/Tendermint RPC stacks sometimes return ABCI event keys/values base64-encoded.
+  // Decode only when the string is a strict base64 round-trip and the decoded bytes are valid UTF-8.
+  const norm = String(s ?? "");
+  if (norm === "") return "";
+
+  // Fast path: reject obviously non-base64.
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(norm)) return norm;
+
+  // Normalize padding for comparison.
+  const padded = norm.length % 4 === 0 ? norm : norm + "=".repeat(4 - (norm.length % 4));
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(padded, "base64");
+  } catch {
+    return norm;
+  }
+
+  // Ensure strict round-trip.
+  const round = buf.toString("base64");
+  const stripPad = (x: string) => x.replace(/=+$/, "");
+  if (stripPad(round) !== stripPad(padded)) return norm;
+
+  const decoded = buf.toString("utf8");
+  if (decoded.includes("\uFFFD")) return norm;
+  return decoded;
+}
+
 function attrsToObject(attrs: CometTxEventAttr[] | undefined): Record<string, string> {
   const out: Record<string, string> = {};
   for (const a of attrs ?? []) {
     if (!a || typeof a.key !== "string") continue;
-    out[a.key] = String(a.value ?? "");
+    const k = maybeBase64ToUtf8(a.key);
+    const v = maybeBase64ToUtf8(String(a.value ?? ""));
+    out[k] = v;
   }
   return out;
 }
