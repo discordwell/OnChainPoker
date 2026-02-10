@@ -16,4 +16,8 @@ message Module {
   option (cosmos.app.v1alpha1.module) = {
     go_import: "onchainpoker/apps/cosmos/x/dealer"
   };
+
+  // Authority defines the custom module authority. If not set, the governance
+  // module account (x/gov) is used by default.
+  string authority = 1;
 }

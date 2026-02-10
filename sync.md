@@ -115,6 +115,11 @@ Code:
 - `apps/cosmos/x/dealer/keeper/penalty.go`
 - `apps/cosmos/x/dealer/keeper/penalty_test.go`
 
+New (2026-02-10): dealer penalty economics are now on-chain params:
+- `Query/Params`: `GET /onchainpoker/dealer/v1/params`
+- `MsgUpdateParams`: authority-controlled param updates (defaults to `x/gov` module account)
+- Defaults match previous constants: `slash_bps_dkg=5000`, `slash_bps_hand_dealer=1000`, `jail_seconds_dkg=86400`, `jail_seconds_hand_dealer=3600`
+
 How to use (when `x/dealer` finalizes a fault):
 1. Persist each member's `distributionHeight` (e.g. epoch start height) and their `powerAtDistributionHeight` at committee selection time.
 2. Call `keeper.SlashAndJailValidator(ctx, k.stakingKeeper, k.slashingKeeper, valAddr, distributionHeight, powerAtDistributionHeight, slashFraction, jailDuration)`.
@@ -142,6 +147,6 @@ Coordinator Cosmos adapter expectations:
 - Poker module should expose grpc-gateway query routes:
   - `GET /onchainpoker/poker/v1/tables`
   - `GET /onchainpoker/poker/v1/tables/{table_id}`
-  - Note: missing tables currently return HTTP 500 with an SDK error code (not a 404); clients should handle this or `x/poker` can be updated to return gRPC `NotFound` for better HTTP mapping.
+  - Note: `x/poker` errors are registered with gRPC codes (NotFound/InvalidArgument), so grpc-gateway should map missing tables to HTTP 404 (and invalid requests to 400).
 - `QueryTableResponse.table.seats` is always length 9; empty seats have an empty/missing `player` field (not `null`).
 - Events should include `tableId` (and optionally `handId`) attributes for routing; adapter decodes base64-encoded attrs when needed.

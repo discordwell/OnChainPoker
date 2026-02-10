@@ -14,6 +14,7 @@ import (
 func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	// Amino message names must be <40 chars (ledger nano signing constraint).
 	// Keep these short and stable.
+	legacy.RegisterAminoMsg(cdc, &MsgUpdateParams{}, "ocp/dealer/UpdateParams")
 	legacy.RegisterAminoMsg(cdc, &MsgBeginEpoch{}, "ocp/dealer/BeginEpoch")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgCommit{}, "ocp/dealer/DkgCommit")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgComplaintMissing{}, "ocp/dealer/DkgComplaintMissing")
@@ -34,6 +35,7 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 // RegisterInterfaces registers the x/dealer module's interface implementations.
 func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*sdk.Msg)(nil),
+		&MsgUpdateParams{},
 		&MsgBeginEpoch{},
 		&MsgDkgCommit{},
 		&MsgDkgComplaintMissing{},

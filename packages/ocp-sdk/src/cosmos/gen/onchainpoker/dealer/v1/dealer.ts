@@ -13,6 +13,24 @@ export interface GenesisState {
   nextEpochId: string;
   epoch: DealerEpoch | undefined;
   dkg: DealerDKG | undefined;
+  params: Params | undefined;
+}
+
+/**
+ * Params defines the x/dealer module parameters.
+ *
+ * NOTE: Dealer faults are intended to map to real PoS stake risk:
+ * slashing and (optional) jailing of the underlying validator.
+ */
+export interface Params {
+  /** Slash fraction (in basis points, 1 bps = 0.01%) for objective DKG faults. */
+  slashBpsDkg: number;
+  /** Slash fraction (in basis points, 1 bps = 0.01%) for objective per-hand dealer faults. */
+  slashBpsHandDealer: number;
+  /** Jail duration (in seconds) for objective DKG faults. */
+  jailSecondsDkg: string;
+  /** Jail duration (in seconds) for objective per-hand dealer faults. */
+  jailSecondsHandDealer: string;
 }
 
 export interface DealerMember {
@@ -129,7 +147,7 @@ export interface DealerHand {
 }
 
 function createBaseGenesisState(): GenesisState {
-  return { nextEpochId: "0", epoch: undefined, dkg: undefined };
+  return { nextEpochId: "0", epoch: undefined, dkg: undefined, params: undefined };
 }
 
 export const GenesisState: MessageFns<GenesisState> = {
@@ -142,6 +160,9 @@ export const GenesisState: MessageFns<GenesisState> = {
     }
     if (message.dkg !== undefined) {
       DealerDKG.encode(message.dkg, writer.uint32(26).fork()).join();
+    }
+    if (message.params !== undefined) {
+      Params.encode(message.params, writer.uint32(34).fork()).join();
     }
     return writer;
   },
@@ -177,6 +198,14 @@ export const GenesisState: MessageFns<GenesisState> = {
           message.dkg = DealerDKG.decode(reader, reader.uint32());
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.params = Params.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -195,6 +224,7 @@ export const GenesisState: MessageFns<GenesisState> = {
         : "0",
       epoch: isSet(object.epoch) ? DealerEpoch.fromJSON(object.epoch) : undefined,
       dkg: isSet(object.dkg) ? DealerDKG.fromJSON(object.dkg) : undefined,
+      params: isSet(object.params) ? Params.fromJSON(object.params) : undefined,
     };
   },
 
@@ -209,6 +239,9 @@ export const GenesisState: MessageFns<GenesisState> = {
     if (message.dkg !== undefined) {
       obj.dkg = DealerDKG.toJSON(message.dkg);
     }
+    if (message.params !== undefined) {
+      obj.params = Params.toJSON(message.params);
+    }
     return obj;
   },
 
@@ -222,6 +255,133 @@ export const GenesisState: MessageFns<GenesisState> = {
       ? DealerEpoch.fromPartial(object.epoch)
       : undefined;
     message.dkg = (object.dkg !== undefined && object.dkg !== null) ? DealerDKG.fromPartial(object.dkg) : undefined;
+    message.params = (object.params !== undefined && object.params !== null)
+      ? Params.fromPartial(object.params)
+      : undefined;
+    return message;
+  },
+};
+
+function createBaseParams(): Params {
+  return { slashBpsDkg: 0, slashBpsHandDealer: 0, jailSecondsDkg: "0", jailSecondsHandDealer: "0" };
+}
+
+export const Params: MessageFns<Params> = {
+  encode(message: Params, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.slashBpsDkg !== 0) {
+      writer.uint32(8).uint32(message.slashBpsDkg);
+    }
+    if (message.slashBpsHandDealer !== 0) {
+      writer.uint32(16).uint32(message.slashBpsHandDealer);
+    }
+    if (message.jailSecondsDkg !== "0") {
+      writer.uint32(24).uint64(message.jailSecondsDkg);
+    }
+    if (message.jailSecondsHandDealer !== "0") {
+      writer.uint32(32).uint64(message.jailSecondsHandDealer);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): Params {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseParams();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.slashBpsDkg = reader.uint32();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.slashBpsHandDealer = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.jailSecondsDkg = reader.uint64().toString();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.jailSecondsHandDealer = reader.uint64().toString();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): Params {
+    return {
+      slashBpsDkg: isSet(object.slashBpsDkg)
+        ? globalThis.Number(object.slashBpsDkg)
+        : isSet(object.slash_bps_dkg)
+        ? globalThis.Number(object.slash_bps_dkg)
+        : 0,
+      slashBpsHandDealer: isSet(object.slashBpsHandDealer)
+        ? globalThis.Number(object.slashBpsHandDealer)
+        : isSet(object.slash_bps_hand_dealer)
+        ? globalThis.Number(object.slash_bps_hand_dealer)
+        : 0,
+      jailSecondsDkg: isSet(object.jailSecondsDkg)
+        ? globalThis.String(object.jailSecondsDkg)
+        : isSet(object.jail_seconds_dkg)
+        ? globalThis.String(object.jail_seconds_dkg)
+        : "0",
+      jailSecondsHandDealer: isSet(object.jailSecondsHandDealer)
+        ? globalThis.String(object.jailSecondsHandDealer)
+        : isSet(object.jail_seconds_hand_dealer)
+        ? globalThis.String(object.jail_seconds_hand_dealer)
+        : "0",
+    };
+  },
+
+  toJSON(message: Params): unknown {
+    const obj: any = {};
+    if (message.slashBpsDkg !== 0) {
+      obj.slashBpsDkg = Math.round(message.slashBpsDkg);
+    }
+    if (message.slashBpsHandDealer !== 0) {
+      obj.slashBpsHandDealer = Math.round(message.slashBpsHandDealer);
+    }
+    if (message.jailSecondsDkg !== "0") {
+      obj.jailSecondsDkg = message.jailSecondsDkg;
+    }
+    if (message.jailSecondsHandDealer !== "0") {
+      obj.jailSecondsHandDealer = message.jailSecondsHandDealer;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<Params>, I>>(base?: I): Params {
+    return Params.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<Params>, I>>(object: I): Params {
+    const message = createBaseParams();
+    message.slashBpsDkg = object.slashBpsDkg ?? 0;
+    message.slashBpsHandDealer = object.slashBpsHandDealer ?? 0;
+    message.jailSecondsDkg = object.jailSecondsDkg ?? "0";
+    message.jailSecondsHandDealer = object.jailSecondsHandDealer ?? "0";
     return message;
   },
 };

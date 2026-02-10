@@ -25,6 +25,25 @@ func NewMsgServerImpl(k Keeper) dealertypes.MsgServer {
 	return &msgServer{Keeper: k}
 }
 
+func (m msgServer) UpdateParams(ctx context.Context, req *dealertypes.MsgUpdateParams) (*dealertypes.MsgUpdateParamsResponse, error) {
+	if req == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Authority == "" {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("missing authority")
+	}
+	if _, err := sdk.AccAddressFromBech32(req.Authority); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid authority address")
+	}
+	if req.Authority != m.Authority() {
+		return nil, dealertypes.ErrUnauthorized.Wrapf("expected %s got %s", m.Authority(), req.Authority)
+	}
+	if err := m.SetParams(ctx, req.Params); err != nil {
+		return nil, err
+	}
+	return &dealertypes.MsgUpdateParamsResponse{}, nil
+}
+
 func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoch) (*dealertypes.MsgBeginEpochResponse, error) {
 	if req == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
@@ -364,8 +383,15 @@ func (m msgServer) DkgComplaintInvalid(ctx context.Context, req *dealertypes.Msg
 	}
 
 	if slashedNow {
+		params, err := m.GetParams(ctx)
+		if err != nil {
+			return nil, err
+		}
+		slashFraction := bpsToDec(params.SlashBpsDkg)
+		jailDuration := time.Duration(params.JailSecondsDkg) * time.Second
+
 		// Apply penalty using the DKG start height + power snapshot.
-		if err := m.applyPenalty(ctx, req.Dealer, dkg.StartHeight, dealerMem.Power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+		if err := m.applyPenalty(ctx, req.Dealer, dkg.StartHeight, dealerMem.Power, slashFraction, jailDuration); err != nil {
 			return nil, err
 		}
 		sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
@@ -373,7 +399,7 @@ func (m msgServer) DkgComplaintInvalid(ctx context.Context, req *dealertypes.Msg
 			sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 			sdk.NewAttribute("validator", req.Dealer),
 			sdk.NewAttribute("reason", "dkg-invalid-share"),
-			sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+			sdk.NewAttribute("slashFraction", slashFraction.String()),
 			sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 			sdk.NewAttribute("power", fmt.Sprintf("%d", dealerMem.Power)),
 		))
@@ -554,6 +580,13 @@ func (m msgServer) DkgTimeout(ctx context.Context, req *dealertypes.MsgDkgTimeou
 		),
 	}
 
+	params, err := m.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slashFraction := bpsToDec(params.SlashBpsDkg)
+	jailDuration := time.Duration(params.JailSecondsDkg) * time.Second
+
 	// Slash missing commits once the commit deadline passes.
 	for _, mem := range dkg.Members {
 		if findDKGCommit(dkg, mem.Validator) != nil {
@@ -566,7 +599,7 @@ func (m msgServer) DkgTimeout(ctx context.Context, req *dealertypes.MsgDkgTimeou
 			continue
 		}
 
-		if err := m.applyPenalty(ctx, mem.Validator, dkg.StartHeight, mem.Power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+		if err := m.applyPenalty(ctx, mem.Validator, dkg.StartHeight, mem.Power, slashFraction, jailDuration); err != nil {
 			return nil, err
 		}
 		events = append(events, sdk.NewEvent(
@@ -574,7 +607,7 @@ func (m msgServer) DkgTimeout(ctx context.Context, req *dealertypes.MsgDkgTimeou
 			sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 			sdk.NewAttribute("validator", mem.Validator),
 			sdk.NewAttribute("reason", "dkg-commit-timeout"),
-			sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+			sdk.NewAttribute("slashFraction", slashFraction.String()),
 			sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 			sdk.NewAttribute("power", fmt.Sprintf("%d", mem.Power)),
 		))

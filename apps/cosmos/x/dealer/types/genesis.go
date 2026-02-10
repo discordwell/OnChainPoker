@@ -7,12 +7,16 @@ func DefaultGenesisState() *GenesisState {
 		NextEpochId: 1,
 		Epoch:       nil,
 		Dkg:         nil,
+		Params:      DefaultParams(),
 	}
 }
 
 func ValidateGenesis(gs *GenesisState) error {
 	if gs == nil {
 		return fmt.Errorf("genesis state is nil")
+	}
+	if err := gs.Params.Validate(); err != nil {
+		return fmt.Errorf("invalid params: %w", err)
 	}
 	if gs.NextEpochId == 0 {
 		return fmt.Errorf("next_epoch_id must be > 0")

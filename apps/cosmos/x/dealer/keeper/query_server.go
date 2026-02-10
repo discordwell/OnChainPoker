@@ -16,6 +16,14 @@ func NewQueryServerImpl(k Keeper) dealertypes.QueryServer {
 	return &queryServer{Keeper: k}
 }
 
+func (q queryServer) Params(ctx context.Context, _ *dealertypes.QueryParamsRequest) (*dealertypes.QueryParamsResponse, error) {
+	p, err := q.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return &dealertypes.QueryParamsResponse{Params: p}, nil
+}
+
 func (q queryServer) Epoch(ctx context.Context, _ *dealertypes.QueryEpochRequest) (*dealertypes.QueryEpochResponse, error) {
 	epoch, err := q.GetEpoch(ctx)
 	if err != nil {

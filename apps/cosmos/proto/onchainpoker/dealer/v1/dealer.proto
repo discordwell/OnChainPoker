@@ -11,6 +11,25 @@ message GenesisState {
   uint64 next_epoch_id = 1;
   DealerEpoch epoch = 2 [(gogoproto.nullable) = true];
   DealerDKG dkg = 3 [(gogoproto.nullable) = true];
+  Params params = 4 [(gogoproto.nullable) = false];
+}
+
+// Params defines the x/dealer module parameters.
+//
+// NOTE: Dealer faults are intended to map to real PoS stake risk:
+// slashing and (optional) jailing of the underlying validator.
+message Params {
+  // Slash fraction (in basis points, 1 bps = 0.01%) for objective DKG faults.
+  uint32 slash_bps_dkg = 1;
+
+  // Slash fraction (in basis points, 1 bps = 0.01%) for objective per-hand dealer faults.
+  uint32 slash_bps_hand_dealer = 2;
+
+  // Jail duration (in seconds) for objective DKG faults.
+  uint64 jail_seconds_dkg = 3;
+
+  // Jail duration (in seconds) for objective per-hand dealer faults.
+  uint64 jail_seconds_hand_dealer = 4;
 }
 
 message DealerMember {

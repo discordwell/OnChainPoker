@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
-	"time"
 
 	sdkmath "cosmossdk.io/math"
 
@@ -37,16 +36,6 @@ const (
 	dkgComplaintBlocksDefault uint64 = 5
 	dkgRevealBlocksDefault    uint64 = 5
 	dkgFinalizeBlocksDefault  uint64 = 5
-)
-
-const (
-	// Placeholder economics matching the legacy v0 chain.
-	slashBpsDKG        uint32 = 5000 // 50%
-	slashBpsHandDealer uint32 = 1000 // 10%
-
-	// Jail durations are placeholders; tune via governance / params later.
-	jailDurationDKG        = 24 * time.Hour
-	jailDurationHandDealer = 1 * time.Hour
 )
 
 func bpsToDec(bps uint32) sdkmath.LegacyDec {

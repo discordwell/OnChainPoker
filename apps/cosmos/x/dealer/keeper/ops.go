@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
@@ -24,6 +25,13 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 
 	events := []sdk.Event{}
 
+	params, err := m.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slashFraction := bpsToDec(params.SlashBpsDkg)
+	jailDuration := time.Duration(params.JailSecondsDkg) * time.Second
+
 	// Slash for missing commits.
 	for _, mem := range dkg.Members {
 		if findDKGCommit(dkg, mem.Validator) != nil {
@@ -32,7 +40,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 		if !dkgSlash(dkg, mem.Validator) {
 			continue
 		}
-		if err := m.applyPenalty(ctx, mem.Validator, dkg.StartHeight, mem.Power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+		if err := m.applyPenalty(ctx, mem.Validator, dkg.StartHeight, mem.Power, slashFraction, jailDuration); err != nil {
 			return nil, err
 		}
 		events = append(events, sdk.NewEvent(
@@ -40,7 +48,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 			sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 			sdk.NewAttribute("validator", mem.Validator),
 			sdk.NewAttribute("reason", "dkg-missing-commit"),
-			sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+			sdk.NewAttribute("slashFraction", slashFraction.String()),
 			sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 			sdk.NewAttribute("power", fmt.Sprintf("%d", mem.Power)),
 		))
@@ -59,7 +67,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 				if dealerMem != nil {
 					power = dealerMem.Power
 				}
-				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, slashFraction, jailDuration); err != nil {
 					return nil, err
 				}
 				events = append(events, sdk.NewEvent(
@@ -67,7 +75,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 					sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 					sdk.NewAttribute("validator", c.Dealer),
 					sdk.NewAttribute("reason", "dkg-missing-commit"),
-					sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+					sdk.NewAttribute("slashFraction", slashFraction.String()),
 					sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 					sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 				))
@@ -83,7 +91,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 				if dealerMem != nil {
 					power = dealerMem.Power
 				}
-				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, slashFraction, jailDuration); err != nil {
 					return nil, err
 				}
 				events = append(events, sdk.NewEvent(
@@ -91,7 +99,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 					sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 					sdk.NewAttribute("validator", c.Dealer),
 					sdk.NewAttribute("reason", "dkg-complaint-unresolved"),
-					sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+					sdk.NewAttribute("slashFraction", slashFraction.String()),
 					sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 					sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 				))
@@ -107,7 +115,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 				if dealerMem != nil {
 					power = dealerMem.Power
 				}
-				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, slashFraction, jailDuration); err != nil {
 					return nil, err
 				}
 				events = append(events, sdk.NewEvent(
@@ -115,7 +123,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 					sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 					sdk.NewAttribute("validator", c.Dealer),
 					sdk.NewAttribute("reason", "dkg-complaint-unresolved"),
-					sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+					sdk.NewAttribute("slashFraction", slashFraction.String()),
 					sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 					sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 				))
@@ -131,7 +139,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 				if dealerMem != nil {
 					power = dealerMem.Power
 				}
-				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, bpsToDec(slashBpsDKG), jailDurationDKG); err != nil {
+				if err := m.applyPenalty(ctx, c.Dealer, dkg.StartHeight, power, slashFraction, jailDuration); err != nil {
 					return nil, err
 				}
 				events = append(events, sdk.NewEvent(
@@ -139,7 +147,7 @@ func (m msgServer) finalizeEpoch(ctx context.Context, dkg *dealertypes.DealerDKG
 					sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
 					sdk.NewAttribute("validator", c.Dealer),
 					sdk.NewAttribute("reason", "dkg-invalid-share"),
-					sdk.NewAttribute("slashFraction", bpsToDec(slashBpsDKG).String()),
+					sdk.NewAttribute("slashFraction", slashFraction.String()),
 					sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
 					sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 				))
@@ -527,6 +535,13 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid epoch threshold")
 	}
 
+	params, err := m.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	handSlashFraction := bpsToDec(params.SlashBpsHandDealer)
+	handJailDuration := time.Duration(params.JailSecondsHandDealer) * time.Second
+
 	nowUnix := sdk.UnwrapSDKContext(ctx).BlockTime().Unix()
 
 	events := []sdk.Event{
@@ -580,7 +595,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 			if distH == 0 {
 				distH = sdk.UnwrapSDKContext(ctx).BlockHeight()
 			}
-			if err := m.applyPenalty(ctx, expectID, distH, power, bpsToDec(slashBpsHandDealer), jailDurationHandDealer); err != nil {
+			if err := m.applyPenalty(ctx, expectID, distH, power, handSlashFraction, handJailDuration); err != nil {
 				return nil, err
 			}
 			events = append(events, sdk.NewEvent(
@@ -590,7 +605,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 				sdk.NewAttribute("epochId", fmt.Sprintf("%d", epoch.EpochId)),
 				sdk.NewAttribute("validator", expectID),
 				sdk.NewAttribute("reason", "shuffle-timeout"),
-				sdk.NewAttribute("slashFraction", bpsToDec(slashBpsHandDealer).String()),
+				sdk.NewAttribute("slashFraction", handSlashFraction.String()),
 				sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", distH)),
 				sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 			))
@@ -651,7 +666,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 			if distH == 0 {
 				distH = sdk.UnwrapSDKContext(ctx).BlockHeight()
 			}
-			if err := m.applyPenalty(ctx, id, distH, power, bpsToDec(slashBpsHandDealer), jailDurationHandDealer); err != nil {
+			if err := m.applyPenalty(ctx, id, distH, power, handSlashFraction, handJailDuration); err != nil {
 				return nil, err
 			}
 			events = append(events, sdk.NewEvent(
@@ -661,7 +676,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 				sdk.NewAttribute("epochId", fmt.Sprintf("%d", epoch.EpochId)),
 				sdk.NewAttribute("validator", id),
 				sdk.NewAttribute("reason", "hole-enc-shares-timeout"),
-				sdk.NewAttribute("slashFraction", bpsToDec(slashBpsHandDealer).String()),
+				sdk.NewAttribute("slashFraction", handSlashFraction.String()),
 				sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", distH)),
 				sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 			))
@@ -743,7 +758,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 		if distH == 0 {
 			distH = sdk.UnwrapSDKContext(ctx).BlockHeight()
 		}
-		if err := m.applyPenalty(ctx, id, distH, power, bpsToDec(slashBpsHandDealer), jailDurationHandDealer); err != nil {
+		if err := m.applyPenalty(ctx, id, distH, power, handSlashFraction, handJailDuration); err != nil {
 			return nil, err
 		}
 		events = append(events, sdk.NewEvent(
@@ -753,7 +768,7 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 			sdk.NewAttribute("epochId", fmt.Sprintf("%d", epoch.EpochId)),
 			sdk.NewAttribute("validator", id),
 			sdk.NewAttribute("reason", "reveal-timeout"),
-			sdk.NewAttribute("slashFraction", bpsToDec(slashBpsHandDealer).String()),
+			sdk.NewAttribute("slashFraction", handSlashFraction.String()),
 			sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", distH)),
 			sdk.NewAttribute("power", fmt.Sprintf("%d", power)),
 			sdk.NewAttribute("pos", fmt.Sprintf("%d", pos)),

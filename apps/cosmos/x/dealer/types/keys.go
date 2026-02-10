@@ -11,6 +11,7 @@ var (
 	NextEpochIDKey = []byte{0x01} // u64be
 	EpochKey       = []byte{0x02} // DealerEpoch
 	DKGKey         = []byte{0x03} // DealerDKG
+	ParamsKey      = []byte{0x04} // Params
 
 	HandKeyPrefix = []byte{0x10} // HandKeyPrefix || u64be(tableID) || u64be(handID)
 )

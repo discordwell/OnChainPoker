@@ -12,6 +12,9 @@ import "google/api/annotations.proto";
 import "onchainpoker/dealer/v1/dealer.proto";
 
 service Query {
+  rpc Params(QueryParamsRequest) returns (QueryParamsResponse) {
+    option (google.api.http).get = "/onchainpoker/dealer/v1/params";
+  }
   rpc Epoch(QueryEpochRequest) returns (QueryEpochResponse) {
     option (google.api.http).get = "/onchainpoker/dealer/v1/epoch";
   }
@@ -21,6 +24,12 @@ service Query {
   rpc Hand(QueryHandRequest) returns (QueryHandResponse) {
     option (google.api.http).get = "/onchainpoker/dealer/v1/tables/{table_id}/hands/{hand_id}";
   }
+}
+
+message QueryParamsRequest {}
+
+message QueryParamsResponse {
+  Params params = 1 [(gogoproto.nullable) = false];
 }
 
 message QueryEpochRequest {}

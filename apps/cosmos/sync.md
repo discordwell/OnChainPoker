@@ -56,6 +56,10 @@ Implication for clients (Agent 6):
   - `apps/cosmos/x/dealer/keeper/penalty.go`
 - Intended call site is `x/dealer` fault resolution: slash + jail the validator via `x/slashing`/`x/staking`, using a stored `distributionHeight` and `powerAtDistributionHeight` captured at committee selection time.
 
+Dealer penalty economics are on-chain params:
+- `Query/Params`: `GET /onchainpoker/dealer/v1/params`
+- `MsgUpdateParams`: authority-controlled param updates (defaults to `x/gov` module account)
+
 ## Agent 3: Port Game Logic Into Cosmos Modules
 
 - `x/poker` now uses real `x/bank` coins escrowed in module account `poker` (buy-ins + player bonds), and drives the poker state machine.
@@ -72,3 +76,4 @@ Implication for clients (Agent 6):
 - Wiring:
   - Module config protos added under `apps/cosmos/proto/onchainpoker/{poker,dealer}/module/v1`.
   - `apps/cosmos/app/app_config.go` updated to include both modules + poker module account perms + block external sends to `poker`.
+

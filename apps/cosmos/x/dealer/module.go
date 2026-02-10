@@ -18,6 +18,8 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	"github.com/cosmos/cosmos-sdk/types/module"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
+	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 
 	"onchainpoker/apps/cosmos/x/dealer/committee"
 	"onchainpoker/apps/cosmos/x/dealer/keeper"
@@ -101,6 +103,9 @@ func (am AppModule) InitGenesis(ctx sdk.Context, cdc codec.JSONCodec, data json.
 		panic(fmt.Errorf("x/dealer invalid genesis: %w", err))
 	}
 
+	if err := am.keeper.SetParams(gctx, gs.Params); err != nil {
+		panic(err)
+	}
 	if err := am.keeper.SetNextEpochID(gctx, gs.NextEpochId); err != nil {
 		panic(err)
 	}
@@ -127,11 +132,16 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 	if err != nil {
 		panic(err)
 	}
+	params, err := am.keeper.GetParams(gctx)
+	if err != nil {
+		panic(err)
+	}
 
 	gs := types.GenesisState{
 		NextEpochId: next,
 		Epoch:       epoch,
 		Dkg:         dkg,
+		Params:      params,
 	}
 	return cdc.MustMarshalJSON(&gs)
 }
@@ -169,9 +179,14 @@ type ModuleOutputs struct {
 }
 
 func ProvideModule(in ModuleInputs) ModuleOutputs {
+	authority := authtypes.NewModuleAddress(govtypes.ModuleName).String()
+	if in.Config != nil && in.Config.Authority != "" {
+		authority = in.Config.Authority
+	}
 	k := keeper.NewKeeper(
 		in.Cdc,
 		in.StoreService,
+		authority,
 		in.StakingKeeper,
 		in.CommitteeStakingKeeper,
 		in.SlashingKeeper,
