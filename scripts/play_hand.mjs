@@ -94,6 +94,21 @@ async function main() {
   const ALICE = "alice";
   const BOB = "bob";
 
+  // Devnet-only faucet: register a local validator key so we can mint chips.
+  // Note: `bank/mint` is validator-signed only.
+  const FAUCET = "faucet";
+  const faucetKeys = generateKeyPairSync("ed25519");
+  const faucetPkBytes = b64urlToBytes(faucetKeys.publicKey.export({ format: "jwk" }).x);
+  if (faucetPkBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "staking/register_validator",
+      value: { validatorId: FAUCET, pubKey: b64(faucetPkBytes), power: 1 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
+
   // v0: register account pubkeys so player txs can be authenticated on-chain.
   const aliceKeys = generateKeyPairSync("ed25519");
   const bobKeys = generateKeyPairSync("ed25519");
@@ -101,8 +116,22 @@ async function main() {
   const bobPkBytes = b64urlToBytes(bobKeys.publicKey.export({ format: "jwk" }).x);
   if (alicePkBytes.length !== 32 || bobPkBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
 
-  await ocp.bankMint({ to: ALICE, amount: 100000 });
-  await ocp.bankMint({ to: BOB, amount: 100000 });
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "bank/mint",
+      value: { to: ALICE, amount: 100000 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
+  await ocp.broadcastTxEnvelope(
+    signedEnv({
+      type: "bank/mint",
+      value: { to: BOB, amount: 100000 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
 
   await ocp.broadcastTxEnvelope(
     signedEnv({
@@ -163,7 +192,16 @@ async function main() {
       signerId: ALICE,
       signerSk: aliceKeys.privateKey,
     })
-  );
+  ).catch((e) => {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("no active dealer epoch") || msg.includes("public dealing is disabled")) {
+      throw new Error(
+        "poker/start_hand rejected: DealerStub (public dealing) is disabled by default.\n" +
+          "Use scripts/play_hand_dealer.mjs to exercise the on-chain dealer pipeline, or start the chain with OCP_UNSAFE_ALLOW_DEALER_STUB=1 for insecure local testing."
+      );
+    }
+    throw e;
+  });
   const hole = parseHoleCardsFromTxResult(startRes.tx_result ?? startRes.deliver_tx);
 
   // eslint-disable-next-line no-console

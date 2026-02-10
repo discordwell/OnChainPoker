@@ -14,8 +14,8 @@ func setupHeadsUpTableWithPKAndDealerTO(t *testing.T, pkAliceB64, pkBobB64 strin
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 

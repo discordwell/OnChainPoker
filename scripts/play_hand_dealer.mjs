@@ -253,11 +253,19 @@ async function main() {
   });
   const committeeById = new Map(committee.map((m) => [m.id, m]));
   for (const v of committee) {
-    await ocp.bankMint({ to: v.id, amount: 100000 });
     await ocp.broadcastTxEnvelope(
       signedEnv({
         type: "staking/register_validator",
         value: { validatorId: v.id, pubKey: b64(v.signPkBytes), power: 1 },
+        signerId: v.id,
+        signerSk: v.signSk,
+      })
+    );
+    // bank/mint requires a validator-signed tx; mint self-funds after registration.
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "bank/mint",
+        value: { to: v.id, amount: 100000 },
         signerId: v.id,
         signerSk: v.signSk,
       })
@@ -341,7 +349,19 @@ async function main() {
     return { player, seat: i, sk, pk, signSk: privateKey, signPkBytes };
   });
 
-  for (const p of players) await ocp.bankMint({ to: p.player, amount: 100000 });
+  // Fund players via a validator-signed mint (devnet-only).
+  const minter = committee[0];
+  if (!minter) throw new Error("missing committee[0] (minter)");
+  for (const p of players) {
+    await ocp.broadcastTxEnvelope(
+      signedEnv({
+        type: "bank/mint",
+        value: { to: p.player, amount: 100000 },
+        signerId: minter.id,
+        signerSk: minter.signSk,
+      })
+    );
+  }
 
   for (const p of players) {
     await ocp.broadcastTxEnvelope(

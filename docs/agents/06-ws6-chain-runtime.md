@@ -28,7 +28,7 @@ Scaffold the appchain runtime and implement the PokerTable and Dealer modules wi
 Target an end-to-end playable flow with **public dealing**:
 
 - `Bank`:
-  - `bank/mint` (devnet only; no auth)
+  - `bank/mint` (devnet only; validator-signed)
   - `bank/send`
 - `PokerTable`:
   - `poker/create_table`
@@ -36,13 +36,14 @@ Target an end-to-end playable flow with **public dealing**:
   - `poker/start_hand`
   - `poker/act` (v0: check/call/fold + simple bet/raise semantics)
 - `DealerStub`:
-  - deterministic deck shuffle per hand
+  - deterministic deck shuffle per hand (insecure; public dealing)
   - hole cards emitted publicly as events (until WS3/WS4/WS5 land)
+  - NOTE: now gated behind `OCP_UNSAFE_ALLOW_DEALER_STUB=1` and disabled by default.
 
 For v0, it’s acceptable that:
 
 - txs are JSON-encoded bytes (not protobuf/SCALE),
-- there is no signature/auth sequence number yet (devnet-only),
+- tx auth is minimal (ed25519 + nonce replay protection) and devnet-focused,
 - showdown is a placeholder evaluator (WS2 will replace).
 
 ### Localnet + Acceptance Harness
@@ -55,7 +56,9 @@ Include:
 ## Acceptance Tests
 
 - Local devnet boots and produces blocks.
-- Scripted full hand executes end-to-end (public dealing stub ok).
+- Scripted full hand executes end-to-end.
+  - Preferred: dealer-mode script (`scripts/play_hand_dealer.mjs`).
+  - Optional (insecure): public dealing stub if the chain is started with `OCP_UNSAFE_ALLOW_DEALER_STUB=1`.
 
 ## Notes
 

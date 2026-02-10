@@ -10,7 +10,7 @@ func setupTableSinglePlayerWithBond(t *testing.T, bond uint64) (a *OCPApp, table
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
 	registerTestAccount(t, a, height, "alice")
 
 	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
@@ -108,8 +108,8 @@ func setupHeadsUpTableWithBondAndActionTimeout(t *testing.T, bond uint64, action
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 

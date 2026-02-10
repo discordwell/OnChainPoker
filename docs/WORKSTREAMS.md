@@ -51,7 +51,9 @@ Each workstream below can be developed largely independently if it adheres to th
 
 6. **WS6: Chain Runtime / App Implementation**
    - Output: appchain scaffold with modules `Bank`, `Staking` (stub), `PokerTable`, `Dealer` (stub), and tx routing (`apps/chain`).
-   - Acceptance: local devnet spins up; can run a full hand with public dealing first (`apps/chain/scripts/localnet.sh` + `apps/chain/scripts/play_hand.mjs`); then wire in Dealer artifacts.
+   - Acceptance: local devnet spins up; can run a full hand end-to-end.
+     - Preferred: on-chain dealer pipeline (`scripts/play_hand_dealer.mjs`).
+     - Optional (insecure): public dealing stub via `apps/chain/scripts/play_hand.mjs` if the chain is started with `OCP_UNSAFE_ALLOW_DEALER_STUB=1`.
 
 7. **WS7: Client Protocol + SDK**
    - Output: typed client SDK for tx submission, event subscription, and share retrieval/decryption.

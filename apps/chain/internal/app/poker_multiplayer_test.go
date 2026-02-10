@@ -53,10 +53,10 @@ func TestMultiwayAllIn_ThreeSidePots_AwardedCorrectly(t *testing.T) {
 	a := newTestApp(t)
 
 	// Four players, three all-in tiers: 10 / 20 / 50 / 50.
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "dave", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
+	mintTestTokens(t, a, height, "charlie", 1000)
+	mintTestTokens(t, a, height, "dave", 1000)
 
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")

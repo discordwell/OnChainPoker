@@ -99,8 +99,37 @@ async function main() {
   const ALICE = "alice";
   const BOB = "bob";
 
-  await broadcastTx({ type: "bank/mint", value: { to: ALICE, amount: 100000 } });
-  await broadcastTx({ type: "bank/mint", value: { to: BOB, amount: 100000 } });
+  // Devnet-only faucet: register a local validator key so we can mint chips.
+  // Note: `bank/mint` is validator-signed only.
+  const FAUCET = "faucet";
+  const faucetKeys = generateKeyPairSync("ed25519");
+  const faucetPkBytes = b64urlToBytes(faucetKeys.publicKey.export({ format: "jwk" }).x);
+  if (faucetPkBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
+  await broadcastTx(
+    signedEnv({
+      type: "staking/register_validator",
+      value: { validatorId: FAUCET, pubKey: b64(faucetPkBytes), power: 1 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
+
+  await broadcastTx(
+    signedEnv({
+      type: "bank/mint",
+      value: { to: ALICE, amount: 100000 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
+  await broadcastTx(
+    signedEnv({
+      type: "bank/mint",
+      value: { to: BOB, amount: 100000 },
+      signerId: FAUCET,
+      signerSk: faucetKeys.privateKey,
+    })
+  );
 
   const aliceKeys = generateKeyPairSync("ed25519");
   const bobKeys = generateKeyPairSync("ed25519");
@@ -169,7 +198,16 @@ async function main() {
       signerId: ALICE,
       signerSk: aliceKeys.privateKey,
     })
-  );
+  ).catch((e) => {
+    const msg = String(e?.message ?? e);
+    if (msg.includes("no active dealer epoch") || msg.includes("public dealing is disabled")) {
+      throw new Error(
+        "poker/start_hand rejected: DealerStub (public dealing) is disabled by default.\n" +
+          "Run the on-chain dealer pipeline (see scripts/play_hand_dealer.mjs) or start the chain with OCP_UNSAFE_ALLOW_DEALER_STUB=1 for insecure local testing."
+      );
+    }
+    throw e;
+  });
 
   const signerSkByPlayer = new Map([
     [ALICE, aliceKeys.privateKey],

@@ -17,7 +17,7 @@ func TestDKGTimeout_MissingCommits_AbortsAndSlashesBond(t *testing.T) {
 	// Register + bond 3 validators.
 	for _, id := range []string{"v1", "v2", "v3"} {
 		pub, _ := testEd25519Key(id)
-		mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": id, "amount": uint64(1000)}), height, 0))
+		mintTestTokens(t, a, height, id, 1000)
 		mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
 			"validatorId": id,
 			"pubKey":      []byte(pub),
@@ -44,8 +44,8 @@ func TestDKGTimeout_MissingCommits_AbortsAndSlashesBond(t *testing.T) {
 		ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(2)).Bytes(),
 	}
 	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
-		"epochId":      uint64(1),
-		"dealerId":     "v1",
+		"epochId":     uint64(1),
+		"dealerId":    "v1",
 		"commitments": commitments,
 	}, "v1"), height, 0))
 
@@ -82,7 +82,7 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 	// Register + bond 2 validators.
 	for _, id := range []string{"v1", "v2"} {
 		pub, _ := testEd25519Key(id)
-		mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": id, "amount": uint64(1000)}), height, 0))
+		mintTestTokens(t, a, height, id, 1000)
 		mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
 			"validatorId": id,
 			"pubKey":      []byte(pub),
@@ -110,8 +110,8 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 		ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(7)).Bytes(),
 	}
 	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
-		"epochId":      uint64(1),
-		"dealerId":     "v1",
+		"epochId":     uint64(1),
+		"dealerId":    "v1",
 		"commitments": commitmentsV1,
 	}, "v1"), height, 0))
 
@@ -121,8 +121,8 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 		ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(11)).Bytes(),
 	}
 	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
-		"epochId":      uint64(1),
-		"dealerId":     "v2",
+		"epochId":     uint64(1),
+		"dealerId":    "v2",
 		"commitments": commitmentsV2,
 	}, "v2"), height, 0))
 
@@ -187,4 +187,3 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 		t.Fatalf("share bytes mismatch")
 	}
 }
-

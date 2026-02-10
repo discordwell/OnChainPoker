@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -26,6 +27,9 @@ type OCPApp struct {
 	*abci.BaseApplication
 
 	home string
+	// allowDealerStub enables the insecure public dealing stub (DealerStub) for
+	// local testing only. In normal operation this MUST be false.
+	allowDealerStub bool
 
 	mu       sync.Mutex
 	st       *state.State
@@ -43,6 +47,7 @@ func New(home string) (*OCPApp, error) {
 		home:            home,
 		st:              st,
 		lastHash:        st.AppHash(),
+		allowDealerStub: strings.TrimSpace(os.Getenv("OCP_UNSAFE_ALLOW_DEALER_STUB")) == "1",
 	}
 	return a, nil
 }
@@ -195,10 +200,24 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if msg.To == "" || msg.Amount == 0 {
 			return &abci.ExecTxResult{Code: 1, Log: "missing to/amount"}
 		}
+		// Devnet-only: mint is restricted to validator-signed txs so arbitrary users
+		// cannot print infinite chips.
+		if env.Signer == "" {
+			return &abci.ExecTxResult{Code: 1, Log: "bank/mint requires a validator-signed tx (missing tx.signer)"}
+		}
+		if err := requireValidatorAuth(a.st, env, env.Signer); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		if v := findValidator(a.st, env.Signer); v == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "mint authority not registered"}
+		} else if v.Status != state.ValidatorActive {
+			return &abci.ExecTxResult{Code: 1, Log: "mint authority is not active"}
+		}
 		a.st.Credit(msg.To, msg.Amount)
 		return okEvent("BankMinted", map[string]string{
 			"to":     msg.To,
 			"amount": fmt.Sprintf("%d", msg.Amount),
+			"by":     env.Signer,
 		})
 
 	case "bank/send":
@@ -370,6 +389,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 
 		epoch := a.st.Dealer.Epoch
 		useDealer := epoch != nil
+		if !useDealer && !a.allowDealerStub {
+			return &abci.ExecTxResult{Code: 1, Log: "no active dealer epoch (public dealing is disabled); run dealer/begin_epoch + dealer/finalize_epoch first"}
+		}
 
 		// Advance button to next funded seat (or first if unset).
 		if t.ButtonSeat < 0 {

@@ -48,6 +48,12 @@ The current WS6 devnet is `apps/chain` (CometBFT + ABCI, Go). v0 chooses speed o
 { "type": "poker/create_table", "value": { "...": "..." } }
 ```
 
+v0 also supports tx authentication by including:
+
+- `nonce: string` (u64 decimal; replay protection)
+- `signer: string` (account/validator id)
+- `sig: string` (base64 ed25519 signature)
+
 Concrete v0 tx schemas live in `apps/chain/internal/codec/tx.go`.
 
 - **Queries**: CometBFT JSON-RPC `abci_query` with `path` (e.g. `/table/1`). The response value is base64-encoded JSON.
@@ -74,7 +80,7 @@ The remainder of this section describes the *logical* txs. For the concrete v0 d
 
 And for devnet-only funding:
 
-- `Bank.Mint` -> `bank/mint`
+- `Bank.Mint` -> `bank/mint` (devnet-only; validator-signed)
 - `Bank.Send` -> `bank/send`
 
 ### 2.1 PokerTable Txs

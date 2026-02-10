@@ -31,4 +31,6 @@ Out of scope:
   - `playerBond` is debited on `poker/sit` and stored as `seat.bond`.
   - `poker/tick` slashes bond on timeouts and emits `PlayerSlashed`.
   - Seats with depleted bond are ejected between hands (`PlayerEjected`) and remaining stack is returned to bank balance.
-- `bank/mint` is devnet-only and currently unauthenticated; MUST NOT exist in production builds.
+- `bank/mint` is devnet-only and now requires a validator-signed tx.
+  - Important: v0 staking/validator registration is still a stub and not tied to consensus, so "validator-signed" is not a production-grade authorization boundary yet.
+  - `bank/mint` MUST NOT exist in production builds.

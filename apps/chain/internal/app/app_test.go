@@ -71,6 +71,32 @@ func registerTestAccount(t *testing.T, a *OCPApp, height int64, account string) 
 	}, account), height, 0))
 }
 
+const testMinterValidatorID = "faucet"
+
+func ensureTestMinter(t *testing.T, a *OCPApp, height int64) {
+	t.Helper()
+	if a == nil || a.st == nil {
+		t.Fatalf("ensureTestMinter: missing app/state")
+	}
+	if findValidator(a.st, testMinterValidatorID) != nil {
+		return
+	}
+	pub, _ := testEd25519Key(testMinterValidatorID)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": testMinterValidatorID,
+		"pubKey":      []byte(pub),
+	}, testMinterValidatorID), height, 0))
+}
+
+func mintTestTokens(t *testing.T, a *OCPApp, height int64, to string, amount uint64) {
+	t.Helper()
+	ensureTestMinter(t, a, height)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "bank/mint", map[string]any{
+		"to":     to,
+		"amount": amount,
+	}, testMinterValidatorID), height, 0))
+}
+
 func findEvent(events []abci.Event, typ string) *abci.Event {
 	for i := range events {
 		if events[i].Type == typ {
@@ -103,6 +129,9 @@ func parseU64(t *testing.T, s string) uint64 {
 
 func newTestApp(t *testing.T) *OCPApp {
 	t.Helper()
+	// Tests rely on the insecure DealerStub (public dealing) to exercise the poker
+	// state machine without running the full dealer pipeline.
+	t.Setenv("OCP_UNSAFE_ALLOW_DEALER_STUB", "1")
 	a, err := New(t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
@@ -124,13 +153,13 @@ func setupHeadsUpTable(t *testing.T) (a *OCPApp, tableID uint64) {
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 
 	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
-		"creator":  "alice",
+		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   100,
@@ -286,15 +315,15 @@ func TestStartHand_ExcludesZeroStackSeatsFromHandAndHoleEvents(t *testing.T) {
 	const height = int64(1)
 	a := newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
+	mintTestTokens(t, a, height, "charlie", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 	registerTestAccount(t, a, height, "charlie")
 
 	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
-		"creator":  "alice",
+		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   100,
@@ -344,15 +373,15 @@ func TestSidePots_ShowdownAwardsMainAndSidePotCorrectly(t *testing.T) {
 	a := newTestApp(t)
 
 	// Three players, one short-stacked to force a main+side pot.
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
+	mintTestTokens(t, a, height, "charlie", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 	registerTestAccount(t, a, height, "charlie")
 
 	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
-		"creator":   "alice",
+		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   1,

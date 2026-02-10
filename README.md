@@ -38,13 +38,25 @@ Terminal 1:
 pnpm dev
 ```
 
+Optional (insecure): enable the public dealing stub (DealerStub) for local testing only:
+
+```bash
+OCP_UNSAFE_ALLOW_DEALER_STUB=1 pnpm dev
+```
+
 Terminal 2:
+
+```bash
+pnpm ws7:play_hand_dealer
+```
+
+This runs a v0 localnet and plays a simple hand by submitting on-chain transactions.
+
+Optional (insecure): if you started the chain with `OCP_UNSAFE_ALLOW_DEALER_STUB=1`, you can also run the legacy public-dealing driver:
 
 ```bash
 pnpm ws7:play_hand
 ```
-
-This runs a v0 localnet and plays a simple hand by submitting on-chain transactions.
 
 ## Tests
 

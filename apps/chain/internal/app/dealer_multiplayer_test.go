@@ -15,9 +15,9 @@ func setupThreeHandedTableWithPK(t *testing.T, pkAliceB64, pkBobB64, pkCharlieB6
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "charlie", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
+	mintTestTokens(t, a, height, "charlie", 1000)
 
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")

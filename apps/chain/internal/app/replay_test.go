@@ -12,8 +12,8 @@ func TestReplayProtection_AccountSigned(t *testing.T) {
 	const height = int64(1)
 	a := newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 100}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 100}), height, 0))
+	mintTestTokens(t, a, height, "alice", 100)
+	mintTestTokens(t, a, height, "bob", 100)
 	registerTestAccount(t, a, height, "alice")
 
 	tx := txBytesSigned(t, "bank/send", map[string]any{"from": "alice", "to": "bob", "amount": 1}, "alice")
@@ -32,7 +32,7 @@ func TestReplayProtection_ValidatorSigned(t *testing.T) {
 	const height = int64(1)
 	a := newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "v1", "amount": 100}), height, 0))
+	mintTestTokens(t, a, height, "v1", 100)
 
 	pub, _ := testEd25519Key("v1")
 	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
@@ -80,4 +80,3 @@ func TestReplayProtection_RejectsNonNumericNonce(t *testing.T) {
 		t.Fatalf("expected log to mention invalid tx.nonce, got %q", res.Log)
 	}
 }
-

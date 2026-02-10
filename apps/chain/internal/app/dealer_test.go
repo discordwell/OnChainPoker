@@ -18,13 +18,13 @@ func setupHeadsUpTableWithPK(t *testing.T, pkAliceB64, pkBobB64 string) (a *OCPA
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 
 	createRes := mustOk(t, a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
-		"creator":   "alice",
+		"creator":    "alice",
 		"smallBlind": 1,
 		"bigBlind":   2,
 		"minBuyIn":   100,
@@ -75,7 +75,7 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 	for _, id := range validatorIDs {
 		pub, _ := testEd25519Key(id)
 		// Fund + bond so validators are eligible for committee sampling.
-		mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": id, "amount": uint64(1000)}), height, 0))
+		mintTestTokens(t, a, height, id, 1000)
 		mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
 			"validatorId": id,
 			"pubKey":      []byte(pub),
@@ -88,13 +88,13 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 
 	// Begin epoch DKG. With a registry containing exactly committeeSize validators, committee selection is deterministic.
 	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
-		"epochId":        uint64(1),
-		"committeeSize":  uint32(len(validatorIDs)),
-		"threshold":      threshold,
-		"commitBlocks":   uint64(1),
+		"epochId":         uint64(1),
+		"committeeSize":   uint32(len(validatorIDs)),
+		"threshold":       threshold,
+		"commitBlocks":    uint64(1),
 		"complaintBlocks": uint64(1),
-		"revealBlocks":   uint64(1),
-		"finalizeBlocks": uint64(1),
+		"revealBlocks":    uint64(1),
+		"finalizeBlocks":  uint64(1),
 	}), height, 0))
 	if a.st.Dealer == nil || a.st.Dealer.DKG == nil {
 		t.Fatalf("expected dkg in progress")
@@ -121,8 +121,8 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 			commitments = append(commitments, ocpcrypto.MulBase(c).Bytes())
 		}
 		mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
-			"epochId":      epochID,
-			"dealerId":     dkg.Members[di].ValidatorID,
+			"epochId":     epochID,
+			"dealerId":    dkg.Members[di].ValidatorID,
 			"commitments": commitments,
 		}, dkg.Members[di].ValidatorID), height, 0))
 	}

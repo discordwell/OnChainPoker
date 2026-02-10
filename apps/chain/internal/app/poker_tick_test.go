@@ -10,8 +10,8 @@ func setupHeadsUpTableWithActionTimeout(t *testing.T, actionTimeoutSecs uint64) 
 	const height = int64(1)
 	a = newTestApp(t)
 
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "alice", "amount": 1000}), height, 0))
-	mustOk(t, a.deliverTx(txBytes(t, "bank/mint", map[string]any{"to": "bob", "amount": 1000}), height, 0))
+	mintTestTokens(t, a, height, "alice", 1000)
+	mintTestTokens(t, a, height, "bob", 1000)
 	registerTestAccount(t, a, height, "alice")
 	registerTestAccount(t, a, height, "bob")
 
