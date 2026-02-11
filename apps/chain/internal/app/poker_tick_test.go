@@ -52,6 +52,7 @@ func TestPokerTick_AppliesFoldOnTimeoutWhenFacingBet(t *testing.T) {
 	if res.Code == 0 {
 		t.Fatalf("expected error before deadline")
 	}
+	table = a.st.Tables[tableID]
 
 	// At/after deadline: SB is facing a bet, so default is fold.
 	res = mustOk(t, a.deliverTx(txBytes(t, "poker/tick", map[string]any{"tableId": tableID}), height, 10))

@@ -155,18 +155,45 @@ func (a *OCPApp) Query(_ context.Context, req *abci.QueryRequest) (*abci.QueryRe
 	}
 }
 
-func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *abci.ExecTxResult {
+func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (res *abci.ExecTxResult) {
 	env, err := codec.DecodeTxEnvelope(txBytes)
 	if err != nil {
 		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 	}
 
-	// v0: keep state height consistent even in tests that call deliverTx() directly.
-	a.st.Height = height
 	nowUnix := height
 	if len(nowUnixOpt) > 0 {
 		nowUnix = nowUnixOpt[0]
 	}
+
+	// Snapshot pre-tx state and restore on failure.
+	snapshot, err := a.st.Clone()
+	if err != nil {
+		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+	}
+	// v0: keep state height consistent even in tests that call deliverTx() directly.
+	a.st.Height = height
+	defer func() {
+		if res == nil || res.Code != 0 {
+			// Keep replay protection monotonic even when business logic fails.
+			var consumedNonce uint64
+			var hasConsumedNonce bool
+			if env.Signer != "" {
+				if n, ok := a.st.NonceMax[env.Signer]; ok {
+					consumedNonce, hasConsumedNonce = n, true
+				}
+			}
+			*a.st = *snapshot
+			if hasConsumedNonce {
+				if a.st.NonceMax == nil {
+					a.st.NonceMax = map[string]uint64{}
+				}
+				if consumedNonce > a.st.NonceMax[env.Signer] {
+					a.st.NonceMax[env.Signer] = consumedNonce
+				}
+			}
+		}
+	}()
 
 	switch env.Type {
 	case "auth/register_account":
@@ -392,6 +419,17 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		if !useDealer && !a.allowDealerStub {
 			return &abci.ExecTxResult{Code: 1, Log: "no active dealer epoch (public dealing is disabled); run dealer/begin_epoch + dealer/finalize_epoch first"}
 		}
+		// Dealer mode requires per-seat encryption keys; validate before mutating hand state.
+		if useDealer {
+			for i := 0; i < 9; i++ {
+				if t.Seats[i] == nil || t.Seats[i].Stack == 0 {
+					continue
+				}
+				if len(t.Seats[i].PK) != ocpcrypto.PointBytes {
+					return &abci.ExecTxResult{Code: 1, Log: fmt.Sprintf("seat %d missing pk; required for dealer mode", i)}
+				}
+			}
+		}
 
 		// Advance button to next funded seat (or first if unset).
 		if t.ButtonSeat < 0 {
@@ -476,14 +514,6 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) *a
 		})
 		if useDealer {
 			// Dealer module: start in shuffle/deal phase, initialize the encrypted deck.
-			for i := 0; i < 9; i++ {
-				if !h.InHand[i] {
-					continue
-				}
-				if t.Seats[i] == nil || len(t.Seats[i].PK) != ocpcrypto.PointBytes {
-					return &abci.ExecTxResult{Code: 1, Log: fmt.Sprintf("seat %d missing pk; required for dealer mode", i)}
-				}
-			}
 			h.Phase = state.PhaseShuffle
 			initEv, err := dealerInitHand(a.st, t, codec.DealerInitHandTx{
 				TableID:  msg.TableID,

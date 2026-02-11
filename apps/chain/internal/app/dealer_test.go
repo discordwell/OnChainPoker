@@ -422,6 +422,8 @@ func TestDealer_RevealNextBoardPos_WithThresholdShares(t *testing.T) {
 	if res.Code == 0 {
 		t.Fatalf("expected finalize_reveal to fail without shares")
 	}
+	table = a.st.Tables[tableID]
+	dh = table.Hand.Dealer
 
 	// Submit two valid pub shares for the next community card and finalize the reveal.
 	submitPubShare(t, a, height, tableID, handID, epochID, members[0].id, members[0].share, nextPos, 1111)

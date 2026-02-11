@@ -86,6 +86,43 @@ func (s *State) Save(home string) error {
 	return nil
 }
 
+// Clone returns a deep copy of state suitable for staged tx execution.
+func (s *State) Clone() (*State, error) {
+	if s == nil {
+		return nil, fmt.Errorf("state is nil")
+	}
+	b, err := json.Marshal(s)
+	if err != nil {
+		return nil, fmt.Errorf("encode state clone: %w", err)
+	}
+	var out State
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("decode state clone: %w", err)
+	}
+	if out.Accounts == nil {
+		out.Accounts = map[string]uint64{}
+	}
+	if out.AccountKeys == nil {
+		out.AccountKeys = map[string][]byte{}
+	}
+	if out.NonceMax == nil {
+		out.NonceMax = map[string]uint64{}
+	}
+	if out.Tables == nil {
+		out.Tables = map[uint64]*Table{}
+	}
+	if out.NextTableID == 0 {
+		out.NextTableID = 1
+	}
+	if out.Dealer == nil {
+		out.Dealer = &DealerState{NextEpochID: 1}
+	}
+	if out.Dealer.NextEpochID == 0 {
+		out.Dealer.NextEpochID = 1
+	}
+	return &out, nil
+}
+
 func (s *State) AppHash() []byte {
 	// Deterministic JSON hash: marshal with stable key ordering by serializing
 	// a normalized view.
@@ -429,6 +466,8 @@ type DealerDKG struct {
 	Complaints []DealerDKGComplaint   `json:"complaints,omitempty"`
 	Reveals    []DealerDKGShareReveal `json:"reveals,omitempty"`
 	Slashed    []string               `json:"slashed,omitempty"` // validatorIds (sorted)
+	// Penalized validatorIds that have already had jail/slash applied for this DKG.
+	Penalized []string `json:"penalized,omitempty"` // validatorIds (sorted)
 }
 
 type DealerDKGCommit struct {

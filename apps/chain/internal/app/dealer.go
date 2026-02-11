@@ -120,7 +120,6 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 	if epochID != st.Dealer.NextEpochID {
 		return nil, fmt.Errorf("unexpected epochId: expected %d got %d", st.Dealer.NextEpochID, epochID)
 	}
-	st.Dealer.NextEpochID = epochID + 1
 
 	// Active validator ids are used as the sampling pool.
 	active := make([]string, 0, len(st.Dealer.Validators))
@@ -205,6 +204,7 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 		FinalizeDeadline:  finalizeDL,
 		RandEpoch:         append([]byte(nil), randEpoch...),
 	}
+	st.Dealer.NextEpochID = epochID + 1
 
 	ev := okEvent("DealerEpochBegun", map[string]string{
 		"epochId":           fmt.Sprintf("%d", epochID),
@@ -305,6 +305,29 @@ func dkgSlash(dkg *state.DealerDKG, validatorID string) {
 	}
 	dkg.Slashed = append(dkg.Slashed, validatorID)
 	sort.Strings(dkg.Slashed)
+}
+
+func dkgIsPenalized(dkg *state.DealerDKG, validatorID string) bool {
+	if dkg == nil {
+		return false
+	}
+	for _, id := range dkg.Penalized {
+		if id == validatorID {
+			return true
+		}
+	}
+	return false
+}
+
+func dkgMarkPenalized(dkg *state.DealerDKG, validatorID string) {
+	if dkg == nil || validatorID == "" {
+		return
+	}
+	if dkgIsPenalized(dkg, validatorID) {
+		return
+	}
+	dkg.Penalized = append(dkg.Penalized, validatorID)
+	sort.Strings(dkg.Penalized)
 }
 
 func dealerDKGCommit(st *state.State, msg codec.DealerDKGCommitTx) (*abci.ExecTxResult, error) {
@@ -467,6 +490,7 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 		// Missing commit after the commit deadline is slashable.
 		dkgSlash(dkg, msg.DealerID)
 		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		dkgMarkPenalized(dkg, msg.DealerID)
 	} else {
 		ok, err := dkgVerifyShare(commit.Commitments, toMem.Index, shareMsg.Share)
 		if err != nil {
@@ -477,6 +501,7 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 		}
 		dkgSlash(dkg, msg.DealerID)
 		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		dkgMarkPenalized(dkg, msg.DealerID)
 	}
 
 	dkg.Complaints = append(dkg.Complaints, state.DealerDKGComplaint{
@@ -624,6 +649,7 @@ func dkgTranscriptRoot(dkg *state.DealerDKG) ([]byte, error) {
 		Complaints        []state.DealerDKGComplaint   `json:"complaints,omitempty"`
 		Reveals           []state.DealerDKGShareReveal `json:"reveals,omitempty"`
 		Slashed           []string                     `json:"slashed,omitempty"`
+		Penalized         []string                     `json:"penalized,omitempty"`
 	}{
 		EpochID:           dkg.EpochID,
 		Threshold:         dkg.Threshold,
@@ -638,6 +664,7 @@ func dkgTranscriptRoot(dkg *state.DealerDKG) ([]byte, error) {
 		Complaints:        dkg.Complaints,
 		Reveals:           dkg.Reveals,
 		Slashed:           dkg.Slashed,
+		Penalized:         dkg.Penalized,
 	}
 	b, err := json.Marshal(view)
 	if err != nil {
@@ -780,7 +807,11 @@ func dealerFinalizeEpoch(st *state.State, msg codec.DealerFinalizeEpochTx) (*abc
 		"slashed":        fmt.Sprintf("%d", len(dkg.Slashed)),
 	})
 	for _, vid := range dkg.Slashed {
+		if dkgIsPenalized(dkg, vid) {
+			continue
+		}
 		amt := jailAndSlashValidator(st, vid, slashBpsDKG)
+		dkgMarkPenalized(dkg, vid)
 		res.Events = append(res.Events, abci.Event{
 			Type: "ValidatorSlashed",
 			Attributes: []abci.EventAttribute{
@@ -826,6 +857,7 @@ func dealerDKGTimeout(st *state.State, msg codec.DealerDKGTimeoutTx) (*abci.Exec
 		}
 		dkgSlash(dkg, m.ValidatorID)
 		amt := jailAndSlashValidator(st, m.ValidatorID, slashBpsDKG)
+		dkgMarkPenalized(dkg, m.ValidatorID)
 		events = append(events, abci.Event{
 			Type: "ValidatorSlashed",
 			Attributes: []abci.EventAttribute{
