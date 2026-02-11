@@ -29,13 +29,19 @@ jobs:
         with:
           go-version-file: apps/chain/go.mod
           cache: true
-          cache-dependency-path: apps/chain/go.sum
+          cache-dependency-path: |
+            apps/chain/go.sum
+            apps/cosmos/go.sum
 
       - name: Install
         run: pnpm install --frozen-lockfile
 
       - name: Unit Tests + Build
         run: pnpm test
+
+      - name: Cosmos Go Tests
+        working-directory: apps/cosmos
+        run: go test ./...
 
   dealer-smoke:
     runs-on: ubuntu-latest

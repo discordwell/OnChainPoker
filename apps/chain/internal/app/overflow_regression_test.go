@@ -150,6 +150,50 @@ func TestOverflow_PokerCreateTableNextTableID(t *testing.T) {
 	}
 }
 
+func TestOverflow_PokerCreateTableRejectsHugeTimeoutInputs(t *testing.T) {
+	const height = int64(1)
+	a := newTestApp(t)
+
+	mintTestTokens(t, a, height, "alice", 1000)
+	registerTestAccount(t, a, height, "alice")
+
+	res := a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
+		"creator":           "alice",
+		"smallBlind":        uint64(1),
+		"bigBlind":          uint64(2),
+		"minBuyIn":          uint64(1),
+		"maxBuyIn":          uint64(1000),
+		"actionTimeoutSecs": ^uint64(0),
+	}, "alice"), height, 0)
+	if res.Code == 0 {
+		t.Fatalf("expected huge action timeout input rejection")
+	}
+	if a.st.NextTableID != 1 {
+		t.Fatalf("next table id mutated on rejected action timeout: %d", a.st.NextTableID)
+	}
+	if len(a.st.Tables) != 0 {
+		t.Fatalf("table created with huge action timeout input")
+	}
+
+	res = a.deliverTx(txBytesSigned(t, "poker/create_table", map[string]any{
+		"creator":           "alice",
+		"smallBlind":        uint64(1),
+		"bigBlind":          uint64(2),
+		"minBuyIn":          uint64(1),
+		"maxBuyIn":          uint64(1000),
+		"dealerTimeoutSecs": ^uint64(0),
+	}, "alice"), height, 0)
+	if res.Code == 0 {
+		t.Fatalf("expected huge dealer timeout input rejection")
+	}
+	if a.st.NextTableID != 1 {
+		t.Fatalf("next table id mutated on rejected dealer timeout: %d", a.st.NextTableID)
+	}
+	if len(a.st.Tables) != 0 {
+		t.Fatalf("table created with huge dealer timeout input")
+	}
+}
+
 func TestOverflow_PokerStartHandNextHandID(t *testing.T) {
 	const height = int64(1)
 	a, tableID := setupHeadsUpTable(t)
@@ -190,7 +234,7 @@ func TestOverflow_PokerStartHandHugeActionTimeout(t *testing.T) {
 		"bigBlind":          uint64(2),
 		"minBuyIn":          uint64(1),
 		"maxBuyIn":          uint64(1000),
-		"actionTimeoutSecs": ^uint64(0),
+		"actionTimeoutSecs": uint64(1),
 	}, "alice"), height, 0))
 	tableID := parseU64(t, attr(findEvent(createRes.Events, "TableCreated"), "tableId"))
 
@@ -212,7 +256,7 @@ func TestOverflow_PokerStartHandHugeActionTimeout(t *testing.T) {
 	res := a.deliverTx(txBytesSigned(t, "poker/start_hand", map[string]any{
 		"caller":  "alice",
 		"tableId": tableID,
-	}, "alice"), height, 0)
+	}, "alice"), height, math.MaxInt64)
 	if res.Code == 0 {
 		t.Fatalf("expected huge action timeout overflow failure")
 	}

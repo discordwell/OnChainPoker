@@ -3,6 +3,7 @@ package keeper
 import (
 	"context"
 	"fmt"
+	"math"
 
 	sdkmath "cosmossdk.io/math"
 
@@ -45,6 +46,12 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 	}
 	if req.MinBuyIn == 0 || req.MaxBuyIn == 0 || req.MaxBuyIn < req.MinBuyIn {
 		return nil, types.ErrInvalidTableCfg.Wrap("invalid buy-in range")
+	}
+	if req.ActionTimeoutSecs > uint64(math.MaxInt64) {
+		return nil, types.ErrInvalidTableCfg.Wrap("action_timeout_secs exceeds int64 max")
+	}
+	if req.DealerTimeoutSecs > uint64(math.MaxInt64) {
+		return nil, types.ErrInvalidTableCfg.Wrap("dealer_timeout_secs exceeds int64 max")
 	}
 
 	id, err := m.GetNextTableID(ctx)

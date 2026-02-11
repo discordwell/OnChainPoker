@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -295,6 +296,12 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		}
 		if msg.MinBuyIn == 0 || msg.MaxBuyIn == 0 || msg.MaxBuyIn < msg.MinBuyIn {
 			return &abci.ExecTxResult{Code: 1, Log: "invalid buy-in range"}
+		}
+		if msg.ActionTO > uint64(math.MaxInt64) {
+			return &abci.ExecTxResult{Code: 1, Log: "actionTimeoutSecs exceeds int64 max"}
+		}
+		if msg.DealerTO > uint64(math.MaxInt64) {
+			return &abci.ExecTxResult{Code: 1, Log: "dealerTimeoutSecs exceeds int64 max"}
 		}
 
 		id := a.st.NextTableID

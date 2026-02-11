@@ -271,6 +271,48 @@ func TestTick_SlashesBondAndMovesCoinsToFeeCollector(t *testing.T) {
 	require.Equal(t, uint64(5), tbl2.Seats[0].Bond)
 }
 
+func TestCreateTable_RejectsHugeTimeoutInputs(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x20).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:           creator,
+		SmallBlind:        1,
+		BigBlind:          2,
+		MinBuyIn:          100,
+		MaxBuyIn:          1000,
+		ActionTimeoutSecs: ^uint64(0),
+		DealerTimeoutSecs: 0,
+		PlayerBond:        0,
+		RakeBps:           0,
+		MaxPlayers:        9,
+		Label:             "huge-action-timeout",
+	})
+	require.ErrorContains(t, err, "action_timeout_secs exceeds int64 max")
+	next, getErr := k.GetNextTableID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, uint64(1), next)
+
+	_, err = ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:           creator,
+		SmallBlind:        1,
+		BigBlind:          2,
+		MinBuyIn:          100,
+		MaxBuyIn:          1000,
+		ActionTimeoutSecs: 0,
+		DealerTimeoutSecs: ^uint64(0),
+		PlayerBond:        0,
+		RakeBps:           0,
+		MaxPlayers:        9,
+		Label:             "huge-dealer-timeout",
+	})
+	require.ErrorContains(t, err, "dealer_timeout_secs exceeds int64 max")
+	next, getErr = k.GetNextTableID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, uint64(1), next)
+}
+
 func TestCreateTable_NextTableIDOverflow(t *testing.T) {
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
 	ctx := sdk.WrapSDKContext(sdkCtx)
