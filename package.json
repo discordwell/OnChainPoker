@@ -12,7 +12,7 @@
     "cosmos:localnet": "bash apps/cosmos/scripts/localnet.sh",
     "cosmos:multinet": "bash apps/cosmos/scripts/multinet.sh",
     "cosmos:faucet": "bash apps/cosmos/scripts/faucet.sh",
-    "test:unit": "pnpm -C packages/poker-engine test && pnpm -C packages/holdem-eval test && pnpm -C packages/ocp-crypto test && pnpm -C packages/dkg test && pnpm -C packages/ocp-shuffle test && pnpm -C packages/ocp-sdk test && pnpm -C apps/sim test && pnpm -C apps/coordinator test && pnpm chain:test",
+    "test:unit": "pnpm -C packages/poker-engine test && pnpm -C packages/holdem-eval test && pnpm -C packages/ocp-crypto test && pnpm -C packages/dkg test && pnpm -C packages/ocp-shuffle test && pnpm -C packages/ocp-sdk test && pnpm -C apps/sim test && pnpm -C apps/coordinator test && pnpm web:test && pnpm web:build && pnpm chain:test",
     "test": "pnpm test:unit",
     "chain:test": "cd apps/chain && go test ./...",
     "sdk:build": "pnpm -C packages/ocp-sdk build",
