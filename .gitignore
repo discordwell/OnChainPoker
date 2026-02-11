@@ -59,3 +59,7 @@ apps/chain/bin/
 apps/cosmos/.ocp*/
 apps/cosmos/bin/
 apps/cosmos/ocpd
+
+# Local agent notes
+AGENTS.md
+CLAUDE.md
