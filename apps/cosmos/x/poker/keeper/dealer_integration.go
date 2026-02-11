@@ -30,16 +30,19 @@ func (k Keeper) AbortHandRefundAllCommits(ctx context.Context, tableID, handID u
 		reason = "abort"
 	}
 
-	events := abortHandRefundAllCommits(t, reason)
+	events, err := abortHandRefundAllCommits(t, reason)
+	if err != nil {
+		return nil, err
+	}
 	if err := k.SetTable(ctx, t); err != nil {
 		return nil, err
 	}
 	return events, nil
 }
 
-func abortHandRefundAllCommits(t *types.Table, reason string) []sdk.Event {
+func abortHandRefundAllCommits(t *types.Table, reason string) ([]sdk.Event, error) {
 	if t == nil || t.Hand == nil {
-		return nil
+		return nil, nil
 	}
 	h := t.Hand
 	handID := h.HandId
@@ -50,7 +53,11 @@ func abortHandRefundAllCommits(t *types.Table, reason string) []sdk.Event {
 			continue
 		}
 		if i < len(h.TotalCommit) {
-			t.Seats[i].Stack += h.TotalCommit[i]
+			nextStack, err := addUint64Checked(t.Seats[i].Stack, h.TotalCommit[i], "seat stack refund")
+			if err != nil {
+				return nil, err
+			}
+			t.Seats[i].Stack = nextStack
 		}
 		t.Seats[i].Hole = []uint32{255, 255}
 	}
@@ -64,7 +71,7 @@ func abortHandRefundAllCommits(t *types.Table, reason string) []sdk.Event {
 			sdk.NewAttribute("handId", fmt.Sprintf("%d", handID)),
 			sdk.NewAttribute("reason", reason),
 		),
-	}
+	}, nil
 }
 
 // ApplyDealerReveal applies a dealer reveal (board card or showdown hole card) to the poker state machine.
