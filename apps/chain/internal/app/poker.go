@@ -86,8 +86,16 @@ func postBlindCommit(t *state.Table, seatIdx int, amount uint64) error {
 		put = s.Stack
 	}
 	s.Stack -= put
-	h.StreetCommit[seatIdx] += put
-	h.TotalCommit[seatIdx] += put
+	nextStreetCommit, err := addUint64Checked(h.StreetCommit[seatIdx], put, "street commit")
+	if err != nil {
+		return err
+	}
+	nextTotalCommit, err := addUint64Checked(h.TotalCommit[seatIdx], put, "total commit")
+	if err != nil {
+		return err
+	}
+	h.StreetCommit[seatIdx] = nextStreetCommit
+	h.TotalCommit[seatIdx] = nextTotalCommit
 	if s.Stack == 0 {
 		h.AllIn[seatIdx] = true
 	}
@@ -225,7 +233,10 @@ func applyBetTo(t *state.Table, seat int, desiredCommit uint64) error {
 	if desiredCommit <= currentCommit {
 		return fmt.Errorf("BetTo must exceed current street commitment")
 	}
-	maxCommit := currentCommit + s.Stack
+	maxCommit, err := addUint64Checked(currentCommit, s.Stack, "max commit")
+	if err != nil {
+		return err
+	}
 	if desiredCommit > maxCommit {
 		return fmt.Errorf("BetTo exceeds available chips")
 	}
@@ -277,8 +288,16 @@ func applyBetTo(t *state.Table, seat int, desiredCommit uint64) error {
 
 	delta := desiredCommit - currentCommit
 	s.Stack -= delta
-	h.StreetCommit[seat] += delta
-	h.TotalCommit[seat] += delta
+	nextStreetCommit, err := addUint64Checked(h.StreetCommit[seat], delta, "street commit")
+	if err != nil {
+		return err
+	}
+	nextTotalCommit, err := addUint64Checked(h.TotalCommit[seat], delta, "total commit")
+	if err != nil {
+		return err
+	}
+	h.StreetCommit[seat] = nextStreetCommit
+	h.TotalCommit[seat] = nextTotalCommit
 	if s.Stack == 0 {
 		h.AllIn[seat] = true
 	}
@@ -303,8 +322,16 @@ func applyCall(t *state.Table, seat int) error {
 		pay = s.Stack
 	}
 	s.Stack -= pay
-	h.StreetCommit[seat] += pay
-	h.TotalCommit[seat] += pay
+	nextStreetCommit, err := addUint64Checked(h.StreetCommit[seat], pay, "street commit")
+	if err != nil {
+		return err
+	}
+	nextTotalCommit, err := addUint64Checked(h.TotalCommit[seat], pay, "total commit")
+	if err != nil {
+		return err
+	}
+	h.StreetCommit[seat] = nextStreetCommit
+	h.TotalCommit[seat] = nextTotalCommit
 	if s.Stack == 0 {
 		h.AllIn[seat] = true
 	}
@@ -365,19 +392,19 @@ func secondMaxCommitThisStreet(hand *state.Hand, max uint64) uint64 {
 	return s
 }
 
-func returnUncalledStreetExcess(t *state.Table) {
+func returnUncalledStreetExcess(t *state.Table) error {
 	h := t.Hand
 	if h == nil {
-		return
+		return nil
 	}
 
 	max := maxCommitThisStreet(h)
 	if max == 0 {
-		return
+		return nil
 	}
 	second := secondMaxCommitThisStreet(h, max)
 	if second == max {
-		return
+		return nil
 	}
 
 	// Identify the unique max seat (if more than one seat has max, no uncalled).
@@ -387,29 +414,34 @@ func returnUncalledStreetExcess(t *state.Table) {
 			continue
 		}
 		if maxSeat != -1 {
-			return
+			return nil
 		}
 		maxSeat = i
 	}
 	if maxSeat == -1 {
-		return
+		return nil
 	}
 
 	excess := max - second
 	if excess == 0 {
-		return
+		return nil
 	}
 	seatState := t.Seats[maxSeat]
 	if seatState == nil {
-		return
+		return nil
 	}
 
-	seatState.Stack += excess
+	nextStack, err := addUint64Checked(seatState.Stack, excess, "seat stack")
+	if err != nil {
+		return err
+	}
+	seatState.Stack = nextStack
 	h.StreetCommit[maxSeat] -= excess
 	h.TotalCommit[maxSeat] -= excess
 	if seatState.Stack > 0 {
 		h.AllIn[maxSeat] = false
 	}
+	return nil
 }
 
 func advanceStreet(t *state.Table, events *[]abci.Event) {
@@ -445,10 +477,10 @@ func advanceStreet(t *state.Table, events *[]abci.Event) {
 	h.ActionOn = nextActiveToAct(t, h, h.ButtonSeat)
 }
 
-func completeByFolds(t *state.Table, events *[]abci.Event) {
+func completeByFolds(t *state.Table, events *[]abci.Event) error {
 	h := t.Hand
 	if h == nil {
-		return
+		return nil
 	}
 
 	winnerSeat := -1
@@ -461,18 +493,28 @@ func completeByFolds(t *state.Table, events *[]abci.Event) {
 	if winnerSeat == -1 {
 		// Should not happen; clear hand to avoid stuck state.
 		t.Hand = nil
-		return
+		return nil
 	}
 
 	// Ensure no uncalled excess remains before settlement.
-	returnUncalledStreetExcess(t)
+	if err := returnUncalledStreetExcess(t); err != nil {
+		return err
+	}
 
 	var potTotal uint64
 	for i := 0; i < 9; i++ {
-		potTotal += h.TotalCommit[i]
+		nextPot, err := addUint64Checked(potTotal, h.TotalCommit[i], "pot total")
+		if err != nil {
+			return err
+		}
+		potTotal = nextPot
 	}
 	if t.Seats[winnerSeat] != nil {
-		t.Seats[winnerSeat].Stack += potTotal
+		nextStack, err := addUint64Checked(t.Seats[winnerSeat].Stack, potTotal, "winner stack")
+		if err != nil {
+			return err
+		}
+		t.Seats[winnerSeat].Stack = nextStack
 	}
 
 	handId := h.HandID
@@ -495,26 +537,28 @@ func completeByFolds(t *state.Table, events *[]abci.Event) {
 			{Key: "pot", Value: fmt.Sprintf("%d", potTotal), Index: false},
 		},
 	})
+	return nil
 }
 
-func maybeAdvance(t *state.Table, events *[]abci.Event) {
+func maybeAdvance(t *state.Table, events *[]abci.Event) error {
 	h := t.Hand
 	if h == nil {
-		return
+		return nil
 	}
 
 	if countNotFolded(h) <= 1 {
-		completeByFolds(t, events)
-		return
+		return completeByFolds(t, events)
 	}
 
 	if !streetComplete(h) {
 		h.ActionOn = nextActiveToAct(t, h, h.ActionOn)
-		return
+		return nil
 	}
 
 	// End of betting street: return any uncalled excess, then advance.
-	returnUncalledStreetExcess(t)
+	if err := returnUncalledStreetExcess(t); err != nil {
+		return err
+	}
 
 	// Dealer module: do not reveal from a plaintext deck. Enter a reveal phase and
 	// require `dealer/finalize_reveal` to append the next public cards.
@@ -532,26 +576,39 @@ func maybeAdvance(t *state.Table, events *[]abci.Event) {
 		default:
 			h.Phase = state.PhaseAwaitShowdown
 		}
-		return
+		return nil
 	}
 
 	if h.Street == state.StreetRiver {
-		*events = append(*events, runoutAndSettleHand(t)...)
-		return
+		ev, err := runoutAndSettleHand(t)
+		if err != nil {
+			return err
+		}
+		*events = append(*events, ev...)
+		return nil
 	}
 
 	// If fewer than 2 contenders still have chips, there will be no further betting (runout to showdown).
 	if countWithChips(t, h) < 2 {
-		*events = append(*events, runoutAndSettleHand(t)...)
-		return
+		ev, err := runoutAndSettleHand(t)
+		if err != nil {
+			return err
+		}
+		*events = append(*events, ev...)
+		return nil
 	}
 
 	advanceStreet(t, events)
 
 	// Defensive: if action is impossible after advancing (e.g., all-in), run out immediately.
 	if t.Hand != nil && t.Hand.ActionOn == -1 {
-		*events = append(*events, runoutAndSettleHand(t)...)
+		ev, err := runoutAndSettleHand(t)
+		if err != nil {
+			return err
+		}
+		*events = append(*events, ev...)
 	}
+	return nil
 }
 
 func appendStreetRevealedEvent(t *state.Table, street string, cards []state.Card, events *[]abci.Event) {
@@ -809,7 +866,11 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8, nowUnix i
 		if _, more, err := dealerNextShowdownHolePos(t); err != nil {
 			return nil, err
 		} else if !more {
-			events = append(events, settleKnownShowdown(t)...)
+			ev, err := settleKnownShowdown(t)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, ev...)
 		}
 		if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
 			return nil, err
@@ -823,10 +884,10 @@ func applyDealerRevealToPoker(t *state.Table, pos uint8, cardID uint8, nowUnix i
 	}
 }
 
-func settleKnownShowdown(t *state.Table) []abci.Event {
+func settleKnownShowdown(t *state.Table) ([]abci.Event, error) {
 	h := t.Hand
 	if h == nil {
-		return nil
+		return nil, nil
 	}
 
 	events := []abci.Event{}
@@ -845,7 +906,7 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 				{Key: "reason", Value: "missing board cards", Index: false},
 			},
 		})
-		return events
+		return events, nil
 	}
 
 	var eligible [9]bool
@@ -853,7 +914,10 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 		eligible[i] = h.InHand[i] && !h.Folded[i]
 	}
 
-	pots := computeSidePots(h.TotalCommit, eligible)
+	pots, err := computeSidePots(h.TotalCommit, eligible)
+	if err != nil {
+		return nil, err
+	}
 	h.Pots = pots
 
 	events = append(events, abci.Event{
@@ -898,7 +962,11 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 					if t.Seats[i] == nil {
 						continue
 					}
-					t.Seats[i].Stack += h.TotalCommit[i]
+					nextStack, addErr := addUint64Checked(t.Seats[i].Stack, h.TotalCommit[i], "seat stack refund")
+					if addErr != nil {
+						return nil, addErr
+					}
+					t.Seats[i].Stack = nextStack
 				}
 				handId := h.HandID
 				for i := 0; i < 9; i++ {
@@ -916,7 +984,7 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 						{Key: "reason", Value: "showdown-eval-error: " + err.Error(), Index: false},
 					},
 				})
-				return events
+				return events, nil
 			}
 			potWinners[potIdx] = winners
 		}
@@ -934,9 +1002,17 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 			if t.Seats[seat] == nil {
 				continue
 			}
-			t.Seats[seat].Stack += share
+			nextStack, err := addUint64Checked(t.Seats[seat].Stack, share, "seat stack award")
+			if err != nil {
+				return nil, err
+			}
+			t.Seats[seat].Stack = nextStack
 			if i == 0 {
-				t.Seats[seat].Stack += rem
+				nextStack, err = addUint64Checked(t.Seats[seat].Stack, rem, "seat stack remainder award")
+				if err != nil {
+					return nil, err
+				}
+				t.Seats[seat].Stack = nextStack
 			}
 		}
 
@@ -971,7 +1047,7 @@ func settleKnownShowdown(t *state.Table) []abci.Event {
 			{Key: "reason", Value: "showdown", Index: true},
 		},
 	})
-	return events
+	return events, nil
 }
 
 func applyAction(t *state.Table, action string, amount uint64, nowUnix int64) *abci.ExecTxResult {
@@ -1031,7 +1107,9 @@ func applyAction(t *state.Table, action string, amount uint64, nowUnix int64) *a
 	// Advance / reveal / settle.
 	events := []abci.Event{}
 	_ = need // reserved for future event payloads
-	maybeAdvance(t, &events)
+	if err := maybeAdvance(t, &events); err != nil {
+		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+	}
 	if err := setRevealDeadlineIfAwaiting(t, nowUnix); err != nil {
 		return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 	}
@@ -1080,7 +1158,7 @@ func sameSeats(a []int, b []int) bool {
 	return true
 }
 
-func computeSidePots(totalCommit [9]uint64, eligibleForWin [9]bool) []state.Pot {
+func computeSidePots(totalCommit [9]uint64, eligibleForWin [9]bool) ([]state.Pot, error) {
 	type rem struct {
 		seat     int
 		amount   uint64
@@ -1104,7 +1182,10 @@ func computeSidePots(totalCommit [9]uint64, eligibleForWin [9]bool) []state.Pot 
 			}
 		}
 
-		potAmount := min * uint64(len(remaining))
+		potAmount, err := mulUint64Checked(min, uint64(len(remaining)), "pot amount")
+		if err != nil {
+			return nil, err
+		}
 		eligibleSeats := make([]int, 0, len(remaining))
 		for _, r := range remaining {
 			if r.eligible {
@@ -1126,13 +1207,17 @@ func computeSidePots(totalCommit [9]uint64, eligibleForWin [9]bool) []state.Pot 
 	merged := []state.Pot{}
 	for _, p := range potsByTier {
 		if len(merged) > 0 && sameSeats(merged[len(merged)-1].EligibleSeats, p.EligibleSeats) {
-			merged[len(merged)-1].Amount += p.Amount
+			nextAmt, err := addUint64Checked(merged[len(merged)-1].Amount, p.Amount, "merged pot amount")
+			if err != nil {
+				return nil, err
+			}
+			merged[len(merged)-1].Amount = nextAmt
 			continue
 		}
 		eligibleCopy := append([]int(nil), p.EligibleSeats...)
 		merged = append(merged, state.Pot{Amount: p.Amount, EligibleSeats: eligibleCopy})
 	}
-	return merged
+	return merged, nil
 }
 
 func joinSeats(seats []int) string {
@@ -1146,10 +1231,10 @@ func joinSeats(seats []int) string {
 	return strings.Join(parts, ",")
 }
 
-func runoutAndSettleHand(t *state.Table) []abci.Event {
+func runoutAndSettleHand(t *state.Table) ([]abci.Event, error) {
 	h := t.Hand
 	if h == nil {
-		return nil
+		return nil, nil
 	}
 
 	events := []abci.Event{}
@@ -1184,7 +1269,10 @@ func runoutAndSettleHand(t *state.Table) []abci.Event {
 		eligible[i] = h.InHand[i] && !h.Folded[i]
 	}
 
-	pots := computeSidePots(h.TotalCommit, eligible)
+	pots, err := computeSidePots(h.TotalCommit, eligible)
+	if err != nil {
+		return nil, err
+	}
 	h.Pots = pots
 
 	events = append(events, abci.Event{
@@ -1229,7 +1317,11 @@ func runoutAndSettleHand(t *state.Table) []abci.Event {
 					if t.Seats[i] == nil {
 						continue
 					}
-					t.Seats[i].Stack += h.TotalCommit[i]
+					nextStack, addErr := addUint64Checked(t.Seats[i].Stack, h.TotalCommit[i], "seat stack refund")
+					if addErr != nil {
+						return nil, addErr
+					}
+					t.Seats[i].Stack = nextStack
 				}
 				handId := h.HandID
 				for i := 0; i < 9; i++ {
@@ -1247,7 +1339,7 @@ func runoutAndSettleHand(t *state.Table) []abci.Event {
 						{Key: "reason", Value: "showdown-eval-error: " + err.Error(), Index: false},
 					},
 				})
-				return events
+				return events, nil
 			}
 			potWinners[potIdx] = winners
 		}
@@ -1265,9 +1357,17 @@ func runoutAndSettleHand(t *state.Table) []abci.Event {
 			if t.Seats[seat] == nil {
 				continue
 			}
-			t.Seats[seat].Stack += share
+			nextStack, err := addUint64Checked(t.Seats[seat].Stack, share, "seat stack award")
+			if err != nil {
+				return nil, err
+			}
+			t.Seats[seat].Stack = nextStack
 			if i == 0 {
-				t.Seats[seat].Stack += rem
+				nextStack, err = addUint64Checked(t.Seats[seat].Stack, rem, "seat stack remainder award")
+				if err != nil {
+					return nil, err
+				}
+				t.Seats[seat].Stack = nextStack
 			}
 		}
 
@@ -1303,5 +1403,5 @@ func runoutAndSettleHand(t *state.Table) []abci.Event {
 		},
 	})
 
-	return events
+	return events, nil
 }

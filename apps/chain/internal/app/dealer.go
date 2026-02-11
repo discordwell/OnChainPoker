@@ -489,7 +489,10 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 	if commit == nil {
 		// Missing commit after the commit deadline is slashable.
 		dkgSlash(dkg, msg.DealerID)
-		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		slashedAmt, err = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		if err != nil {
+			return nil, err
+		}
 		dkgMarkPenalized(dkg, msg.DealerID)
 	} else {
 		ok, err := dkgVerifyShare(commit.Commitments, toMem.Index, shareMsg.Share)
@@ -500,7 +503,10 @@ func dealerDKGComplaintInvalid(st *state.State, msg codec.DealerDKGComplaintInva
 			return nil, fmt.Errorf("share matches commitments")
 		}
 		dkgSlash(dkg, msg.DealerID)
-		slashedAmt = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		slashedAmt, err = jailAndSlashValidator(st, msg.DealerID, slashBpsDKG)
+		if err != nil {
+			return nil, err
+		}
 		dkgMarkPenalized(dkg, msg.DealerID)
 	}
 
@@ -810,7 +816,10 @@ func dealerFinalizeEpoch(st *state.State, msg codec.DealerFinalizeEpochTx) (*abc
 		if dkgIsPenalized(dkg, vid) {
 			continue
 		}
-		amt := jailAndSlashValidator(st, vid, slashBpsDKG)
+		amt, err := jailAndSlashValidator(st, vid, slashBpsDKG)
+		if err != nil {
+			return nil, err
+		}
 		dkgMarkPenalized(dkg, vid)
 		res.Events = append(res.Events, abci.Event{
 			Type: "ValidatorSlashed",
@@ -856,7 +865,10 @@ func dealerDKGTimeout(st *state.State, msg codec.DealerDKGTimeoutTx) (*abci.Exec
 			continue
 		}
 		dkgSlash(dkg, m.ValidatorID)
-		amt := jailAndSlashValidator(st, m.ValidatorID, slashBpsDKG)
+		amt, err := jailAndSlashValidator(st, m.ValidatorID, slashBpsDKG)
+		if err != nil {
+			return nil, err
+		}
 		dkgMarkPenalized(dkg, m.ValidatorID)
 		events = append(events, abci.Event{
 			Type: "ValidatorSlashed",
@@ -1743,9 +1755,9 @@ func dealerHoleEncSharesReady(st *state.State, t *state.Table) (bool, error) {
 	return true, nil
 }
 
-func abortHandRefundAllCommits(t *state.Table, reason string) []abci.Event {
+func abortHandRefundAllCommits(t *state.Table, reason string) ([]abci.Event, error) {
 	if t == nil || t.Hand == nil {
-		return nil
+		return nil, nil
 	}
 	h := t.Hand
 	handID := h.HandID
@@ -1755,7 +1767,11 @@ func abortHandRefundAllCommits(t *state.Table, reason string) []abci.Event {
 		if t.Seats[i] == nil {
 			continue
 		}
-		t.Seats[i].Stack += h.TotalCommit[i]
+		nextStack, err := addUint64Checked(t.Seats[i].Stack, h.TotalCommit[i], "seat stack refund")
+		if err != nil {
+			return nil, err
+		}
+		t.Seats[i].Stack = nextStack
 		t.Seats[i].Hole = [2]state.Card{}
 	}
 
@@ -1770,7 +1786,7 @@ func abortHandRefundAllCommits(t *state.Table, reason string) []abci.Event {
 				{Key: "reason", Value: reason, Index: false},
 			},
 		},
-	}
+	}, nil
 }
 
 func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, nowUnix int64) (*abci.ExecTxResult, error) {
@@ -1820,7 +1836,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 
 		qual := epochQualMembers(epoch)
 		if len(qual) == 0 {
-			events = append(events, abortHandRefundAllCommits(t, "dealer: no qualified committee members")...)
+			abortEv, err := abortHandRefundAllCommits(t, "dealer: no qualified committee members")
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, abortEv...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
@@ -1840,7 +1860,10 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 		// Slash the expected shuffler for the next round (shuffleStep starts at 0).
 		expectID := qual[dh.ShuffleStep].ValidatorID
 		if epochSlash(epoch, expectID) {
-			amt := jailAndSlashValidator(st, expectID, slashBpsHandDealer)
+			amt, err := jailAndSlashValidator(st, expectID, slashBpsHandDealer)
+			if err != nil {
+				return nil, err
+			}
 			events = append(events, abci.Event{
 				Type: "ValidatorSlashed",
 				Attributes: []abci.EventAttribute{
@@ -1856,7 +1879,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 
 		qual = epochQualMembers(epoch)
 		if len(qual) < threshold {
-			events = append(events, abortHandRefundAllCommits(t, "dealer: committee below threshold after shuffle timeout")...)
+			abortEv, err := abortHandRefundAllCommits(t, "dealer: committee below threshold after shuffle timeout")
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, abortEv...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
@@ -1889,7 +1916,10 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 		}
 		for _, id := range missing {
 			if epochSlash(epoch, id) {
-				amt := jailAndSlashValidator(st, id, slashBpsHandDealer)
+				amt, err := jailAndSlashValidator(st, id, slashBpsHandDealer)
+				if err != nil {
+					return nil, err
+				}
 				events = append(events, abci.Event{
 					Type: "ValidatorSlashed",
 					Attributes: []abci.EventAttribute{
@@ -1905,7 +1935,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 		}
 
 		if len(epochQualMembers(epoch)) < threshold {
-			events = append(events, abortHandRefundAllCommits(t, "dealer: committee below threshold after hole enc shares timeout")...)
+			abortEv, err := abortHandRefundAllCommits(t, "dealer: committee below threshold after hole enc shares timeout")
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, abortEv...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
@@ -1914,7 +1948,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 			return nil, err
 		}
 		if !ready {
-			events = append(events, abortHandRefundAllCommits(t, "dealer: insufficient hole shares by deadline")...)
+			abortEv, err := abortHandRefundAllCommits(t, "dealer: insufficient hole shares by deadline")
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, abortEv...)
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
@@ -1958,7 +1996,10 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 	missing := dealerMissingPubShares(epoch, dh, pos)
 	for _, id := range missing {
 		if epochSlash(epoch, id) {
-			amt := jailAndSlashValidator(st, id, slashBpsHandDealer)
+			amt, err := jailAndSlashValidator(st, id, slashBpsHandDealer)
+			if err != nil {
+				return nil, err
+			}
 			events = append(events, abci.Event{
 				Type: "ValidatorSlashed",
 				Attributes: []abci.EventAttribute{
@@ -1975,7 +2016,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 	}
 
 	if len(epochQualMembers(epoch)) < threshold {
-		events = append(events, abortHandRefundAllCommits(t, "dealer: committee below threshold after reveal timeout")...)
+		abortEv, err := abortHandRefundAllCommits(t, "dealer: committee below threshold after reveal timeout")
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, abortEv...)
 		return &abci.ExecTxResult{Code: 0, Events: events}, nil
 	}
 

@@ -199,8 +199,13 @@ func (s *State) Balance(addr string) uint64 {
 	return s.Accounts[addr]
 }
 
-func (s *State) Credit(addr string, amount uint64) {
-	s.Accounts[addr] = s.Accounts[addr] + amount
+func (s *State) Credit(addr string, amount uint64) error {
+	bal := s.Accounts[addr]
+	if bal > ^uint64(0)-amount {
+		return fmt.Errorf("balance overflow: have=%d add=%d", bal, amount)
+	}
+	s.Accounts[addr] = bal + amount
+	return nil
 }
 
 func (s *State) Debit(addr string, amount uint64) error {

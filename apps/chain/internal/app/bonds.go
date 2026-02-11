@@ -12,15 +12,15 @@ import (
 // anti-grief mechanism: once a player burns through their bond via timeouts,
 // they are removed between hands and their remaining stack is returned to their
 // bank balance.
-func ejectBondlessSeats(st *state.State, t *state.Table) []abci.Event {
+func ejectBondlessSeats(st *state.State, t *state.Table) ([]abci.Event, error) {
 	if st == nil || t == nil {
-		return nil
+		return nil, nil
 	}
 	if t.Hand != nil {
-		return nil
+		return nil, nil
 	}
 	if t.Params.PlayerBond == 0 {
-		return nil
+		return nil, nil
 	}
 
 	events := []abci.Event{}
@@ -33,7 +33,9 @@ func ejectBondlessSeats(st *state.State, t *state.Table) []abci.Event {
 			continue
 		}
 
-		st.Credit(s.Player, s.Stack)
+		if err := st.Credit(s.Player, s.Stack); err != nil {
+			return nil, err
+		}
 		events = append(events, abci.Event{
 			Type: "PlayerEjected",
 			Attributes: []abci.EventAttribute{
@@ -46,5 +48,5 @@ func ejectBondlessSeats(st *state.State, t *state.Table) []abci.Event {
 		})
 		t.Seats[i] = nil
 	}
-	return events
+	return events, nil
 }

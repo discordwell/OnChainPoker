@@ -77,7 +77,11 @@ func stakingBond(st *state.State, msg codec.StakingBondTx) (*abci.ExecTxResult, 
 	if err := st.Debit(id, msg.Amount); err != nil {
 		return nil, err
 	}
-	v.Bond += msg.Amount
+	nextBond, err := addUint64Checked(v.Bond, msg.Amount, "validator bond")
+	if err != nil {
+		return nil, err
+	}
+	v.Bond = nextBond
 	return okEvent("ValidatorBonded", map[string]string{
 		"validatorId": id,
 		"amount":      fmt.Sprintf("%d", msg.Amount),
@@ -104,7 +108,9 @@ func stakingUnbond(st *state.State, msg codec.StakingUnbondTx) (*abci.ExecTxResu
 		return nil, fmt.Errorf("insufficient bond: have=%d need=%d", v.Bond, msg.Amount)
 	}
 	v.Bond -= msg.Amount
-	st.Credit(id, msg.Amount)
+	if err := st.Credit(id, msg.Amount); err != nil {
+		return nil, err
+	}
 	return okEvent("ValidatorUnbonded", map[string]string{
 		"validatorId": id,
 		"amount":      fmt.Sprintf("%d", msg.Amount),

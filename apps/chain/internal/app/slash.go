@@ -29,23 +29,25 @@ func slashAmount(bond uint64, bps uint32) uint64 {
 	return q
 }
 
-func jailAndSlashValidator(st *state.State, validatorID string, bps uint32) uint64 {
+func jailAndSlashValidator(st *state.State, validatorID string, bps uint32) (uint64, error) {
 	if st == nil || validatorID == "" {
-		return 0
+		return 0, nil
 	}
 	v := findValidator(st, validatorID)
 	if v == nil {
-		return 0
+		return 0, nil
 	}
 
 	amt := slashAmount(v.Bond, bps)
 	if amt > 0 {
 		v.Bond -= amt
-		st.Credit(treasuryAccount, amt)
+		if err := st.Credit(treasuryAccount, amt); err != nil {
+			return 0, err
+		}
 	}
 	if v.Status != state.ValidatorJailed {
 		v.Status = state.ValidatorJailed
 	}
 	v.SlashCount++
-	return amt
+	return amt, nil
 }

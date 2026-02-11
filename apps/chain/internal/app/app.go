@@ -240,7 +240,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		} else if v.Status != state.ValidatorActive {
 			return &abci.ExecTxResult{Code: 1, Log: "mint authority is not active"}
 		}
-		a.st.Credit(msg.To, msg.Amount)
+		if err := a.st.Credit(msg.To, msg.Amount); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		return okEvent("BankMinted", map[string]string{
 			"to":     msg.To,
 			"amount": fmt.Sprintf("%d", msg.Amount),
@@ -261,7 +263,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		if err := a.st.Debit(msg.From, msg.Amount); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
-		a.st.Credit(msg.To, msg.Amount)
+		if err := a.st.Credit(msg.To, msg.Amount); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		return okEvent("BankSent", map[string]string{
 			"from":   msg.From,
 			"to":     msg.To,
@@ -532,7 +536,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			ev.Events = append(ev.Events, holeCardEvents(msg.TableID, handId, t)...)
 			// If no action is possible (everyone all-in), run out and settle immediately.
 			if h.ActionOn == -1 {
-				ev.Events = append(ev.Events, runoutAndSettleHand(t)...)
+				settleEv, err := runoutAndSettleHand(t)
+				if err != nil {
+					return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+				}
+				ev.Events = append(ev.Events, settleEv...)
 			}
 		}
 
@@ -540,7 +548,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		if t.Hand == nil {
-			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
+			ejectEv, err := ejectBondlessSeats(a.st, t)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			ev.Events = append(ev.Events, ejectEv...)
 		}
 		return ev
 
@@ -591,7 +603,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			},
 		})
 		if t.Hand == nil {
-			res.Events = append(res.Events, ejectBondlessSeats(a.st, t)...)
+			ejectEv, err := ejectBondlessSeats(a.st, t)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			res.Events = append(res.Events, ejectEv...)
 		}
 		return res
 
@@ -696,7 +712,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 
 		res.Events = append(prefix, res.Events...)
 		if t.Hand == nil {
-			res.Events = append(res.Events, ejectBondlessSeats(a.st, t)...)
+			ejectEv, err := ejectBondlessSeats(a.st, t)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			res.Events = append(res.Events, ejectEv...)
 		}
 		return res
 
@@ -730,7 +750,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			}
 			amount += s.Bond
 		}
-		a.st.Credit(msg.Player, amount)
+		if err := a.st.Credit(msg.Player, amount); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
 		t.Seats[seat] = nil
 
 		return okEvent("PlayerLeft", map[string]string{
@@ -985,7 +1007,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		if t.Hand == nil {
-			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
+			ejectEv, err := ejectBondlessSeats(a.st, t)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			ev.Events = append(ev.Events, ejectEv...)
 		}
 		return ev
 
@@ -1003,7 +1029,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
 		}
 		if t.Hand == nil {
-			ev.Events = append(ev.Events, ejectBondlessSeats(a.st, t)...)
+			ejectEv, err := ejectBondlessSeats(a.st, t)
+			if err != nil {
+				return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+			}
+			ev.Events = append(ev.Events, ejectEv...)
 		}
 		return ev
 
