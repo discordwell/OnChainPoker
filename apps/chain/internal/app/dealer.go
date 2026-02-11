@@ -188,10 +188,22 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 	}
 
 	startH := st.Height
-	commitDL := startH + int64(commitBlocks)
-	complaintDL := commitDL + int64(complaintBlocks)
-	revealDL := complaintDL + int64(revealBlocks)
-	finalizeDL := revealDL + int64(finalizeBlocks)
+	commitDL, err := addInt64AndU64Checked(startH, commitBlocks, "dkg commit deadline")
+	if err != nil {
+		return nil, err
+	}
+	complaintDL, err := addInt64AndU64Checked(commitDL, complaintBlocks, "dkg complaint deadline")
+	if err != nil {
+		return nil, err
+	}
+	revealDL, err := addInt64AndU64Checked(complaintDL, revealBlocks, "dkg reveal deadline")
+	if err != nil {
+		return nil, err
+	}
+	finalizeDL, err := addInt64AndU64Checked(revealDL, finalizeBlocks, "dkg finalize deadline")
+	if err != nil {
+		return nil, err
+	}
 
 	st.Dealer.DKG = &state.DealerDKG{
 		EpochID:           epochID,
@@ -976,13 +988,17 @@ func dealerInitHand(st *state.State, t *state.Table, msg codec.DealerInitHandTx,
 	}
 
 	to := tableDealerTimeoutSecs(t)
+	shuffleDeadline, err := addInt64AndU64Checked(nowUnix, to, "dealer shuffle deadline")
+	if err != nil {
+		return nil, err
+	}
 	h.Dealer = &state.DealerHand{
 		EpochID:  epoch.EpochID,
 		PKHand:   append([]byte(nil), pkHand.Bytes()...),
 		DeckSize: deckSize,
 		Deck:     deck,
 
-		ShuffleDeadline:    nowUnix + int64(to),
+		ShuffleDeadline:    shuffleDeadline,
 		HoleSharesDeadline: 0,
 		RevealPos:          255,
 		RevealDeadline:     0,
@@ -1078,7 +1094,11 @@ func dealerSubmitShuffle(st *state.State, t *state.Table, msg codec.DealerSubmit
 	}
 	dh.Deck = deckOut
 	dh.ShuffleStep = msg.Round
-	dh.ShuffleDeadline = nowUnix + int64(tableDealerTimeoutSecs(t))
+	shuffleDeadline, err := addInt64AndU64Checked(nowUnix, tableDealerTimeoutSecs(t), "dealer shuffle deadline")
+	if err != nil {
+		return nil, err
+	}
+	dh.ShuffleDeadline = shuffleDeadline
 
 	sum := sha256.Sum256(msg.ProofBytes)
 	proofHash := hex.EncodeToString(sum[:])
@@ -1146,7 +1166,11 @@ func dealerFinalizeDeck(st *state.State, t *state.Table, msg codec.DealerFinaliz
 	dh.HolePos = holePos
 	dh.Cursor = pos
 	dh.ShuffleDeadline = 0
-	dh.HoleSharesDeadline = nowUnix + int64(tableDealerTimeoutSecs(t))
+	holeSharesDeadline, err := addInt64AndU64Checked(nowUnix, tableDealerTimeoutSecs(t), "dealer hole shares deadline")
+	if err != nil {
+		return nil, err
+	}
+	dh.HoleSharesDeadline = holeSharesDeadline
 	dh.RevealPos = 255
 	dh.RevealDeadline = 0
 
@@ -1897,7 +1921,11 @@ func dealerTimeout(st *state.State, t *state.Table, msg codec.DealerTimeoutTx, n
 			return &abci.ExecTxResult{Code: 0, Events: events}, nil
 		}
 
-		dh.ShuffleDeadline = nowUnix + int64(to)
+		shuffleDeadline, err := addInt64AndU64Checked(nowUnix, to, "dealer shuffle deadline")
+		if err != nil {
+			return nil, err
+		}
+		dh.ShuffleDeadline = shuffleDeadline
 		return &abci.ExecTxResult{Code: 0, Events: events}, nil
 	}
 

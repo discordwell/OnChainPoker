@@ -300,7 +300,11 @@ func (m msgServer) finalizeDeck(ctx context.Context, tableID, handID uint64) ([]
 
 	dh.Finalized = true
 	dh.ShuffleDeadline = 0
-	dh.HoleSharesDeadline = nowUnix + int64(to)
+	holeSharesDeadline, err := addInt64AndU64Checked(nowUnix, to, "dealer hole shares deadline")
+	if err != nil {
+		return nil, err
+	}
+	dh.HoleSharesDeadline = holeSharesDeadline
 
 	// Assign hole card positions deterministically.
 	holePos := make([]uint32, 18)
@@ -633,7 +637,11 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 			return append(events, deckEvents...), nil
 		}
 
-		dh.ShuffleDeadline = nowUnix + int64(to)
+		shuffleDeadline, err := addInt64AndU64Checked(nowUnix, to, "dealer shuffle deadline")
+		if err != nil {
+			return nil, err
+		}
+		dh.ShuffleDeadline = shuffleDeadline
 		if err := m.SetHand(ctx, tableID, handID, dh); err != nil {
 			return nil, err
 		}

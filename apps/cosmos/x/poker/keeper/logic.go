@@ -1064,7 +1064,11 @@ func setRevealDeadlineIfAwaiting(t *types.Table, nowUnix int64) error {
 		return fmt.Errorf("invalid dealerTimeoutSecs")
 	}
 	dh.RevealPos = pos
-	dh.RevealDeadline = nowUnix + int64(to)
+	deadline, err := addInt64AndU64Checked(nowUnix, to, "reveal deadline")
+	if err != nil {
+		return err
+	}
+	dh.RevealDeadline = deadline
 	return nil
 }
 
@@ -1084,7 +1088,11 @@ func setActionDeadlineIfBetting(t *types.Table, nowUnix int64) error {
 	if to == 0 {
 		return fmt.Errorf("invalid actionTimeoutSecs")
 	}
-	h.ActionDeadline = nowUnix + int64(to)
+	deadline, err := addInt64AndU64Checked(nowUnix, to, "action deadline")
+	if err != nil {
+		return err
+	}
+	h.ActionDeadline = deadline
 	return nil
 }
 

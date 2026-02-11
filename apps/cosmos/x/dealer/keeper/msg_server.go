@@ -109,10 +109,22 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	startH := sdkCtx.BlockHeight()
-	commitDL := startH + int64(commitBlocks)
-	complaintDL := commitDL + int64(complaintBlocks)
-	revealDL := complaintDL + int64(revealBlocks)
-	finalizeDL := revealDL + int64(finalizeBlocks)
+	commitDL, err := addInt64AndU64Checked(startH, commitBlocks, "dkg commit deadline")
+	if err != nil {
+		return nil, err
+	}
+	complaintDL, err := addInt64AndU64Checked(commitDL, complaintBlocks, "dkg complaint deadline")
+	if err != nil {
+		return nil, err
+	}
+	revealDL, err := addInt64AndU64Checked(complaintDL, revealBlocks, "dkg reveal deadline")
+	if err != nil {
+		return nil, err
+	}
+	finalizeDL, err := addInt64AndU64Checked(revealDL, finalizeBlocks, "dkg finalize deadline")
+	if err != nil {
+		return nil, err
+	}
 
 	dkg := &dealertypes.DealerDKG{
 		EpochId:           epochID,
@@ -745,6 +757,10 @@ func (m msgServer) InitHand(ctx context.Context, req *dealertypes.MsgInitHand) (
 
 	nowUnix := sdk.UnwrapSDKContext(ctx).BlockTime().Unix()
 	to := tableDealerTimeoutSecs(t)
+	shuffleDeadline, err := addInt64AndU64Checked(nowUnix, to, "dealer shuffle deadline")
+	if err != nil {
+		return nil, err
+	}
 
 	dh := &dealertypes.DealerHand{
 		EpochId:            epoch.EpochId,
@@ -753,7 +769,7 @@ func (m msgServer) InitHand(ctx context.Context, req *dealertypes.MsgInitHand) (
 		Deck:               deck,
 		ShuffleStep:        0,
 		Finalized:          false,
-		ShuffleDeadline:    nowUnix + int64(to),
+		ShuffleDeadline:    shuffleDeadline,
 		HoleSharesDeadline: 0,
 		PubShares:          []dealertypes.DealerPubShare{},
 		EncShares:          []dealertypes.DealerEncShare{},
@@ -872,7 +888,11 @@ func (m msgServer) SubmitShuffle(ctx context.Context, req *dealertypes.MsgSubmit
 
 	dh.Deck = deckOut
 	dh.ShuffleStep = req.Round
-	dh.ShuffleDeadline = nowUnix + int64(tableDealerTimeoutSecs(t))
+	shuffleDeadline, err := addInt64AndU64Checked(nowUnix, tableDealerTimeoutSecs(t), "dealer shuffle deadline")
+	if err != nil {
+		return nil, err
+	}
+	dh.ShuffleDeadline = shuffleDeadline
 
 	if err := m.SetHand(ctx, req.TableId, req.HandId, dh); err != nil {
 		return nil, err
