@@ -4,6 +4,10 @@
   "packageManager": "pnpm@10.28.2",
   "scripts": {
     "dev": "bash apps/chain/scripts/localnet.sh",
+    "web:dev": "pnpm -C apps/web dev",
+    "web:build": "pnpm -C apps/web build",
+    "web:preview": "pnpm -C apps/web preview",
+    "web:test": "pnpm -C apps/web test",
     "localnet": "bash apps/chain/scripts/localnet.sh",
     "cosmos:localnet": "bash apps/cosmos/scripts/localnet.sh",
     "cosmos:multinet": "bash apps/cosmos/scripts/multinet.sh",

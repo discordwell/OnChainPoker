@@ -36,3 +36,69 @@ jobs:
 
       - name: Unit Tests + Build
         run: pnpm test
+
+  dealer-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/chain/go.mod
+          cache: true
+          cache-dependency-path: apps/chain/go.sum
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Dealer Flow Smoke (Localnet)
+        run: |
+          set -euo pipefail
+
+          LOG="$RUNNER_TEMP/localnet.log"
+          OCP_HOME="$RUNNER_TEMP/ocp-home"
+          OCP_ABCI_ADDR="tcp://127.0.0.1:26658"
+          OCP_UNSAFE_ALLOW_DEALER_STUB=1
+          export OCP_HOME OCP_ABCI_ADDR OCP_UNSAFE_ALLOW_DEALER_STUB
+
+          bash apps/chain/scripts/localnet.sh >"$LOG" 2>&1 &
+          LOCALNET_PID=$!
+
+          cleanup() {
+            kill "$LOCALNET_PID" >/dev/null 2>&1 || true
+            wait "$LOCALNET_PID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          ready=0
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:26657/status >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "$ready" -ne 1 ]]; then
+            echo "localnet did not become ready"
+            tail -n 200 "$LOG" || true
+            exit 1
+          fi
+
+          if ! OCP_RPC=http://127.0.0.1:26657 pnpm ws7:play_hand_dealer; then
+            tail -n 200 "$LOG" || true
+            exit 1
+          fi

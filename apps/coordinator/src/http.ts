@@ -49,6 +49,27 @@ function asNumber(x: unknown): number | null {
   return null;
 }
 
+function decodeU8Array(raw: unknown): number[] | null {
+  if (Array.isArray(raw)) {
+    const out: number[] = [];
+    for (const v of raw) {
+      const n = asNumber(v);
+      if (n == null || !Number.isInteger(n) || n < 0 || n > 255) return null;
+      out.push(n);
+    }
+    return out;
+  }
+
+  if (typeof raw === "string" && raw.length > 0) {
+    try {
+      return Array.from(Buffer.from(raw, "base64"), (b) => Number(b));
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 function v0ExpectedRevealPos(table: any): number | null {
   const h = table?.hand;
   const dh = h?.dealer;
@@ -59,14 +80,14 @@ function v0ExpectedRevealPos(table: any): number | null {
 
   if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver") {
     const cursor = asNumber(dh.cursor) ?? 0;
-    const boardLen = Array.isArray(h.board) ? h.board.length : 0;
+    const boardLen = decodeU8Array(h.board)?.length ?? 0;
     const pos = cursor + boardLen;
     return Number.isFinite(pos) ? pos : null;
   }
 
   if (phase === "awaitShowdown") {
-    const holePos: unknown = dh.holePos;
-    if (!Array.isArray(holePos) || holePos.length !== 18) return null;
+    const holePos = decodeU8Array(dh.holePos);
+    if (!holePos || holePos.length !== 18) return null;
 
     const reveals = new Set<number>();
     if (Array.isArray(dh.reveals)) {
