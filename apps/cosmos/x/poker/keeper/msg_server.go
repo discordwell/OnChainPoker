@@ -51,7 +51,11 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 	if err != nil {
 		return nil, err
 	}
-	if err := m.SetNextTableID(ctx, id+1); err != nil {
+	nextID, err := addUint64Checked(id, 1, "next table id")
+	if err != nil {
+		return nil, types.ErrInvalidRequest.Wrap(err.Error())
+	}
+	if err := m.SetNextTableID(ctx, nextID); err != nil {
 		return nil, err
 	}
 
@@ -216,7 +220,11 @@ func (m msgServer) StartHand(ctx context.Context, req *types.MsgStartHand) (*typ
 	}
 
 	handID := t.NextHandId
-	t.NextHandId++
+	nextHandID, err := addUint64Checked(handID, 1, "next hand id")
+	if err != nil {
+		return nil, types.ErrInvalidRequest.Wrap(err.Error())
+	}
+	t.NextHandId = nextHandID
 
 	inHand := make([]bool, 9)
 	for i := 0; i < 9; i++ {

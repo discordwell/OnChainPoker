@@ -216,7 +216,11 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 		FinalizeDeadline:  finalizeDL,
 		RandEpoch:         append([]byte(nil), randEpoch...),
 	}
-	st.Dealer.NextEpochID = epochID + 1
+	nextEpochID, err := addUint64Checked(epochID, 1, "next epoch id")
+	if err != nil {
+		return nil, err
+	}
+	st.Dealer.NextEpochID = nextEpochID
 
 	ev := okEvent("DealerEpochBegun", map[string]string{
 		"epochId":           fmt.Sprintf("%d", epochID),

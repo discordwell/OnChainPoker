@@ -298,7 +298,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		}
 
 		id := a.st.NextTableID
-		a.st.NextTableID++
+		nextTableID, err := addUint64Checked(id, 1, "next table id")
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		a.st.NextTableID = nextTableID
 		t := &state.Table{
 			ID:      id,
 			Creator: msg.Creator,
@@ -411,7 +415,11 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 			return &abci.ExecTxResult{Code: 1, Log: "hand already in progress"}
 		}
 		handId := t.NextHandID
-		t.NextHandID++
+		nextHandID, err := addUint64Checked(handId, 1, "next hand id")
+		if err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		t.NextHandID = nextHandID
 
 		activeSeats := occupiedSeatsWithStack(t)
 		if len(activeSeats) < 2 {

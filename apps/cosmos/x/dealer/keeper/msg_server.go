@@ -84,6 +84,10 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	if epochID != next {
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("unexpected epoch_id: expected %d got %d", next, epochID)
 	}
+	nextEpochID, err := addUint64Checked(epochID, 1, "next epoch id")
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
+	}
 
 	members, randEpoch, err := sampleMembers(ctx, m.committeeStakingKeeper, epochID, req.RandEpoch, int(req.CommitteeSize))
 	if err != nil {
@@ -145,7 +149,7 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	if err := m.SetDKG(ctx, dkg); err != nil {
 		return nil, err
 	}
-	if err := m.SetNextEpochID(ctx, epochID+1); err != nil {
+	if err := m.SetNextEpochID(ctx, nextEpochID); err != nil {
 		return nil, err
 	}
 

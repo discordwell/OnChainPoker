@@ -3,6 +3,7 @@ package keeper_test
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -268,4 +269,134 @@ func TestTick_SlashesBondAndMovesCoinsToFeeCollector(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, tbl2)
 	require.Equal(t, uint64(5), tbl2.Seats[0].Bond)
+}
+
+func TestCreateTable_NextTableIDOverflow(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x21).String()
+
+	require.NoError(t, k.SetNextTableID(ctx, ^uint64(0)))
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:           creator,
+		SmallBlind:        1,
+		BigBlind:          2,
+		MinBuyIn:          100,
+		MaxBuyIn:          1000,
+		ActionTimeoutSecs: 0,
+		DealerTimeoutSecs: 0,
+		PlayerBond:        0,
+		RakeBps:           0,
+		MaxPlayers:        9,
+		Label:             "overflow",
+	})
+	require.ErrorContains(t, err, "next table id overflows uint64")
+
+	next, getErr := k.GetNextTableID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, ^uint64(0), next)
+}
+
+func TestStartHand_NextHandIDOverflow(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0x31).String()
+	p1 := addr(0x32).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:           p0,
+		SmallBlind:        1,
+		BigBlind:          2,
+		MinBuyIn:          100,
+		MaxBuyIn:          1000,
+		ActionTimeoutSecs: 0,
+		DealerTimeoutSecs: 0,
+		PlayerBond:        0,
+		RakeBps:           0,
+		MaxPlayers:        9,
+		Label:             "hand-overflow",
+	})
+	require.NoError(t, err)
+	_, err = ms.Sit(ctx, &types.MsgSit{Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+	_, err = ms.Sit(ctx, &types.MsgSit{Player: p1, TableId: 1, Seat: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	tbl.NextHandId = ^uint64(0)
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	_, err = ms.StartHand(ctx, &types.MsgStartHand{Caller: p0, TableId: 1})
+	require.ErrorContains(t, err, "next hand id overflows uint64")
+
+	tbl2, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl2)
+	require.Equal(t, ^uint64(0), tbl2.NextHandId)
+	require.Nil(t, tbl2.Hand)
+}
+
+func TestTick_HugeActionTimeoutOverflowDoesNotMutate(t *testing.T) {
+	now := time.Unix(math.MaxInt64, 0).UTC()
+	sdkCtx, k, ms, _ := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0x41)
+	p1 := addr(0x42)
+
+	tbl := &types.Table{
+		Id:      1,
+		Creator: p0.String(),
+		Label:   "tick-overflow",
+		Params: types.TableParams{
+			MaxPlayers:        9,
+			SmallBlind:        1,
+			BigBlind:          2,
+			MinBuyIn:          1,
+			MaxBuyIn:          1000,
+			ActionTimeoutSecs: 1,
+			DealerTimeoutSecs: 0,
+			PlayerBond:        0,
+			RakeBps:           0,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: -1,
+		Hand: &types.Hand{
+			HandId:       1,
+			Phase:        types.HandPhase_HAND_PHASE_BETTING,
+			Street:       types.Street_STREET_PREFLOP,
+			ActionOn:     0,
+			BetTo:        0,
+			IntervalId:   0,
+			InHand:       make([]bool, 9),
+			Folded:       make([]bool, 9),
+			AllIn:        make([]bool, 9),
+			StreetCommit: make([]uint64, 9),
+			TotalCommit:  make([]uint64, 9),
+			LastIntervalActed: []int32{
+				-1, -1, -1, -1, -1, -1, -1, -1, -1,
+			},
+			ActionDeadline: 0,
+		},
+	}
+	tbl.Hand.InHand[0] = true
+	tbl.Hand.InHand[1] = true
+	tbl.Seats[0] = &types.Seat{Player: p0.String(), Stack: 100, Bond: 0, Hole: []uint32{255, 255}}
+	tbl.Seats[1] = &types.Seat{Player: p1.String(), Stack: 100, Bond: 0, Hole: []uint32{255, 255}}
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: p0.String(), TableId: 1})
+	require.ErrorContains(t, err, "action deadline overflows int64")
+
+	tbl2, getErr := k.GetTable(ctx, 1)
+	require.NoError(t, getErr)
+	require.NotNil(t, tbl2)
+	require.NotNil(t, tbl2.Hand)
+	require.Equal(t, int64(0), tbl2.Hand.ActionDeadline)
 }
