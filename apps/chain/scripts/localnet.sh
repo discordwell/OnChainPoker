@@ -16,13 +16,32 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
+ocpd_sources_changed() {
+  if [[ ! -x "$BIN/ocpd" ]]; then
+    return 0
+  fi
+  local newer
+  newer="$(
+    find "$ROOT/cmd" "$ROOT/internal" "$ROOT/go.mod" "$ROOT/go.sum" \
+      -type f \
+      \( -name '*.go' -o -name 'go.mod' -o -name 'go.sum' \) \
+      -newer "$BIN/ocpd" \
+      -print -quit 2>/dev/null || true
+  )"
+  [[ -n "$newer" ]]
+}
+
 build_tools() {
   if [[ ! -x "$BIN/cometbft" ]]; then
     echo "[localnet] building cometbft..."
     GOBIN="$BIN" go install github.com/cometbft/cometbft/cmd/cometbft@v1.0.1
   fi
-  if [[ ! -x "$BIN/ocpd" ]]; then
-    echo "[localnet] building ocpd..."
+  if ocpd_sources_changed; then
+    if [[ -x "$BIN/ocpd" ]]; then
+      echo "[localnet] rebuilding ocpd (sources changed)..."
+    else
+      echo "[localnet] building ocpd..."
+    fi
     (cd "$ROOT" && go build -o "$BIN/ocpd" ./cmd/ocpd)
   fi
 }

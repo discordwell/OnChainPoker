@@ -45,6 +45,20 @@ function b64urlToBytes(str) {
   return new Uint8Array(Buffer.from(b64, "base64"));
 }
 
+function decodeByteArray(raw) {
+  if (Array.isArray(raw)) {
+    return raw.map((v) => Number(v));
+  }
+  if (typeof raw === "string" && raw.length > 0) {
+    return Array.from(unb64(raw), (v) => Number(v));
+  }
+  return [];
+}
+
+function decodeHolePos(raw) {
+  return decodeByteArray(raw);
+}
+
 // v0 tx auth: ed25519 signature over (type, nonce, signer, sha256(valueJson)).
 let txNonceCtr = 0n;
 function nextTxNonce() {
@@ -201,10 +215,11 @@ function dealerExpectedPos(table) {
 
   const phase = String(h.phase);
   if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver") {
-    return Number(dh.cursor) + Number(h.board?.length ?? 0);
+    const boardLen = decodeByteArray(h.board).length;
+    return Number(dh.cursor) + boardLen;
   }
   if (phase === "awaitShowdown") {
-    const holePos = dh.holePos ?? [];
+    const holePos = decodeHolePos(dh.holePos);
     if (holePos.length !== 18) throw new Error("dealerExpectedPos: holePos missing/invalid");
     const reveals = new Set((dh.reveals ?? []).map((r) => Number(r.pos)));
 
@@ -346,7 +361,7 @@ async function main() {
     const jwk = publicKey.export({ format: "jwk" });
     const pkSignBytes = b64urlToBytes(jwk.x);
     if (pkSignBytes.length !== 32) throw new Error("unexpected ed25519 pubkey length");
-    return { player, seat: i, sk, pk, signSk: privateKey, signPkBytes };
+    return { player, seat: i, sk, pk, signSk: privateKey, signPkBytes: pkSignBytes };
   });
 
   // Fund players via a validator-signed mint (devnet-only).
@@ -472,7 +487,7 @@ async function main() {
   }));
 
   // ---- Encrypted decryption shares for hole cards ----
-  const holePos = dh0.holePos ?? [];
+  const holePos = decodeHolePos(dh0.holePos);
   if (holePos.length !== 18) throw new Error("missing dealer.holePos after finalization");
 
   const shareMembers = committee.slice(0, threshold);

@@ -76,6 +76,22 @@ pnpm ws7:play_hand_cosmos
 This submits poker module txs via CosmJS + protobuf signing and queries state via LCD.
 Note: progressing past `HAND_PHASE_SHUFFLE` requires validator-signed `x/dealer` messages (committee/dealer pipeline).
 
+## Run GUI (Coordinator Control Room)
+
+Terminal 1:
+
+```bash
+pnpm coordinator:dev
+```
+
+Terminal 2:
+
+```bash
+pnpm web:dev
+```
+
+Open: `http://127.0.0.1:5173/ocp/`
+
 ## Tests
 
 ```bash
