@@ -14,7 +14,7 @@
     "cosmos:faucet": "bash apps/cosmos/scripts/faucet.sh",
     "cosmos:dealer:e2e": "bash scripts/cosmos-dealer-e2e.sh",
     "runtime:check": "bash scripts/check-runtime-target.sh",
-    "test:unit": "pnpm runtime:check && pnpm -C packages/poker-engine test && pnpm -C packages/holdem-eval test && pnpm -C packages/ocp-crypto test && pnpm -C packages/dkg test && pnpm -C packages/ocp-shuffle test && pnpm -C packages/ocp-sdk test && pnpm -C apps/sim test && pnpm -C apps/coordinator test && pnpm web:test && pnpm web:build && pnpm chain:test",
+    "test:unit": "pnpm runtime:check && pnpm -C packages/poker-engine test && pnpm -C packages/holdem-eval test && pnpm -C packages/ocp-crypto test && pnpm -C packages/dkg test && pnpm -C packages/ocp-shuffle test && pnpm -C packages/ocp-sdk test && node --test scripts/test/*.test.mjs && pnpm -C apps/sim test && pnpm -C apps/coordinator test && pnpm web:test && pnpm web:build && pnpm chain:test",
     "test": "pnpm test:unit",
     "chain:test": "cd apps/chain && go test ./...",
     "sdk:build": "pnpm -C packages/ocp-sdk build",

@@ -1,11 +1,12 @@
 # Parallel Build Workstreams (v1)
 
 Date: 2026-02-08
-Status: Draft
+Status: Draft (execution is Cosmos-first)
 
 This repo previously contained an EVM prototype; it has been archived under `deprecated/evm`.
-The non-negotiable "contract is the dealer and nobody can know unrevealed cards" requirement implies an appchain / specialized execution environment (see `docs/SPEC.md`).
-This document decomposes the appchain build into parallelizable workstreams with crisp interfaces.
+The non-negotiable "contract is the dealer and nobody can know unrevealed cards" requirement implies a specialized chain runtime (see `docs/SPEC.md`).
+Current runtime direction is `apps/cosmos` (production path); `apps/chain` remains legacy devnet-only scaffolding.
+This document decomposes the build into parallelizable workstreams with crisp interfaces.
 
 ## Global Constraints (Must Hold Across All Tracks)
 
@@ -50,10 +51,11 @@ Each workstream below can be developed largely independently if it adheres to th
    - Acceptance: verifier implementation + benchmarks for 52-card decks and committee sizes in target range.
 
 6. **WS6: Chain Runtime / App Implementation**
-   - Output: appchain scaffold with modules `Bank`, `Staking` (stub), `PokerTable`, `Dealer` (stub), and tx routing (`apps/chain`).
-   - Acceptance: local devnet spins up; can run a full hand end-to-end.
-     - Preferred: on-chain dealer pipeline (`scripts/play_hand_dealer.mjs`).
-     - Optional (insecure): public dealing stub via `apps/chain/scripts/play_hand.mjs` if the chain is started with `OCP_UNSAFE_ALLOW_DEALER_STUB=1`.
+   - Output: production Cosmos runtime (`apps/cosmos`) with `x/poker` + `x/dealer`, plus localnet/multinet orchestration.
+   - Legacy note: `apps/chain` remains devnet-only scaffold for fast prototyping.
+   - Acceptance: local Cosmos network spins up; can run a full confidential dealer hand end-to-end.
+     - Required: `pnpm cosmos:dealer:e2e` (3-node multinet).
+     - Legacy smoke (optional): `pnpm ws7:play_hand_dealer` on `apps/chain` devnet.
 
 7. **WS7: Client Protocol + SDK**
    - Output: typed client SDK for tx submission, event subscription, and share retrieval/decryption.
@@ -68,8 +70,8 @@ Each workstream below can be developed largely independently if it adheres to th
    - Acceptance: scenario suite covering abort/refund, mid-hand slashing, committee rotation, and threshold failure.
 
 10. **WS10: DevEx / CI / Localnet Tooling**
-   - Output: scripts to run localnet + web + coordinator; CI for unit/integration tests; basic benchmarks.
-   - Acceptance: single command to run the full stack locally; CI green on main.
+   - Output: scripts to run Cosmos localnet/multinet + web + coordinator; CI for unit/integration tests; basic benchmarks.
+   - Acceptance: single command to run the full stack locally; CI green on main; failing Cosmos E2E jobs publish multinet logs/artifacts.
 
 ## Suggested Execution Order (To Reduce Rework)
 

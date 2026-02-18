@@ -4,33 +4,33 @@ Status: WIP (started 2026-02-09)
 
 Scope (active code):
 
-- Appchain runtime: `apps/chain`
+- Production runtime: `apps/cosmos` (`x/poker`, `x/dealer`, localnet/multinet scripts)
 - Core libraries: `packages/poker-engine`, `packages/holdem-eval`, `packages/ocp-crypto`, `packages/dkg`, `packages/ocp-shuffle`
-- Client SDK (appchain): `packages/ocp-sdk/src/appchain`
-- Coordinator (untrusted UX): `apps/coordinator`
+- Client SDK: `packages/ocp-sdk/src/cosmos` (+ legacy `src/appchain`)
+- Coordinator/Web UX surfaces: `apps/coordinator`, `apps/web`
+- Simulation/fault harness: `apps/sim`
 
 Out of scope:
 
 - Deprecated EVM prototype (archived under `deprecated/evm`)
+- `apps/chain` correctness hardening for production (legacy devnet-only path)
 
 ## High-Risk Areas To Review
 
-- Tx authentication + replay protection (account/validator keys, nonce rules): `apps/chain/internal/app/auth.go`
-- Funds accounting invariants (chip conservation, escrow/commit/side pots): `apps/chain/internal/app/poker.go`, `packages/poker-engine`
-- Deterministic timeouts + liveness (player actions, dealer steps): `docs/SPEC.md` 5.5, `apps/chain/internal/app/dealer.go`
-- Dealer artifact validation + slashing rules: `apps/chain/internal/app/dealer.go`, `docs/SPEC.md` 6-8
-- Abort/refund semantics and anti-griefing: `docs/SPEC.md` 8
+- Tx authentication and sequence handling under concurrent writes (Cosmos signing path + faucet tooling): `packages/ocp-sdk/src/cosmos/signing.ts`, `apps/cosmos/scripts/faucet.sh`
+- Funds accounting invariants (chip conservation, escrow/commit/side pots): `apps/cosmos/x/poker`, `packages/poker-engine`
+- Dealer DKG/reveal liveness windows and timeout semantics: `apps/cosmos/x/dealer`, `scripts/play_hand_cosmos.mjs`
+- Dealer artifact validation and slashing evidence handling: `apps/cosmos/x/dealer`, `docs/SPEC.md` 6-8
+- Abort/refund semantics and anti-griefing: `docs/SPEC.md` 8, `apps/sim`
 - Coordinator attack surface (must never become correctness-critical): `apps/coordinator`, `apps/coordinator/THREATS.md`
 
 ## Known Gaps / TODOs
 
-- Player action timeouts (`docs/SPEC.md` 5.5) are now wired in v0:
-  - `poker/tick` applies deterministic default actions once `hand.actionDeadline` passes.
-  - `actionTimeoutSecs` is enforced via `hand.actionDeadline` (unix seconds).
-- Player bonds are now partially enforced in v0 (anti-grief / devnet):
-  - `playerBond` is debited on `poker/sit` and stored as `seat.bond`.
-  - `poker/tick` slashes bond on timeouts and emits `PlayerSlashed`.
-  - Seats with depleted bond are ejected between hands (`PlayerEjected`) and remaining stack is returned to bank balance.
-- `bank/mint` is devnet-only and now requires a validator-signed tx.
-  - Important: v0 staking/validator registration is still a stub and not tied to consensus, so "validator-signed" is not a production-grade authorization boundary yet.
-  - `bank/mint` MUST NOT exist in production builds.
+- Recent close-outs (2026-02-18):
+  - `pnpm cosmos:dealer:e2e` now passes locally end-to-end (3-node multinet, confidential dealer flow).
+  - Cosmos signing client has an LCD fallback path for tx delivery where Comet event decoding is brittle.
+  - `play_hand_cosmos` helper logic has targeted regression tests (`scripts/test/play_hand_cosmos_helpers.test.mjs`).
+- Still open:
+  - `docs/PROTOCOL.md` / `docs/INTERFACES.md` are still marked Draft and include legacy/appchain-v0 context; update to explicitly mark Cosmos-first canonical flow.
+  - Strengthen fault-injection coverage for Cosmos dealer deadlines and reveal races (mirror critical scenarios from `apps/sim` at chain integration level).
+  - Keep localnet/multinet scripts portable across macOS/Linux shell variants and retain CI failure artifacts for faster triage.

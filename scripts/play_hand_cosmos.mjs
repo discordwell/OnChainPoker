@@ -3,6 +3,7 @@
 import process from "node:process";
 import { randomBytes } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 import {
   CosmosLcdClient,
@@ -873,7 +874,20 @@ function assertEvent(events, type, attr, expected) {
   return v;
 }
 
-main().catch((err) => {
-  console.error(err?.stack || String(err));
-  process.exit(1);
-});
+export { normalizePhase, expectedRevealPos };
+
+const isMain = (() => {
+  if (!process.argv[1]) return false;
+  try {
+    return import.meta.url === pathToFileURL(process.argv[1]).href;
+  } catch {
+    return false;
+  }
+})();
+
+if (isMain) {
+  main().catch((err) => {
+    console.error(err?.stack || String(err));
+    process.exit(1);
+  });
+}

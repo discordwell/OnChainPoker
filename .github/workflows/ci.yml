@@ -141,3 +141,14 @@ jobs:
 
       - name: Dealer Flow E2E (3-node multinet)
         run: pnpm cosmos:dealer:e2e
+
+      - name: Upload Cosmos E2E Logs (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cosmos-dealer-e2e-logs
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/cosmos-multinet.log
+            ${{ runner.temp }}/ocpd-multivalidator/**/ocpd.log
