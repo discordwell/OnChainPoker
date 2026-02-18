@@ -66,3 +66,6 @@ CLAUDE.md
 
 # Ralph loop artifacts
 .ralph/
+
+# Local runtime artifacts
+.tmp/

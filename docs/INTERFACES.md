@@ -1,9 +1,38 @@
 # Interfaces (PokerTable <-> Dealer, Tx/Event Schema)
 
 Date: 2026-02-08
-Status: Draft
+Status: Active (Cosmos runtime / WS7)
 
 This document defines the "stable seams" that let teams build in parallel. It is intentionally narrow: the goal is to prevent cross-team thrash.
+
+## 0. Canonical Binding (`apps/cosmos`)
+
+These conceptual interfaces are canonically bound to Cosmos protobuf services:
+
+- Poker txs: `apps/cosmos/proto/onchainpoker/poker/v1/tx.proto`
+- Dealer txs: `apps/cosmos/proto/onchainpoker/dealer/v1/tx.proto`
+- Poker queries: `apps/cosmos/proto/onchainpoker/poker/v1/query.proto`
+- Dealer queries: `apps/cosmos/proto/onchainpoker/dealer/v1/query.proto`
+
+Legacy `apps/chain` JSON envelope behavior is devnet-only and not the production contract.
+
+Canonical method mapping:
+
+- `PokerTable.CreateTable` -> `onchainpoker.poker.v1.Msg/CreateTable`
+- `PokerTable.Sit` -> `onchainpoker.poker.v1.Msg/Sit`
+- `PokerTable.StartHand` -> `onchainpoker.poker.v1.Msg/StartHand`
+- `PokerTable.Act` -> `onchainpoker.poker.v1.Msg/Act`
+- `PokerTable.Tick` -> `onchainpoker.poker.v1.Msg/Tick`
+- `PokerTable.Leave` -> `onchainpoker.poker.v1.Msg/Leave`
+- `Dealer.BeginEpoch` -> `onchainpoker.dealer.v1.Msg/BeginEpoch`
+- `Dealer.DkgCommit` -> `onchainpoker.dealer.v1.Msg/DkgCommit`
+- `Dealer.InitHand` -> `onchainpoker.dealer.v1.Msg/InitHand`
+- `Dealer.SubmitShuffle` -> `onchainpoker.dealer.v1.Msg/SubmitShuffle`
+- `Dealer.FinalizeDeck` -> `onchainpoker.dealer.v1.Msg/FinalizeDeck`
+- `Dealer.SubmitEncShare` -> `onchainpoker.dealer.v1.Msg/SubmitEncShare`
+- `Dealer.SubmitPubShare` -> `onchainpoker.dealer.v1.Msg/SubmitPubShare`
+- `Dealer.FinalizeReveal` -> `onchainpoker.dealer.v1.Msg/FinalizeReveal`
+- `Dealer.Timeout` -> `onchainpoker.dealer.v1.Msg/Timeout`
 
 ## 1. Dealer API (Conceptual)
 

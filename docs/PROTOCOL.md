@@ -1,7 +1,7 @@
-# OCP Client Protocol (Draft)
+# OCP Client Protocol (Cosmos Canonical)
 
 Date: 2026-02-08
-Status: Draft (WS7)
+Status: Active (Cosmos runtime / WS7)
 
 This document defines the client-facing protocol surface area that the SDK (`packages/ocp-sdk`) will target:
 
@@ -9,16 +9,15 @@ This document defines the client-facing protocol surface area that the SDK (`pac
 - **Events**: the minimum event contract clients rely on to drive UI/gameplay.
 - **Queries**: the minimum read APIs clients need for state + dealer artifacts.
 
-It is intentionally framework-agnostic (ABCI/Cosmos/Substrate). A concrete chain implementation MUST map these
-logical messages to its chosen wire format (protobuf/extrinsic/etc) while preserving the shapes and semantics
-below.
+This protocol is Cosmos-canonical. The production chain runtime is `apps/cosmos`, and SDK clients should treat
+Cosmos protobuf tx/query/event behavior as the source of truth. Legacy `apps/chain` wire behavior is retained only
+as a devnet appendix.
 
 ## 1. Conventions
 
 ### 1.1 Scalars / Amounts / IDs
 
 - `U64`: **decimal string** (`"0"`, `"42"`, `"18446744073709551615"`) to avoid JSON number precision loss.
-  - Note: the current v0 localnet implementation in `apps/chain` uses JSON numbers for `uint64` fields. Treat that as devnet-only.
 - `SeatIndex`: integer `0..8` (v1 is 9-max).
 - `CardId`: integer `0..51` (as in `docs/SPEC.md` 6.4).
 
@@ -36,28 +35,24 @@ Every event MUST include a stable, monotonic cursor. Valid options:
 
 The SDK assumes cursor monotonicity for replay/resume.
 
-### 1.4 Current v0 Localnet Wire Format (`apps/chain`)
+### 1.4 Canonical Wire Format (`apps/cosmos`)
 
-The current WS6 devnet is `apps/chain` (CometBFT + ABCI, Go). v0 chooses speed over finality:
+The canonical wire format is Cosmos protobuf + ABCI events:
 
-- **Tx submission**: CometBFT JSON-RPC `broadcast_tx_commit` with `tx = base64(UTF8(JSON(TxEnvelope)))`.
-  - CometBFT v1.0.x returns execution results under `tx_result` (not `deliver_tx`).
-- **Tx envelope** (UTF-8 JSON bytes):
+- **Tx submission**: protobuf `Msg` types signed and broadcast through Cosmos RPC.
+  - SDK path: `connectOcpCosmosSigningClient` + `createOcpCosmosClient` (`packages/ocp-sdk/src/cosmos`).
+  - Methods map to protobuf services in:
+    - `apps/cosmos/proto/onchainpoker/poker/v1/tx.proto`
+    - `apps/cosmos/proto/onchainpoker/dealer/v1/tx.proto`
+- **Queries**: grpc-gateway/LCD JSON endpoints from:
+  - `apps/cosmos/proto/onchainpoker/poker/v1/query.proto`
+  - `apps/cosmos/proto/onchainpoker/dealer/v1/query.proto`
+- **Events**: ABCI events emitted by Cosmos tx execution (`tx_response.events`), optionally streamed over WebSocket.
 
-```json
-{ "type": "poker/create_table", "value": { "...": "..." } }
-```
+### 1.5 Legacy Wire Format (`apps/chain`, devnet-only)
 
-v0 also supports tx authentication by including:
-
-- `nonce: string` (u64 decimal; replay protection)
-- `signer: string` (account/validator id)
-- `sig: string` (base64 ed25519 signature)
-
-Concrete v0 tx schemas live in `apps/chain/internal/codec/tx.go`.
-
-- **Queries**: CometBFT JSON-RPC `abci_query` with `path` (e.g. `/table/1`). The response value is base64-encoded JSON.
-- **Event subscription** (optional): WebSocket at `/websocket` with JSON-RPC `subscribe` (e.g. query `tm.event='Tx'`).
+The older CometBFT JSON envelope transport from `apps/chain` is retained only for legacy/devnet usage and is not
+the production protocol contract.
 
 ## 2. Logical Transactions
 
@@ -67,21 +62,30 @@ All txs are modeled as:
 type OcpTx = { type: string; value: object };
 ```
 
-The remainder of this section describes the *logical* txs. For the concrete v0 devnet encoding, see the table below.
+The remainder of this section describes the *logical* txs. For canonical Cosmos bindings, see the table below.
 
-### 2.0 v0 Tx Type Mapping (`apps/chain`)
+### 2.0 Cosmos Msg Mapping (Canonical)
 
-- `PokerTable.CreateTable` -> `poker/create_table`
-- `PokerTable.Sit` -> `poker/sit`
-- `PokerTable.StartHand` -> `poker/start_hand`
-- `PokerTable.Act` -> `poker/act`
-- `PokerTable.Leave` -> `poker/leave`
-- `PokerTable.Tick` -> `poker/tick`
-
-And for devnet-only funding:
-
-- `Bank.Mint` -> `bank/mint` (devnet-only; validator-signed)
-- `Bank.Send` -> `bank/send`
+- `PokerTable.CreateTable` -> `onchainpoker.poker.v1.Msg/CreateTable`
+- `PokerTable.Sit` -> `onchainpoker.poker.v1.Msg/Sit`
+- `PokerTable.StartHand` -> `onchainpoker.poker.v1.Msg/StartHand`
+- `PokerTable.Act` -> `onchainpoker.poker.v1.Msg/Act`
+- `PokerTable.Leave` -> `onchainpoker.poker.v1.Msg/Leave`
+- `PokerTable.Tick` -> `onchainpoker.poker.v1.Msg/Tick`
+- `Dealer.BeginEpoch` -> `onchainpoker.dealer.v1.Msg/BeginEpoch`
+- `Dealer.DkgCommit` -> `onchainpoker.dealer.v1.Msg/DkgCommit`
+- `Dealer.DkgComplaintMissing` -> `onchainpoker.dealer.v1.Msg/DkgComplaintMissing`
+- `Dealer.DkgComplaintInvalid` -> `onchainpoker.dealer.v1.Msg/DkgComplaintInvalid`
+- `Dealer.DkgShareReveal` -> `onchainpoker.dealer.v1.Msg/DkgShareReveal`
+- `Dealer.FinalizeEpoch` -> `onchainpoker.dealer.v1.Msg/FinalizeEpoch`
+- `Dealer.DkgTimeout` -> `onchainpoker.dealer.v1.Msg/DkgTimeout`
+- `Dealer.InitHand` -> `onchainpoker.dealer.v1.Msg/InitHand`
+- `Dealer.SubmitShuffle` -> `onchainpoker.dealer.v1.Msg/SubmitShuffle`
+- `Dealer.FinalizeDeck` -> `onchainpoker.dealer.v1.Msg/FinalizeDeck`
+- `Dealer.SubmitEncShare` -> `onchainpoker.dealer.v1.Msg/SubmitEncShare`
+- `Dealer.SubmitPubShare` -> `onchainpoker.dealer.v1.Msg/SubmitPubShare`
+- `Dealer.FinalizeReveal` -> `onchainpoker.dealer.v1.Msg/FinalizeReveal`
+- `Dealer.Timeout` -> `onchainpoker.dealer.v1.Msg/Timeout`
 
 ### 2.1 PokerTable Txs
 
@@ -301,11 +305,13 @@ The chain MUST expose read APIs that let clients:
 - `GetTable(tableId)` -> table params + seating + current hand pointer
 - `GetHand(tableId, handId)` -> phase + pots + board + actionState + deadlines
 
-v0 (`apps/chain`) query paths:
+Canonical Cosmos query paths:
 
-- `/tables` -> `tableId[]`
-- `/table/<id>` -> table JSON (includes current hand)
-- `/account/<addr>` -> `{ addr, balance }`
+- `/onchainpoker/poker/v1/tables` -> list tables
+- `/onchainpoker/poker/v1/tables/{table_id}` -> table with current hand state
+- `/onchainpoker/dealer/v1/epoch` -> active dealer epoch
+- `/onchainpoker/dealer/v1/dkg` -> in-flight DKG state
+- `/onchainpoker/dealer/v1/tables/{table_id}/hands/{hand_id}` -> dealer hand artifacts/state
 
 ### 4.2 Dealer Artifacts (for clients)
 
@@ -322,7 +328,27 @@ Clients need to recover hole cards (see `docs/SPEC.md` 10.2).
 
 This query is sufficient to implement event subscription by polling. WebSocket/streaming is optional.
 
-## 5. Appendix: EVM Prototype (PokerVault)
+## 5. Appendix: Legacy `apps/chain` Mapping (Devnet-only)
+
+Legacy (non-production) tx mappings:
+
+- `PokerTable.CreateTable` -> `poker/create_table`
+- `PokerTable.Sit` -> `poker/sit`
+- `PokerTable.StartHand` -> `poker/start_hand`
+- `PokerTable.Act` -> `poker/act`
+- `PokerTable.Leave` -> `poker/leave`
+- `PokerTable.Tick` -> `poker/tick`
+- Devnet funding only:
+  - `Bank.Mint` -> `bank/mint` (devnet-only; validator-signed)
+  - `Bank.Send` -> `bank/send`
+
+Legacy (non-production) query paths:
+
+- `/tables` -> `tableId[]`
+- `/table/<id>` -> table JSON (includes current hand)
+- `/account/<addr>` -> `{ addr, balance }`
+
+## 6. Appendix: EVM Prototype (PokerVault)
 
 **Deprecated.** The EVM prototype has been archived under `deprecated/evm` and is not part of the active workspace/CI.
 
