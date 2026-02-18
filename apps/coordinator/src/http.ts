@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import express from "express";
+import express, { type NextFunction, type Request, type Response } from "express";
 import cors from "cors";
 import { z } from "zod";
 import type { CoordinatorConfig } from "./config.js";
@@ -31,6 +31,87 @@ const ShuffleArtifactPutSchema = z.object({
   mime: z.string().min(1).optional(),
   meta: z.record(z.unknown()).optional()
 });
+
+function getClientId(req: Request): string {
+  const forwarded = req.header("x-forwarded-for");
+  if (forwarded) {
+    const first = forwarded.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return req.ip || req.socket.remoteAddress || "unknown";
+}
+
+function extractWriteToken(req: Request): string | null {
+  const keyHeader = req.header("x-api-key");
+  if (keyHeader?.trim()) return keyHeader.trim();
+
+  const authHeader = req.header("authorization");
+  if (!authHeader) return null;
+
+  const m = /^\s*Bearer\s+(.+)$/i.exec(authHeader);
+  if (m?.[1]?.trim()) return m[1].trim();
+
+  return authHeader.trim() || null;
+}
+
+function createWriteAuthGuard(config: CoordinatorConfig): express.RequestHandler {
+  if (!config.requireWriteAuth) return (_req: Request, _res: Response, next: NextFunction) => next();
+  const expected = Buffer.from(config.writeAuthToken ?? "");
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const token = extractWriteToken(req);
+    if (!token || token.length === 0) {
+      return res.status(401).json({ error: "write auth token required" });
+    }
+
+    const candidate = Buffer.from(token);
+    if (
+      candidate.length !== expected.length ||
+      !crypto.timingSafeEqual(candidate, expected)
+    ) {
+      return res.status(401).json({ error: "invalid write auth token" });
+    }
+
+    next();
+  };
+}
+
+function createWriteRateLimiter(config: CoordinatorConfig): express.RequestHandler {
+  if (!config.writeRateLimitEnabled) {
+    return (_req: Request, _res: Response, next: NextFunction) => next();
+  }
+
+  const max = Math.max(1, config.writeRateLimitMax);
+  const windowMs = Math.max(1_000, config.writeRateLimitWindowMs);
+  const buckets = new Map<string, { count: number; windowEndMs: number }>();
+
+  return (req: Request, res: Response, next: NextFunction) => {
+    const key = getClientId(req);
+    const now = Date.now();
+    let bucket = buckets.get(key);
+
+    if (!bucket || now >= bucket.windowEndMs) {
+      bucket = { count: 1, windowEndMs: now + windowMs };
+      buckets.set(key, bucket);
+    } else {
+      if (bucket.count >= max) {
+        const resetSec = Math.max(0, Math.ceil((bucket.windowEndMs - now) / 1000));
+        res.setHeader("Retry-After", String(resetSec));
+        res.setHeader("X-RateLimit-Limit", String(max));
+        res.setHeader("X-RateLimit-Remaining", "0");
+        res.setHeader("X-RateLimit-Reset", String(Math.ceil(bucket.windowEndMs / 1000)));
+        return res.status(429).json({ error: "rate limit exceeded" });
+      }
+      bucket.count += 1;
+    }
+
+    const remaining = Math.max(0, max - bucket.count);
+    res.setHeader("X-RateLimit-Limit", String(max));
+    res.setHeader("X-RateLimit-Remaining", String(remaining));
+    res.setHeader("X-RateLimit-Reset", String(Math.ceil(bucket.windowEndMs / 1000)));
+    next();
+  };
+}
 
 type V0DealerEpoch = {
   epochId: number;
@@ -124,6 +205,7 @@ export function createHttpApp(opts: {
 }) {
   const { config, store, chain, ws } = opts;
   const app = express();
+  const writeGuards = [createWriteAuthGuard(config), createWriteRateLimiter(config)];
 
   app.use(
     cors({
@@ -132,7 +214,8 @@ export function createHttpApp(opts: {
           ? true
           : (origin, cb) => {
               if (!origin) return cb(null, true);
-              if (config.corsOrigins!.includes(origin)) return cb(null, true);
+              if (config.corsOrigins!.includes("*")) return cb(null, true);
+              if (config.corsOrigins.includes(origin)) return cb(null, true);
               return cb(new Error("CORS blocked"), false);
             }
     })
@@ -284,7 +367,7 @@ export function createHttpApp(opts: {
 
   // Convenience: store a shuffle proof artifact using its sha256(proofBytes) hex as the artifactId.
   // This lines up with the `proofHash` attribute emitted by the chain on `ShuffleAccepted`.
-  app.post("/v1/appchain/v0/artifacts/shuffle", (req, res) => {
+  app.post("/v1/appchain/v0/artifacts/shuffle", ...writeGuards, (req, res) => {
     const parsed = ShuffleArtifactPutSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
 
@@ -311,7 +394,7 @@ export function createHttpApp(opts: {
     res.json({ ok: true, artifactId, kind: "shuffle", bytes: bytes.length });
   });
 
-  app.post("/v1/seat-intents", (req, res) => {
+  app.post("/v1/seat-intents", ...writeGuards, (req, res) => {
     const parsed = SeatIntentSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
 
@@ -334,7 +417,7 @@ export function createHttpApp(opts: {
     res.json({ intents: store.listSeatIntents(tableId) });
   });
 
-  app.put("/v1/artifacts/:artifactId", (req, res) => {
+  app.put("/v1/artifacts/:artifactId", ...writeGuards, (req, res) => {
     const artifactId = String(req.params.artifactId ?? "");
     if (!artifactId) return res.status(400).json({ error: "artifactId required" });
 

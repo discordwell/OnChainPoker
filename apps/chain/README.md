@@ -2,6 +2,12 @@
 
 This directory contains the v0 appchain scaffold for OnChainPoker.
 
+## Important: Production Status
+
+`apps/chain` is **legacy, devnet-only** and must not be used as a production runtime target.
+
+Use `apps/cosmos` for production-path development and deployments.
+
 ## Framework Choice
 
 Chosen: **Option A: CometBFT + ABCI app (Go)**.
@@ -30,7 +36,13 @@ Prereqs:
 Start node + app:
 
 ```bash
-apps/chain/scripts/localnet.sh
+OCP_CHAIN_PROFILE=devnet bash apps/chain/scripts/localnet.sh
+```
+
+Or use the repo shortcut:
+
+```bash
+pnpm dev
 ```
 
 Run a scripted hand (in another terminal):
@@ -63,4 +75,3 @@ Event types emitted in v0:
 - `HandCompleted`
 
 All include `tableId` and (when applicable) `handId` attributes.
-

@@ -1,6 +1,10 @@
 # OCP Cosmos Chain (Option C)
 
-This directory will contain the Cosmos SDK-based chain implementation (`ocpd`).
+This directory contains the production-path Cosmos SDK chain implementation (`ocpd`).
+
+## Production Target
+
+`apps/cosmos` is the explicit production runtime target for OnChainPoker.
 
 ## Local Funding Model (No `bank/mint`)
 

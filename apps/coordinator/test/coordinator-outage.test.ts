@@ -45,7 +45,12 @@ test("WS8 acceptance: coordinator outage does not block direct chain queries", a
       devRoutes: false,
       artifactMaxBytes: 1_000_000,
       artifactCacheMaxBytes: 10_000_000,
-      seatIntentTtlMs: 5_000
+      seatIntentTtlMs: 5_000,
+      requireWriteAuth: false,
+      writeAuthToken: null,
+      writeRateLimitEnabled: false,
+      writeRateLimitMax: 30,
+      writeRateLimitWindowMs: 60_000
     },
     chain,
     store

@@ -36,6 +36,8 @@ const (
 	dkgComplaintBlocksDefault uint64 = 5
 	dkgRevealBlocksDefault    uint64 = 5
 	dkgFinalizeBlocksDefault  uint64 = 5
+
+	dkgMaxWindowBlocks uint64 = 1_000_000
 )
 
 func bpsToDec(bps uint32) sdkmath.LegacyDec {

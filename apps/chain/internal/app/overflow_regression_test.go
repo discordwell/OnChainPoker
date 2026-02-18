@@ -283,7 +283,7 @@ func TestOverflow_DealerBeginEpochHugeBlockHeight(t *testing.T) {
 		"amount":      uint64(100),
 	}, "v1"), 1, 0))
 
-	res := a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(1),
 		"threshold":       uint8(1),
@@ -291,7 +291,7 @@ func TestOverflow_DealerBeginEpochHugeBlockHeight(t *testing.T) {
 		"complaintBlocks": uint64(1),
 		"revealBlocks":    uint64(1),
 		"finalizeBlocks":  uint64(1),
-	}), math.MaxInt64, 0)
+	}, "v1"), math.MaxInt64, 0)
 	if res.Code == 0 {
 		t.Fatalf("expected dkg commit deadline overflow failure")
 	}
@@ -308,13 +308,25 @@ func TestOverflow_DealerBeginEpochNextEpochID(t *testing.T) {
 	if a.st.Dealer == nil {
 		t.Fatalf("missing dealer state")
 	}
+
+	pub, _ := testEd25519Key("v1")
+	mintTestTokens(t, a, 1, "v1", 1000)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": "v1",
+		"pubKey":      []byte(pub),
+	}, "v1"), 1, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/bond", map[string]any{
+		"validatorId": "v1",
+		"amount":      uint64(100),
+	}, "v1"), 1, 0))
+
 	a.st.Dealer.NextEpochID = ^uint64(0)
 
-	res := a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":       ^uint64(0),
 		"committeeSize": uint32(1),
 		"threshold":     uint8(1),
-	}), 1, 0)
+	}, "v1"), 1, 0)
 	if res.Code == 0 {
 		t.Fatalf("expected next epoch id overflow failure")
 	}
@@ -323,5 +335,40 @@ func TestOverflow_DealerBeginEpochNextEpochID(t *testing.T) {
 	}
 	if a.st.Dealer.DKG != nil {
 		t.Fatalf("dkg set despite next epoch id overflow")
+	}
+}
+
+func TestOverflow_DealerBeginEpochWindowLimit(t *testing.T) {
+	a := newTestApp(t)
+
+	pub, _ := testEd25519Key("v1")
+	mintTestTokens(t, a, 1, "v1", 1000)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": "v1",
+		"pubKey":      []byte(pub),
+	}, "v1"), 1, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/bond", map[string]any{
+		"validatorId": "v1",
+		"amount":      uint64(100),
+	}, "v1"), 1, 0))
+
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
+		"epochId":         uint64(1),
+		"committeeSize":   uint32(1),
+		"threshold":       uint8(1),
+		"commitBlocks":    dkgMaxWindowBlocks + 1,
+		"complaintBlocks": uint64(1),
+		"revealBlocks":    uint64(1),
+		"finalizeBlocks":  uint64(1),
+	}, "v1"), 1, 0)
+
+	if res.Code == 0 {
+		t.Fatalf("expected oversized commitBlocks rejection")
+	}
+	if a.st.Dealer.DKG != nil {
+		t.Fatalf("dkg set despite oversized commitBlocks")
+	}
+	if a.st.Dealer.NextEpochID != 1 {
+		t.Fatalf("next epoch advanced despite oversized commitBlocks: %d", a.st.Dealer.NextEpochID)
 	}
 }

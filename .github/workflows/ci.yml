@@ -81,7 +81,7 @@ jobs:
           OCP_UNSAFE_ALLOW_DEALER_STUB=1
           export OCP_HOME OCP_ABCI_ADDR OCP_UNSAFE_ALLOW_DEALER_STUB
 
-          bash apps/chain/scripts/localnet.sh >"$LOG" 2>&1 &
+          OCP_CHAIN_PROFILE=devnet bash apps/chain/scripts/localnet.sh >"$LOG" 2>&1 &
           LOCALNET_PID=$!
 
           cleanup() {

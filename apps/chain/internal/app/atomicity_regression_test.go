@@ -24,7 +24,7 @@ func setupActiveDealerEpochForTests(t *testing.T, a *OCPApp, height int64) {
 		}, id), height, 0))
 	}
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(2),
 		"threshold":       uint8(1),
@@ -32,7 +32,7 @@ func setupActiveDealerEpochForTests(t *testing.T, a *OCPApp, height int64) {
 		"complaintBlocks": uint64(1),
 		"revealBlocks":    uint64(1),
 		"finalizeBlocks":  uint64(1),
-	}), height, 0))
+	}, "v1"), height, 0))
 
 	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
 		"epochId":  uint64(1),
@@ -174,7 +174,7 @@ func TestDKG_FinalizeDoesNotDoubleSlashAlreadyPenalizedValidator(t *testing.T) {
 		}, id), height, 0))
 	}
 
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(3),
 		"threshold":       uint8(2),
@@ -182,7 +182,7 @@ func TestDKG_FinalizeDoesNotDoubleSlashAlreadyPenalizedValidator(t *testing.T) {
 		"complaintBlocks": uint64(5),
 		"revealBlocks":    uint64(5),
 		"finalizeBlocks":  uint64(5),
-	}), height, 0))
+	}, "v1"), height, 0))
 
 	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/dkg_commit", map[string]any{
 		"epochId":  uint64(1),
@@ -243,11 +243,11 @@ func TestDKG_BeginEpochFailureDoesNotAdvanceNextEpochID(t *testing.T) {
 		t.Fatalf("unexpected initial next epoch: %d", a.st.Dealer.NextEpochID)
 	}
 
-	res := a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":       uint64(1),
 		"committeeSize": uint32(1),
 		"threshold":     uint8(1),
-	}), 1, 0)
+	}, "alice"), 1, 0)
 	if res.Code == 0 {
 		t.Fatalf("expected begin_epoch to fail with no eligible validators")
 	}

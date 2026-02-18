@@ -137,7 +137,7 @@ func makeBondedValidatorForDealerTest(t *testing.T, valoper string, power int64,
 }
 
 func TestBeginEpoch_HugeBlockHeightOverflowDoesNotMutateState(t *testing.T) {
-	caller := sdk.AccAddress(bytes.Repeat([]byte{0x11}, 20)).String()
+	caller := sdk.AccAddress(bytes.Repeat([]byte{0x22}, 20)).String()
 	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x22}, 20)).String()
 	bonded := []stakingtypes.Validator{
 		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
@@ -156,6 +156,66 @@ func TestBeginEpoch_HugeBlockHeightOverflowDoesNotMutateState(t *testing.T) {
 		FinalizeBlocks:  1,
 	})
 	require.ErrorContains(t, err, "dkg commit deadline overflows int64")
+
+	next, getErr := k.GetNextEpochID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, uint64(1), next)
+
+	dkg, getErr := k.GetDKG(ctx)
+	require.NoError(t, getErr)
+	require.Nil(t, dkg)
+}
+
+func TestBeginEpoch_NonBondedCallerRejected(t *testing.T) {
+	caller := sdk.AccAddress(bytes.Repeat([]byte{0x33}, 20)).String()
+	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x34}, 20)).String()
+	bonded := []stakingtypes.Validator{
+		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+	}
+
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 1, bonded)
+
+	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
+		Caller:          caller,
+		EpochId:         1,
+		CommitteeSize:   1,
+		Threshold:       1,
+		CommitBlocks:    1,
+		ComplaintBlocks: 1,
+		RevealBlocks:    1,
+		FinalizeBlocks:  1,
+	})
+	require.ErrorContains(t, err, "caller")
+
+	next, getErr := k.GetNextEpochID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, uint64(1), next)
+
+	dkg, getErr := k.GetDKG(ctx)
+	require.NoError(t, getErr)
+	require.Nil(t, dkg)
+}
+
+func TestBeginEpoch_WindowLimitDoesNotMutateState(t *testing.T) {
+	caller := sdk.AccAddress(bytes.Repeat([]byte{0x42}, 20)).String()
+	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x42}, 20)).String()
+	bonded := []stakingtypes.Validator{
+		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+	}
+
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 1, bonded)
+
+	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
+		Caller:          caller,
+		EpochId:         1,
+		CommitteeSize:   1,
+		Threshold:       1,
+		CommitBlocks:    dkgMaxWindowBlocks + 1,
+		ComplaintBlocks: 1,
+		RevealBlocks:    1,
+		FinalizeBlocks:  1,
+	})
+	require.ErrorContains(t, err, "exceeds max window")
 
 	next, getErr := k.GetNextEpochID(ctx)
 	require.NoError(t, getErr)

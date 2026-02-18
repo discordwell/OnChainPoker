@@ -32,6 +32,10 @@ type OCPApp struct {
 	// local testing only. In normal operation this MUST be false.
 	allowDealerStub bool
 
+	// allowUnsafeMint enables bank/mint outside of secure flows when explicitly
+	// requested in local development.
+	allowUnsafeMint bool
+
 	mu       sync.Mutex
 	st       *state.State
 	lastHash []byte
@@ -49,6 +53,7 @@ func New(home string) (*OCPApp, error) {
 		st:              st,
 		lastHash:        st.AppHash(),
 		allowDealerStub: strings.TrimSpace(os.Getenv("OCP_UNSAFE_ALLOW_DEALER_STUB")) == "1",
+		allowUnsafeMint: strings.TrimSpace(os.Getenv("OCP_UNSAFE_ALLOW_MINT")) == "1",
 	}
 	return a, nil
 }
@@ -224,6 +229,9 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		var msg codec.BankMintTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad bank/mint value"}
+		}
+		if !a.allowUnsafeMint {
+			return &abci.ExecTxResult{Code: 1, Log: "bank/mint is disabled (set OCP_UNSAFE_ALLOW_MINT=1 to enable)"}
 		}
 		if msg.To == "" || msg.Amount == 0 {
 			return &abci.ExecTxResult{Code: 1, Log: "missing to/amount"}
@@ -839,6 +847,14 @@ func (a *OCPApp) deliverTx(txBytes []byte, height int64, nowUnixOpt ...int64) (r
 		var msg codec.DealerBeginEpochTx
 		if err := json.Unmarshal(env.Value, &msg); err != nil {
 			return &abci.ExecTxResult{Code: 1, Log: "bad dealer/begin_epoch value"}
+		}
+		if err := requireValidatorAuth(a.st, env, env.Signer); err != nil {
+			return &abci.ExecTxResult{Code: 1, Log: err.Error()}
+		}
+		if v := findValidator(a.st, env.Signer); v == nil {
+			return &abci.ExecTxResult{Code: 1, Log: "validator not registered"}
+		} else if v.Status != state.ValidatorActive {
+			return &abci.ExecTxResult{Code: 1, Log: "validator is not active"}
 		}
 		ev, err := dealerBeginEpoch(a.st, msg)
 		if err != nil {

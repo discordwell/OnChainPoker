@@ -46,6 +46,7 @@ p {
 pre,
 code,
 input,
+select,
 button {
   font-family: "IBM Plex Mono", "Menlo", monospace;
 }
@@ -81,7 +82,8 @@ input {
   font-size: 0.82rem;
 }
 
-input:focus {
+input:focus,
+select:focus {
   border-color: var(--ring);
   outline: none;
   box-shadow: 0 0 0 3px rgba(240, 191, 79, 0.25);

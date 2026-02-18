@@ -87,7 +87,7 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 	}
 
 	// Begin epoch DKG. With a registry containing exactly committeeSize validators, committee selection is deterministic.
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(len(validatorIDs)),
 		"threshold":       threshold,
@@ -95,7 +95,7 @@ func setupDKGEpoch(t *testing.T, a *OCPApp, height int64, validatorIDs []string,
 		"complaintBlocks": uint64(1),
 		"revealBlocks":    uint64(1),
 		"finalizeBlocks":  uint64(1),
-	}), height, 0))
+	}, validatorIDs[0]), height, 0))
 	if a.st.Dealer == nil || a.st.Dealer.DKG == nil {
 		t.Fatalf("expected dkg in progress")
 	}

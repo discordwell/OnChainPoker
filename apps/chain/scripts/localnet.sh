@@ -1,6 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${OCP_CHAIN_PROFILE:-}" != "devnet" ]]; then
+  echo "[chain localnet] Refusing to start apps/chain by default."
+  echo "[chain localnet] This runtime is legacy, development-only."
+  echo "[chain localnet] To start it, set: OCP_CHAIN_PROFILE=devnet"
+  echo "[chain localnet] Production should run: pnpm cosmos:localnet"
+  exit 1
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BIN="$ROOT/bin"
 

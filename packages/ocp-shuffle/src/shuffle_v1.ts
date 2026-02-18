@@ -178,34 +178,49 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
     if (n < 2) return { ok: false, error: "deck too small" };
     if (rounds <= 0) return { ok: false, error: "rounds must be > 0" };
 
-    let cur: ElGamalCiphertext[] = deckIn;
+    let cur: ElGamalCiphertext[] = deckIn.slice();
+    let next: ElGamalCiphertext[] = new Array(n);
+
+    const verifySingle = (round: number, idx: number, curDeck: ElGamalCiphertext[], nextDeck: ElGamalCiphertext[]) => {
+      const p = decodeEqDlogProofFromReader(rd);
+      if (pointEq(nextDeck[idx]!.c1, curDeck[idx]!.c1)) return `single not rerandomized at round=${round} idx=${idx}`;
+      const X = nextDeck[idx]!.c1.subtract(curDeck[idx]!.c1);
+      const Y = nextDeck[idx]!.c2.subtract(curDeck[idx]!.c2);
+      const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+      if (!ok) return `invalid single proof at round=${round} idx=${idx}`;
+      return null;
+    };
 
     for (let round = 0; round < rounds; round++) {
-      const { pairs, singles } = roundPairs(n, round);
-
-      // 1) Deck snapshot
+      const start = round & 1;
       const deckBytes = rd.take(n * 64);
-      const deckOut: ElGamalCiphertext[] = new Array(n);
-      for (let i = 0; i < n; i++) deckOut[i] = decodeCiphertext(deckBytes.subarray(i * 64, i * 64 + 64));
+      for (let i = 0; i < n; i++) {
+        next[i] = decodeCiphertext(deckBytes.subarray(i * 64, i * 64 + 64));
+      }
 
       // 2) Switch proofs (pairs in order)
-      for (const [i, j] of pairs) {
+      for (let i = start; i + 1 < n; i += 2) {
+        const j = i + 1;
         const sp = decodeSwitchProofFromReader(rd);
-        const ok = verifySwitch({ pk, in0: cur[i]!, in1: cur[j]!, out0: deckOut[i]!, out1: deckOut[j]!, proof: sp });
+        const ok = verifySwitch({ pk, in0: cur[i]!, in1: cur[j]!, out0: next[i]!, out1: next[j]!, proof: sp });
         if (!ok) return { ok: false, error: `invalid switch proof at round=${round} pair=(${i},${j})` };
       }
 
       // 3) Single proofs (singles in order)
-      for (const idx of singles) {
-        const p = decodeEqDlogProofFromReader(rd);
-        if (pointEq(deckOut[idx]!.c1, cur[idx]!.c1)) return { ok: false, error: `single not rerandomized at round=${round} idx=${idx}` };
-        const X = deckOut[idx]!.c1.subtract(cur[idx]!.c1);
-        const Y = deckOut[idx]!.c2.subtract(cur[idx]!.c2);
-        const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
-        if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${idx}` };
+      if (n % 2 === 1) {
+        const idx = start === 0 ? n - 1 : 0;
+        const err = verifySingle(round, idx, cur, next);
+        if (err) return { ok: false, error: err };
+      } else if (start === 1) {
+        const singleErrFirst = verifySingle(round, 0, cur, next);
+        if (singleErrFirst) return { ok: false, error: singleErrFirst };
+        const singleErrLast = verifySingle(round, n - 1, cur, next);
+        if (singleErrLast) return { ok: false, error: singleErrLast };
       }
 
-      cur = deckOut;
+      const finished = cur;
+      cur = next;
+      next = finished;
     }
 
     if (!rd.done()) return { ok: false, error: "trailing bytes in proof" };

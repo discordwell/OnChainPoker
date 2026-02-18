@@ -25,6 +25,33 @@ func NewMsgServerImpl(k Keeper) dealertypes.MsgServer {
 	return &msgServer{Keeper: k}
 }
 
+func (m msgServer) requireActiveBondedCaller(ctx context.Context, caller string) error {
+	acc, err := sdk.AccAddressFromBech32(caller)
+	if err != nil {
+		return dealertypes.ErrInvalidRequest.Wrap("invalid caller")
+	}
+
+	bonded, err := m.committeeStakingKeeper.GetBondedValidatorsByPower(ctx)
+	if err != nil {
+		return err
+	}
+
+	callerValoper := sdk.ValAddress(acc.Bytes()).String()
+	for _, v := range bonded {
+		if v.GetOperator() == callerValoper {
+			return nil
+		}
+	}
+	return dealertypes.ErrUnauthorized.Wrapf("caller %s is not an active bonded validator", caller)
+}
+
+func validateDKGWindow(name string, blocks uint64) error {
+	if blocks > dkgMaxWindowBlocks {
+		return fmt.Errorf("%s exceeds max window of %d blocks", name, dkgMaxWindowBlocks)
+	}
+	return nil
+}
+
 func (m msgServer) UpdateParams(ctx context.Context, req *dealertypes.MsgUpdateParams) (*dealertypes.MsgUpdateParamsResponse, error) {
 	if req == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
@@ -63,6 +90,9 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	if req.Threshold > req.CommitteeSize {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("threshold exceeds committee_size")
 	}
+	if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
+		return nil, err
+	}
 
 	if cur, err := m.GetDKG(ctx); err != nil {
 		return nil, err
@@ -98,17 +128,29 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	if commitBlocks == 0 {
 		commitBlocks = dkgCommitBlocksDefault
 	}
+	if err := validateDKGWindow("commitBlocks", commitBlocks); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
+	}
 	complaintBlocks := req.ComplaintBlocks
 	if complaintBlocks == 0 {
 		complaintBlocks = dkgComplaintBlocksDefault
+	}
+	if err := validateDKGWindow("complaintBlocks", complaintBlocks); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
 	}
 	revealBlocks := req.RevealBlocks
 	if revealBlocks == 0 {
 		revealBlocks = dkgRevealBlocksDefault
 	}
+	if err := validateDKGWindow("revealBlocks", revealBlocks); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
+	}
 	finalizeBlocks := req.FinalizeBlocks
 	if finalizeBlocks == 0 {
 		finalizeBlocks = dkgFinalizeBlocksDefault
+	}
+	if err := validateDKGWindow("finalizeBlocks", finalizeBlocks); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
 	}
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)

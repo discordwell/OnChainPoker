@@ -40,6 +40,17 @@ For local development with the `mock` chain adapter only:
 
 See `.env.example`.
 
+Security defaults:
+
+- Production defaults are restrictive:
+  - `COORDINATOR_REQUIRE_WRITE_AUTH` defaults to `true`.
+  - `COORDINATOR_WRITE_RATE_LIMIT_ENABLED` defaults to `true`.
+  - `CORS_ORIGINS` defaults to empty (no external origins) when unset.
+- In non-production environments, the previous local defaults remain:
+  - `COORDINATOR_REQUIRE_WRITE_AUTH` defaults to `false`.
+  - `COORDINATOR_WRITE_RATE_LIMIT_ENABLED` defaults to `false`.
+  - `CORS_ORIGINS` defaults to `*`/open when unset.
+
 To run against the local appchain (`apps/chain` localnet):
 
 ```bash

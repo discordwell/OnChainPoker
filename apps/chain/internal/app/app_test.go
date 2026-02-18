@@ -132,11 +132,64 @@ func newTestApp(t *testing.T) *OCPApp {
 	// Tests rely on the insecure DealerStub (public dealing) to exercise the poker
 	// state machine without running the full dealer pipeline.
 	t.Setenv("OCP_UNSAFE_ALLOW_DEALER_STUB", "1")
+	// Keep legacy unit test workflows working by default (developer-only minting).
+	t.Setenv("OCP_UNSAFE_ALLOW_MINT", "1")
 	a, err := New(t.TempDir())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	return a
+}
+
+func newSecureTestApp(t *testing.T) *OCPApp {
+	t.Helper()
+	// Clear unsafe mint while preserving existing test stubs.
+	t.Setenv("OCP_UNSAFE_ALLOW_DEALER_STUB", "1")
+	t.Setenv("OCP_UNSAFE_ALLOW_MINT", "")
+	a, err := New(t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return a
+}
+
+func TestBankMint_DefaultModeRejectsWithoutUnsafeFlag(t *testing.T) {
+	a := newSecureTestApp(t)
+
+	pub, _ := testEd25519Key(testMinterValidatorID)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": testMinterValidatorID,
+		"pubKey":      []byte(pub),
+	}, testMinterValidatorID), 1, 0))
+
+	res := a.deliverTx(txBytesSigned(t, "bank/mint", map[string]any{
+		"to":     "alice",
+		"amount": uint64(10),
+	}, testMinterValidatorID), 1, 0)
+	if res.Code == 0 {
+		t.Fatalf("expected mint to fail without OCP_UNSAFE_ALLOW_MINT")
+	}
+	if got := a.st.Balance("alice"); got != 0 {
+		t.Fatalf("minted unexpectedly without flag: alice balance=%d", got)
+	}
+}
+
+func TestBankMint_UnsafeFlagAllowsMintInDevFlow(t *testing.T) {
+	a := newTestApp(t)
+
+	pub, _ := testEd25519Key(testMinterValidatorID)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": testMinterValidatorID,
+		"pubKey":      []byte(pub),
+	}, testMinterValidatorID), 1, 0))
+
+	mustOk(t, a.deliverTx(txBytesSigned(t, "bank/mint", map[string]any{
+		"to":     "alice",
+		"amount": uint64(10),
+	}, testMinterValidatorID), 1, 0))
+	if got := a.st.Balance("alice"); got != 10 {
+		t.Fatalf("expected alice balance 10, got %d", got)
+	}
 }
 
 func mustOk(t *testing.T, res *abci.ExecTxResult) *abci.ExecTxResult {

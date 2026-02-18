@@ -29,7 +29,7 @@ func TestDKGTimeout_MissingCommits_AbortsAndSlashesBond(t *testing.T) {
 	}
 
 	// Begin DKG epoch 1, threshold=2. Only v1 will commit.
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(3),
 		"threshold":       uint8(2),
@@ -37,7 +37,7 @@ func TestDKGTimeout_MissingCommits_AbortsAndSlashesBond(t *testing.T) {
 		"complaintBlocks": uint64(1),
 		"revealBlocks":    uint64(1),
 		"finalizeBlocks":  uint64(1),
-	}), height, 0))
+	}, "v1"), height, 0))
 
 	commitments := [][]byte{
 		ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes(),
@@ -94,7 +94,7 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 	}
 
 	// Begin DKG epoch 1, threshold=2.
-	mustOk(t, a.deliverTx(txBytes(t, "dealer/begin_epoch", map[string]any{
+	mustOk(t, a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
 		"epochId":         uint64(1),
 		"committeeSize":   uint32(2),
 		"threshold":       uint8(2),
@@ -102,7 +102,7 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 		"complaintBlocks": uint64(5),
 		"revealBlocks":    uint64(5),
 		"finalizeBlocks":  uint64(5),
-	}), height, 0))
+	}, "v1"), height, 0))
 
 	// Commitments for v1: f(x)=5 + 7x (threshold=2).
 	commitmentsV1 := [][]byte{
@@ -185,5 +185,64 @@ func TestDKGComplaintInvalid_SignedShareEvidence_SlashesDealer(t *testing.T) {
 	}
 	if !bytes.Equal(got.Share, share) {
 		t.Fatalf("share bytes mismatch")
+	}
+}
+
+func TestDealerBeginEpochRequiresActiveValidatorSigner(t *testing.T) {
+	const height = int64(1)
+	a := newTestApp(t)
+
+	pub, _ := testEd25519Key("v1")
+	mintTestTokens(t, a, height, "v1", 1000)
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/register_validator", map[string]any{
+		"validatorId": "v1",
+		"pubKey":      []byte(pub),
+	}, "v1"), height, 0))
+	mustOk(t, a.deliverTx(txBytesSigned(t, "staking/bond", map[string]any{
+		"validatorId": "v1",
+		"amount":      uint64(100),
+	}, "v1"), height, 0))
+
+	v := findValidator(a.st, "v1")
+	if v == nil {
+		t.Fatalf("expected v1 validator")
+	}
+	v.Status = state.ValidatorJailed
+
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
+		"epochId":         uint64(1),
+		"committeeSize":   uint32(1),
+		"threshold":       uint8(1),
+		"commitBlocks":    uint64(1),
+		"complaintBlocks": uint64(1),
+		"revealBlocks":    uint64(1),
+		"finalizeBlocks":  uint64(1),
+	}, "v1"), height, 0)
+	if res.Code == 0 {
+		t.Fatalf("expected begin_epoch to fail for jailed validator")
+	}
+	if a.st.Dealer.DKG != nil {
+		t.Fatalf("dkg should not be set on authorization failure")
+	}
+	if a.st.Dealer.NextEpochID != 1 {
+		t.Fatalf("nextEpochID should not change on authorization failure")
+	}
+}
+
+func TestDealerBeginEpochRequiresRegisteredValidatorSigner(t *testing.T) {
+	a := newTestApp(t)
+	res := a.deliverTx(txBytesSigned(t, "dealer/begin_epoch", map[string]any{
+		"epochId":       uint64(1),
+		"committeeSize": uint32(1),
+		"threshold":     uint8(1),
+	}, "alice"), 1, 0)
+	if res.Code == 0 {
+		t.Fatalf("expected begin_epoch to fail for non-validator signer")
+	}
+	if a.st.Dealer.DKG != nil {
+		t.Fatalf("dkg should not be set on authorization failure")
+	}
+	if a.st.Dealer.NextEpochID != 1 {
+		t.Fatalf("nextEpochID should not change on authorization failure")
 	}
 }

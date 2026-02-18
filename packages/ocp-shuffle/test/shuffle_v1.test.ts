@@ -81,6 +81,22 @@ test("WS5: missing rerandomization (reusing c1) fails verification", () => {
   assert.equal(vr.ok, false);
 });
 
+test("WS5: verify handles odd/even rounds with mixed parity singles", () => {
+  const sk = 2468n;
+  const pk = mulBase(sk);
+  const rounds = 7;
+
+  const cases = [2, 3, 4, 5, 6];
+  for (const n of cases) {
+    const deckIn = makeDeck(pk, n, BigInt(1000 + n));
+    const seed = new Uint8Array(32).fill(17 + n);
+    const { proofBytes } = shuffleProveV1(pk, deckIn, { seed, rounds });
+    const vr = shuffleVerifyV1(pk, deckIn, proofBytes);
+    if (!vr.ok) throw new Error(vr.error);
+    assert.equal(vr.deckOut.length, n);
+  }
+});
+
 test("WS5: N=52 smoke (rounds=10) verifies", () => {
   const sk = 999n;
   const pk = mulBase(sk);

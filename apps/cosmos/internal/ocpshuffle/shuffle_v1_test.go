@@ -42,6 +42,31 @@ func TestShuffleV1_ValidProofVerifiesSmallDeck(t *testing.T) {
 	}
 }
 
+func TestShuffleV1_VerifySupportsOddAndEvenDeckSizes(t *testing.T) {
+	sk := ocpcrypto.ScalarFromUint64(2468)
+	pk := ocpcrypto.MulBase(sk)
+
+	for _, n := range []int{2, 3, 4, 5, 6} {
+		deckIn := makeDeck(pk, n, 1000+uint64(n))
+		seed := make([]byte, 32)
+		for i := range seed {
+			seed[i] = byte(17 + n)
+		}
+
+		res, err := ShuffleProveV1(pk, deckIn, ShuffleProveOpts{Seed: seed, Rounds: 7})
+		if err != nil {
+			t.Fatalf("prove n=%d: %v", n, err)
+		}
+		vr := ShuffleVerifyV1(pk, deckIn, res.ProofBytes)
+		if !vr.OK {
+			t.Fatalf("verify n=%d failed: %s", n, vr.Error)
+		}
+		if len(vr.DeckOut) != n {
+			t.Fatalf("deckOut length mismatch n=%d: %d", n, len(vr.DeckOut))
+		}
+	}
+}
+
 func TestShuffleV1_TamperingOutputDeckBytesFailsVerification(t *testing.T) {
 	sk := ocpcrypto.ScalarFromUint64(123)
 	pk := ocpcrypto.MulBase(sk)
@@ -144,4 +169,3 @@ func TestShuffleV1_N52SmokeRounds10Verifies(t *testing.T) {
 		t.Fatalf("verify failed: %s", vr.Error)
 	}
 }
-

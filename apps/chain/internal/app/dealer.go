@@ -31,7 +31,16 @@ const (
 	dkgComplaintBlocksDefault uint64 = 5
 	dkgRevealBlocksDefault    uint64 = 5
 	dkgFinalizeBlocksDefault  uint64 = 5
+
+	dkgMaxWindowBlocks uint64 = 1_000_000
 )
+
+func validateDKGWindow(name string, blocks uint64) error {
+	if blocks > dkgMaxWindowBlocks {
+		return fmt.Errorf("%s exceeds max window of %d blocks", name, dkgMaxWindowBlocks)
+	}
+	return nil
+}
 
 func u64le(x uint64) []byte {
 	b := make([]byte, 8)
@@ -174,17 +183,29 @@ func dealerBeginEpoch(st *state.State, msg codec.DealerBeginEpochTx) (*abci.Exec
 	if commitBlocks == 0 {
 		commitBlocks = dkgCommitBlocksDefault
 	}
+	if err := validateDKGWindow("commitBlocks", commitBlocks); err != nil {
+		return nil, err
+	}
 	complaintBlocks := msg.ComplaintBlocks
 	if complaintBlocks == 0 {
 		complaintBlocks = dkgComplaintBlocksDefault
+	}
+	if err := validateDKGWindow("complaintBlocks", complaintBlocks); err != nil {
+		return nil, err
 	}
 	revealBlocks := msg.RevealBlocks
 	if revealBlocks == 0 {
 		revealBlocks = dkgRevealBlocksDefault
 	}
+	if err := validateDKGWindow("revealBlocks", revealBlocks); err != nil {
+		return nil, err
+	}
 	finalizeBlocks := msg.FinalizeBlocks
 	if finalizeBlocks == 0 {
 		finalizeBlocks = dkgFinalizeBlocksDefault
+	}
+	if err := validateDKGWindow("finalizeBlocks", finalizeBlocks); err != nil {
+		return nil, err
 	}
 
 	startH := st.Height

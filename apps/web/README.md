@@ -1,8 +1,11 @@
 # @onchainpoker/web
 
-Operator GUI for coordinator-driven table discovery, seat intents, and live chain event monitoring.
+Operator and player UI for:
 
-## Run
+- coordinator monitoring (tables, seat intents, raw appchain state, and events),
+- Cosmos wallet actions (`sit`, `act`) for a basic playable flow.
+
+## Run (dev)
 
 From repo root:
 
@@ -11,13 +14,34 @@ pnpm install
 pnpm web:dev
 ```
 
-Default app URL: `http://127.0.0.1:5173/ocp/`
+Default app URL: `http://127.0.0.1:5173/ocp/`.
 
-Set coordinator endpoint at runtime from the UI, or preconfigure with:
+Use Vite env vars to point at your services:
 
 ```bash
-VITE_COORDINATOR_HTTP_URL=http://127.0.0.1:8788 pnpm web:dev
+VITE_COORDINATOR_HTTP_URL=http://127.0.0.1:8788 \
+VITE_COSMOS_RPC_URL=http://127.0.0.1:26657 \
+VITE_COSMOS_LCD_URL=http://127.0.0.1:1317 \
+VITE_COSMOS_CHAIN_ID=ocp-local-1 \
+VITE_COSMOS_GAS_PRICE=0uocp \
+pnpm web:dev
 ```
+
+## Minimal player path
+
+1. Open the app and select an active table from the left lobby.
+2. Connect wallet in **Player Desk**.
+3. Submit `Sit` with a seat index and buy-in.
+4. When it is your turn and your seat is active, choose `fold`, `check`, `call`, `bet`, or `raise` and submit.
+
+The player flow uses the SDK/Cosmos clients directly through:
+
+- `connectOcpCosmosSigningClient`
+- `createOcpCosmosClient`
+- `pokerSit`
+- `pokerAct`
+
+No operator endpoint is required for those actions.
 
 ## Build
 
@@ -25,9 +49,9 @@ VITE_COORDINATOR_HTTP_URL=http://127.0.0.1:8788 pnpm web:dev
 pnpm web:build
 ```
 
-Output directory: `apps/web/dist`
+Output directory: `apps/web/dist`.
 
-## Hosting At discordwell.com/ocp
+## Hosting at discordwell.com/ocp
 
 The app build is configured with `base=/ocp/` by default.
 
