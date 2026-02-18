@@ -32,6 +32,8 @@ export type SwitchProof = {
 
 const DOMAIN_SWITCH = "ocp/v1/shuffle/switch-or";
 const G = basePoint();
+const T1_LABELS = ["t1.0", "t1.1", "t1.2", "t1.3"];
+const T2_LABELS = ["t2.0", "t2.1", "t2.2", "t2.3"];
 
 function dlogDiff(pk: GroupElement, inCt: ElGamalCiphertext, outCt: ElGamalCiphertext): { X: GroupElement; Y: GroupElement } {
   // X = out.c1 - in.c1 = rho*G
@@ -62,8 +64,8 @@ function switchChallenge(params: {
   tr.appendMessage("out0.c2", groupElementToBytes(out0.c2));
   tr.appendMessage("out1.c1", groupElementToBytes(out1.c1));
   tr.appendMessage("out1.c2", groupElementToBytes(out1.c2));
-  for (let i = 0; i < 4; i++) tr.appendMessage(`t1.${i}`, groupElementToBytes(t1[i]!));
-  for (let i = 0; i < 4; i++) tr.appendMessage(`t2.${i}`, groupElementToBytes(t2[i]!));
+  for (let i = 0; i < 4; i++) tr.appendMessage(T1_LABELS[i]!, groupElementToBytes(t1[i]!));
+  for (let i = 0; i < 4; i++) tr.appendMessage(T2_LABELS[i]!, groupElementToBytes(t2[i]!));
   return tr.challengeScalar("e");
 }
 
@@ -161,23 +163,47 @@ export function verifySwitch(params: {
   const e = switchChallenge({ pk, in0, in1, out0, out1, t1: proof.t1, t2: proof.t2 });
   const e1 = scalarSub(e, proof.e0);
 
-  const relIn: [ElGamalCiphertext, ElGamalCiphertext, ElGamalCiphertext, ElGamalCiphertext] = [in0, in1, in1, in0];
-  const relOut: [ElGamalCiphertext, ElGamalCiphertext, ElGamalCiphertext, ElGamalCiphertext] = [out0, out1, out0, out1];
-  const relE: [Scalar, Scalar, Scalar, Scalar] = [proof.e0, proof.e0, e1, e1];
-
-  for (let idx = 0; idx < 4; idx++) {
-    const { X, Y } = dlogDiff(pk, relIn[idx]!, relOut[idx]!);
-    const eBranch = relE[idx]!;
-    const z = proof.z[idx]!;
-
-    // z*G == t1 + e*X
+  {
+    const z = proof.z[0]!;
+    const { X, Y } = dlogDiff(pk, in0, out0);
     const lhs1 = mulPoint(G, z);
-    const rhs1 = pointAdd(proof.t1[idx]!, mulPoint(X, eBranch));
+    const rhs1 = pointAdd(proof.t1[0]!, mulPoint(X, proof.e0));
     if (!pointEq(lhs1, rhs1)) return false;
-
-    // z*pk == t2 + e*Y
     const lhs2 = mulPoint(pk, z);
-    const rhs2 = pointAdd(proof.t2[idx]!, mulPoint(Y, eBranch));
+    const rhs2 = pointAdd(proof.t2[0]!, mulPoint(Y, proof.e0));
+    if (!pointEq(lhs2, rhs2)) return false;
+  }
+
+  {
+    const z = proof.z[1]!;
+    const { X, Y } = dlogDiff(pk, in1, out1);
+    const lhs1 = mulPoint(G, z);
+    const rhs1 = pointAdd(proof.t1[1]!, mulPoint(X, proof.e0));
+    if (!pointEq(lhs1, rhs1)) return false;
+    const lhs2 = mulPoint(pk, z);
+    const rhs2 = pointAdd(proof.t2[1]!, mulPoint(Y, proof.e0));
+    if (!pointEq(lhs2, rhs2)) return false;
+  }
+
+  {
+    const z = proof.z[2]!;
+    const { X, Y } = dlogDiff(pk, in1, out0);
+    const lhs1 = mulPoint(G, z);
+    const rhs1 = pointAdd(proof.t1[2]!, mulPoint(X, e1));
+    if (!pointEq(lhs1, rhs1)) return false;
+    const lhs2 = mulPoint(pk, z);
+    const rhs2 = pointAdd(proof.t2[2]!, mulPoint(Y, e1));
+    if (!pointEq(lhs2, rhs2)) return false;
+  }
+
+  {
+    const z = proof.z[3]!;
+    const { X, Y } = dlogDiff(pk, in0, out1);
+    const lhs1 = mulPoint(G, z);
+    const rhs1 = pointAdd(proof.t1[3]!, mulPoint(X, e1));
+    if (!pointEq(lhs1, rhs1)) return false;
+    const lhs2 = mulPoint(pk, z);
+    const rhs2 = pointAdd(proof.t2[3]!, mulPoint(Y, e1));
     if (!pointEq(lhs2, rhs2)) return false;
   }
 
@@ -212,4 +238,3 @@ export function decodeSwitchProofFromReader(reader: Reader): SwitchProof {
     z: z as [Scalar, Scalar, Scalar, Scalar],
   };
 }
-

@@ -262,30 +262,6 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 	copy(cur, deckIn)
 	next := make([]ocpcrypto.ElGamalCiphertext, n)
 
-	verifySingle := func(round int, idx int, curDeck, nextDeck []ocpcrypto.ElGamalCiphertext) *string {
-		p, err := decodeEqDlogProofFromReader(rd)
-		if err != nil {
-			msg := err.Error()
-			return &msg
-		}
-		if ocpcrypto.PointEq(nextDeck[idx].C1, curDeck[idx].C1) {
-			msg := fmt.Sprintf("single not rerandomized at round=%d idx=%d", round, idx)
-			return &msg
-		}
-		X := ocpcrypto.PointSub(nextDeck[idx].C1, curDeck[idx].C1)
-		Y := ocpcrypto.PointSub(nextDeck[idx].C2, curDeck[idx].C2)
-		ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
-		if err != nil {
-			msg := err.Error()
-			return &msg
-		}
-		if !ok {
-			msg := fmt.Sprintf("invalid single proof at round=%d idx=%d", round, idx)
-			return &msg
-		}
-		return nil
-	}
-
 	for round := 0; round < rounds; round++ {
 		start := round % 2
 
@@ -325,15 +301,57 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 			} else {
 				idx = 0
 			}
-			if errMsg := verifySingle(round, idx, cur, next); errMsg != nil {
-				return ShuffleVerifyResult{OK: false, Error: *errMsg}
+			p, err := decodeEqDlogProofFromReader(rd)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
+			}
+			if ocpcrypto.PointEq(next[idx].C1, cur[idx].C1) {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("single not rerandomized at round=%d idx=%d", round, idx)}
+			}
+			X := ocpcrypto.PointSub(next[idx].C1, cur[idx].C1)
+			Y := ocpcrypto.PointSub(next[idx].C2, cur[idx].C2)
+			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
+			}
+			if !ok {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("invalid single proof at round=%d idx=%d", round, idx)}
 			}
 		} else if start == 1 {
-			if errMsg := verifySingle(round, 0, cur, next); errMsg != nil {
-				return ShuffleVerifyResult{OK: false, Error: *errMsg}
+			const idxFirst = 0
+			p, err := decodeEqDlogProofFromReader(rd)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}
-			if errMsg := verifySingle(round, n-1, cur, next); errMsg != nil {
-				return ShuffleVerifyResult{OK: false, Error: *errMsg}
+			if ocpcrypto.PointEq(next[idxFirst].C1, cur[idxFirst].C1) {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("single not rerandomized at round=%d idx=%d", round, idxFirst)}
+			}
+			X := ocpcrypto.PointSub(next[idxFirst].C1, cur[idxFirst].C1)
+			Y := ocpcrypto.PointSub(next[idxFirst].C2, cur[idxFirst].C2)
+			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
+			}
+			if !ok {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("invalid single proof at round=%d idx=%d", round, idxFirst)}
+			}
+
+			idxLast := n - 1
+			p, err = decodeEqDlogProofFromReader(rd)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
+			}
+			if ocpcrypto.PointEq(next[idxLast].C1, cur[idxLast].C1) {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("single not rerandomized at round=%d idx=%d", round, idxLast)}
+			}
+			X = ocpcrypto.PointSub(next[idxLast].C1, cur[idxLast].C1)
+			Y = ocpcrypto.PointSub(next[idxLast].C2, cur[idxLast].C2)
+			ok, err = verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			if err != nil {
+				return ShuffleVerifyResult{OK: false, Error: err.Error()}
+			}
+			if !ok {
+				return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("invalid single proof at round=%d idx=%d", round, idxLast)}
 			}
 		}
 

@@ -1,5 +1,5 @@
 import type { EncodeObject, OfflineSigner, Registry } from "@cosmjs/proto-signing";
-import { DirectSecp256k1HdWallet } from "@cosmjs/proto-signing";
+import { DirectSecp256k1HdWallet, DirectSecp256k1Wallet } from "@cosmjs/proto-signing";
 import type { DeliverTxResponse, SigningStargateClientOptions } from "@cosmjs/stargate";
 import { calculateFee, GasPrice, SigningStargateClient } from "@cosmjs/stargate";
 
@@ -15,6 +15,15 @@ export async function walletFromMnemonic(args: { mnemonic: string; prefix: strin
 
 export async function walletGenerate(args: { prefix: string; mnemonicLength?: 12 | 15 | 18 | 21 | 24 }): Promise<DirectSecp256k1HdWallet> {
   return DirectSecp256k1HdWallet.generate(args.mnemonicLength ?? 24, { prefix: args.prefix });
+}
+
+export async function walletFromPrivKey(args: { privateKeyHex: string; prefix: string }): Promise<DirectSecp256k1Wallet> {
+  const clean = (args.privateKeyHex ?? "").trim();
+  const normalized = clean.startsWith("0x") ? clean.slice(2) : clean;
+  if (!/^[0-9a-fA-F]{64}$/.test(normalized)) {
+    throw new Error("walletFromPrivKey: private key must be 32-byte hex");
+  }
+  return DirectSecp256k1Wallet.fromKey(new Uint8Array(Buffer.from(normalized, "hex")), { prefix: args.prefix });
 }
 
 export async function connectOcpCosmosSigningClient(args: {

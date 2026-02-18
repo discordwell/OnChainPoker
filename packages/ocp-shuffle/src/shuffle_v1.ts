@@ -181,16 +181,6 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
     let cur: ElGamalCiphertext[] = deckIn.slice();
     let next: ElGamalCiphertext[] = new Array(n);
 
-    const verifySingle = (round: number, idx: number, curDeck: ElGamalCiphertext[], nextDeck: ElGamalCiphertext[]) => {
-      const p = decodeEqDlogProofFromReader(rd);
-      if (pointEq(nextDeck[idx]!.c1, curDeck[idx]!.c1)) return `single not rerandomized at round=${round} idx=${idx}`;
-      const X = nextDeck[idx]!.c1.subtract(curDeck[idx]!.c1);
-      const Y = nextDeck[idx]!.c2.subtract(curDeck[idx]!.c2);
-      const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
-      if (!ok) return `invalid single proof at round=${round} idx=${idx}`;
-      return null;
-    };
-
     for (let round = 0; round < rounds; round++) {
       const start = round & 1;
       const deckBytes = rd.take(n * 64);
@@ -209,13 +199,38 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
       // 3) Single proofs (singles in order)
       if (n % 2 === 1) {
         const idx = start === 0 ? n - 1 : 0;
-        const err = verifySingle(round, idx, cur, next);
-        if (err) return { ok: false, error: err };
+        const p = decodeEqDlogProofFromReader(rd);
+        if (pointEq(next[idx]!.c1, cur[idx]!.c1)) {
+          return { ok: false, error: `single not rerandomized at round=${round} idx=${idx}` };
+        }
+        const X = next[idx]!.c1.subtract(cur[idx]!.c1);
+        const Y = next[idx]!.c2.subtract(cur[idx]!.c2);
+        const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+        if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${idx}` };
       } else if (start === 1) {
-        const singleErrFirst = verifySingle(round, 0, cur, next);
-        if (singleErrFirst) return { ok: false, error: singleErrFirst };
-        const singleErrLast = verifySingle(round, n - 1, cur, next);
-        if (singleErrLast) return { ok: false, error: singleErrLast };
+        const singleIdx0 = 0;
+        {
+          const p = decodeEqDlogProofFromReader(rd);
+          if (pointEq(next[singleIdx0]!.c1, cur[singleIdx0]!.c1)) {
+            return { ok: false, error: `single not rerandomized at round=${round} idx=${singleIdx0}` };
+          }
+          const X = next[singleIdx0]!.c1.subtract(cur[singleIdx0]!.c1);
+          const Y = next[singleIdx0]!.c2.subtract(cur[singleIdx0]!.c2);
+          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+          if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${singleIdx0}` };
+        }
+
+        const singleIdxLast = n - 1;
+        {
+          const p = decodeEqDlogProofFromReader(rd);
+          if (pointEq(next[singleIdxLast]!.c1, cur[singleIdxLast]!.c1)) {
+            return { ok: false, error: `single not rerandomized at round=${round} idx=${singleIdxLast}` };
+          }
+          const X = next[singleIdxLast]!.c1.subtract(cur[singleIdxLast]!.c1);
+          const Y = next[singleIdxLast]!.c2.subtract(cur[singleIdxLast]!.c2);
+          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+          if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${singleIdxLast}` };
+        }
       }
 
       const finished = cur;

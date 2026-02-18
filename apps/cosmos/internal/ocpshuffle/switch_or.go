@@ -1,8 +1,6 @@
 package ocpshuffle
 
 import (
-	"fmt"
-
 	"onchainpoker/apps/cosmos/internal/ocpcrypto"
 )
 
@@ -25,6 +23,8 @@ const (
 )
 
 var G = ocpcrypto.PointBase()
+var switchChallengeT1Labels = [4]string{"t1.0", "t1.1", "t1.2", "t1.3"}
+var switchChallengeT2Labels = [4]string{"t2.0", "t2.1", "t2.2", "t2.3"}
 
 func dlogDiff(inCt ocpcrypto.ElGamalCiphertext, outCt ocpcrypto.ElGamalCiphertext) (ocpcrypto.Point, ocpcrypto.Point) {
 	// X = out.c1 - in.c1 = rho*G
@@ -46,10 +46,10 @@ func switchChallenge(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 oc
 	_ = tr.AppendMessage("out1.c1", out1.C1.Bytes())
 	_ = tr.AppendMessage("out1.c2", out1.C2.Bytes())
 	for i := 0; i < 4; i++ {
-		_ = tr.AppendMessage(fmt.Sprintf("t1.%d", i), t1[i].Bytes())
+		_ = tr.AppendMessage(switchChallengeT1Labels[i], t1[i].Bytes())
 	}
 	for i := 0; i < 4; i++ {
-		_ = tr.AppendMessage(fmt.Sprintf("t2.%d", i), t2[i].Bytes())
+		_ = tr.AppendMessage(switchChallengeT2Labels[i], t2[i].Bytes())
 	}
 	return tr.ChallengeScalar("e")
 }
@@ -156,29 +156,70 @@ func verifySwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcr
 	}
 	e1 := ocpcrypto.ScalarSub(e, proof.E0)
 
-	relIn := [4]ocpcrypto.ElGamalCiphertext{in0, in1, in1, in0}
-	relOut := [4]ocpcrypto.ElGamalCiphertext{out0, out1, out0, out1}
-	relE := [4]ocpcrypto.Scalar{proof.E0, proof.E0, e1, e1}
-
-	for idx := 0; idx < 4; idx++ {
-		X, Y := dlogDiff(relIn[idx], relOut[idx])
-		eBranch := relE[idx]
-		z := proof.Z[idx]
-
-		// z*G == t1 + e*X
+	{
+		z := proof.Z[0]
+		X, Y := dlogDiff(in0, out0)
 		lhs1 := ocpcrypto.MulPoint(G, z)
-		rhs1 := ocpcrypto.PointAdd(proof.T1[idx], ocpcrypto.MulPoint(X, eBranch))
+		rhs1 := ocpcrypto.PointAdd(proof.T1[0], ocpcrypto.MulPoint(X, proof.E0))
 		if !ocpcrypto.PointEq(lhs1, rhs1) {
 			return false, nil
 		}
 
-		// z*pk == t2 + e*Y
 		lhs2 := ocpcrypto.MulPoint(pk, z)
-		rhs2 := ocpcrypto.PointAdd(proof.T2[idx], ocpcrypto.MulPoint(Y, eBranch))
+		rhs2 := ocpcrypto.PointAdd(proof.T2[0], ocpcrypto.MulPoint(Y, proof.E0))
 		if !ocpcrypto.PointEq(lhs2, rhs2) {
 			return false, nil
 		}
 	}
+
+	{
+		z := proof.Z[1]
+		X, Y := dlogDiff(in1, out1)
+		lhs1 := ocpcrypto.MulPoint(G, z)
+		rhs1 := ocpcrypto.PointAdd(proof.T1[1], ocpcrypto.MulPoint(X, proof.E0))
+		if !ocpcrypto.PointEq(lhs1, rhs1) {
+			return false, nil
+		}
+
+		lhs2 := ocpcrypto.MulPoint(pk, z)
+		rhs2 := ocpcrypto.PointAdd(proof.T2[1], ocpcrypto.MulPoint(Y, proof.E0))
+		if !ocpcrypto.PointEq(lhs2, rhs2) {
+			return false, nil
+		}
+	}
+
+	{
+		z := proof.Z[2]
+		X, Y := dlogDiff(in1, out0)
+		lhs1 := ocpcrypto.MulPoint(G, z)
+		rhs1 := ocpcrypto.PointAdd(proof.T1[2], ocpcrypto.MulPoint(X, e1))
+		if !ocpcrypto.PointEq(lhs1, rhs1) {
+			return false, nil
+		}
+
+		lhs2 := ocpcrypto.MulPoint(pk, z)
+		rhs2 := ocpcrypto.PointAdd(proof.T2[2], ocpcrypto.MulPoint(Y, e1))
+		if !ocpcrypto.PointEq(lhs2, rhs2) {
+			return false, nil
+		}
+	}
+
+	{
+		z := proof.Z[3]
+		X, Y := dlogDiff(in0, out1)
+		lhs1 := ocpcrypto.MulPoint(G, z)
+		rhs1 := ocpcrypto.PointAdd(proof.T1[3], ocpcrypto.MulPoint(X, e1))
+		if !ocpcrypto.PointEq(lhs1, rhs1) {
+			return false, nil
+		}
+
+		lhs2 := ocpcrypto.MulPoint(pk, z)
+		rhs2 := ocpcrypto.PointAdd(proof.T2[3], ocpcrypto.MulPoint(Y, e1))
+		if !ocpcrypto.PointEq(lhs2, rhs2) {
+			return false, nil
+		}
+	}
+
 	return true, nil
 }
 
@@ -241,4 +282,3 @@ func decodeSwitchProofFromReader(r *reader) (SwitchProof, error) {
 	}
 	return SwitchProof{E0: e0, T1: t1, T2: t2, Z: z}, nil
 }
-

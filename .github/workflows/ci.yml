@@ -108,3 +108,36 @@ jobs:
             tail -n 200 "$LOG" || true
             exit 1
           fi
+
+  cosmos-dealer-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.2
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: apps/chain/go.mod
+          cache: true
+          cache-dependency-path: |
+            apps/chain/go.sum
+            apps/cosmos/go.sum
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Dealer Flow E2E (3-node multinet)
+        run: pnpm cosmos:dealer:e2e

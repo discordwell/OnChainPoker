@@ -29,6 +29,27 @@ import {
 import { shuffleProveV1 } from "../packages/ocp-shuffle/dist/index.js";
 
 const RPC = process.env.OCP_RPC ?? "http://127.0.0.1:26657";
+const OCP_E2E_MODE = process.env.OCP_E2E_MODE === "1";
+
+function assertMsg(cond, msg) {
+  if (!cond) throw new Error(`assertion failed: ${msg}`);
+}
+
+function toStringIfNumber(v) {
+  if (typeof v === "number" || typeof v === "bigint") return String(v);
+  return String(v ?? "");
+}
+
+function txEvent(txResult, type) {
+  const events = txResult?.events ?? [];
+  return (events ?? []).find((ev) => ev?.type === type);
+}
+
+function txAttr(txResult, type, key) {
+  const ev = txEvent(txResult, type);
+  if (!ev) return undefined;
+  return (ev.attributes ?? []).find((a) => a.key === key)?.value;
+}
 
 function b64(bytes) {
   return Buffer.from(bytes).toString("base64");

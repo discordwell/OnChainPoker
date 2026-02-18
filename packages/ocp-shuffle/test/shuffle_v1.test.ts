@@ -15,6 +15,49 @@ function makeDeck(pk: any, n: number, seed: bigint): any[] {
   return deck;
 }
 
+function mutateSingleProofForRound(
+  proofBytes: Uint8Array,
+  n: number,
+  rounds: number,
+  targetRound: number,
+  singleSlot: number,
+): Uint8Array {
+  const proof = new Uint8Array(proofBytes);
+  const switchProofLen = 4 * 3 * 32;
+  const singleProofLen = 3 * 32;
+  let offset = 5;
+
+  for (let round = 0; round < rounds; round++) {
+    const start = round & 1;
+    offset += n * 64;
+    const pairCount = Math.floor((n - start) / 2);
+    offset += pairCount * switchProofLen;
+
+    if (round === targetRound) {
+      if (n % 2 === 1) {
+        if (singleSlot !== 0) {
+          throw new Error(`invalid singleSlot=${singleSlot} for odd deck`);
+        }
+        proof[offset] ^= 0x01;
+        return proof;
+      }
+      if (start === 1) {
+        const slotOffset = singleSlot * singleProofLen;
+        proof[offset + slotOffset] ^= 0x01;
+        return proof;
+      }
+      throw new Error(`no singles at round=${round} for n=${n}, start=${start}`);
+    }
+
+    if (n % 2 === 1 || start === 1) {
+      const singleCount = n % 2 === 1 ? 1 : 2;
+      offset += singleCount * singleProofLen;
+    }
+  }
+
+  throw new Error(`targetRound ${targetRound} out of range`);
+}
+
 test("WS5: valid shuffle proof verifies (small deck)", () => {
   const sk = 42n;
   const pk = mulBase(sk);
@@ -105,4 +148,36 @@ test("WS5: N=52 smoke (rounds=10) verifies", () => {
   const { proofBytes } = shuffleProveV1(pk, deckIn, { seed: new Uint8Array(32).fill(1), rounds: 10 });
   const vr = shuffleVerifyV1(pk, deckIn, proofBytes);
   if (!vr.ok) throw new Error(vr.error);
+});
+
+test("WS5: even deck odd-start round uses two single proofs (round 1, n=2, rounds=2)", () => {
+  const sk = 2024n;
+  const pk = mulBase(sk);
+  const deckIn = makeDeck(pk, 2, 2222n);
+
+  const { proofBytes } = shuffleProveV1(pk, deckIn, { seed: new Uint8Array(32).fill(4), rounds: 2 });
+  const vr = shuffleVerifyV1(pk, deckIn, proofBytes);
+  if (!vr.ok) throw new Error(vr.error);
+});
+
+test("WS5: even deck odd-start rejects tampered first single proof (round 1 slot 0)", () => {
+  const sk = 2024n;
+  const pk = mulBase(sk);
+  const deckIn = makeDeck(pk, 2, 2222n);
+
+  const { proofBytes } = shuffleProveV1(pk, deckIn, { seed: new Uint8Array(32).fill(4), rounds: 2 });
+  const bad = mutateSingleProofForRound(proofBytes, 2, 2, 1, 0);
+  const vr = shuffleVerifyV1(pk, deckIn, bad);
+  assert.equal(vr.ok, false);
+});
+
+test("WS5: even deck odd-start rejects tampered second single proof (round 1 slot 1)", () => {
+  const sk = 2024n;
+  const pk = mulBase(sk);
+  const deckIn = makeDeck(pk, 2, 2222n);
+
+  const { proofBytes } = shuffleProveV1(pk, deckIn, { seed: new Uint8Array(32).fill(4), rounds: 2 });
+  const bad = mutateSingleProofForRound(proofBytes, 2, 2, 1, 1);
+  const vr = shuffleVerifyV1(pk, deckIn, bad);
+  assert.equal(vr.ok, false);
 });

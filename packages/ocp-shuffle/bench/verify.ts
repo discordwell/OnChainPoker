@@ -55,6 +55,9 @@ async function main() {
   const reps = parseCommiteeSizes(process.env.OCP_SHUFFLE_COMMITTEE, [16, 24, 32, 40, 48, 56, 64]);
   const samples = Number(process.env.OCP_SHUFFLE_SAMPLES ?? 3);
   const exact = process.env.OCP_SHUFFLE_EXACT === "1";
+  const baselinePerProofMs = Number(process.env.OCP_SHUFFLE_BASELINE_PER_PROOF_MS ?? NaN);
+  const hasBaseline = Number.isFinite(baselinePerProofMs) && baselinePerProofMs > 0;
+  const baselineLabel = process.env.OCP_SHUFFLE_BASELINE_LABEL ?? "baseline";
 
   const pk = mulBase(123n);
   const deckIn = makeDeck(pk, n);
@@ -84,6 +87,15 @@ async function main() {
   const min = Math.min(...times);
   const max = Math.max(...times);
   console.log(`per_proof_ms_mean=${mean.toFixed(2)} min=${min.toFixed(2)} max=${max.toFixed(2)} samples=${samples}`);
+  if (hasBaseline) {
+    const deltaPerProofMs = mean - baselinePerProofMs;
+    const deltaPerProofPct = (deltaPerProofMs / baselinePerProofMs) * 100;
+    console.log(
+      `baseline_label=${baselineLabel} baseline_per_proof_ms=${baselinePerProofMs.toFixed(2)} delta_per_proof_ms=${deltaPerProofMs.toFixed(
+        2,
+      )} delta_per_proof_pct=${deltaPerProofPct.toFixed(2)}%`,
+    );
+  }
 
   for (const k of reps) {
     console.log(`committee=${k} verify_total_ms_est=${(mean * k).toFixed(2)}`);
@@ -103,6 +115,16 @@ async function main() {
     console.log(
       `committee=${k} verify_total_ms_exact=${total.toFixed(2)} per_proof_ms_exact=${mean.toFixed(2)} throughput_per_sec_exact=${throughput.toFixed(2)}`,
     );
+    if (hasBaseline) {
+      const baselineCommitteeMs = baselinePerProofMs * k;
+      const deltaCommitteeMs = total - baselineCommitteeMs;
+      const deltaCommitteePct = (deltaCommitteeMs / baselineCommitteeMs) * 100;
+      console.log(
+        `committee=${k} baseline_total_ms_exact=${baselineCommitteeMs.toFixed(2)} delta_total_ms_exact=${deltaCommitteeMs.toFixed(
+          2,
+        )} delta_total_pct_exact=${deltaCommitteePct.toFixed(2)}%`,
+      );
+    }
     }
   }
 
