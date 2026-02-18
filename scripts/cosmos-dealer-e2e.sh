@@ -58,7 +58,16 @@ pnpm -C packages/ocp-shuffle build
 pnpm sdk:build
 
 echo "[cosmos-dealer-e2e] running confidential dealer e2e"
-if ! timeout 900s COSMOS_OCPD_NUM_NODES="$COSMOS_OCPD_NUM_NODES" pnpm ws7:play_hand_cosmos; then
+if command -v timeout >/dev/null 2>&1; then
+  e2e_cmd=(timeout 900s env COSMOS_OCPD_NUM_NODES="$COSMOS_OCPD_NUM_NODES" pnpm ws7:play_hand_cosmos)
+elif command -v gtimeout >/dev/null 2>&1; then
+  e2e_cmd=(gtimeout 900s env COSMOS_OCPD_NUM_NODES="$COSMOS_OCPD_NUM_NODES" pnpm ws7:play_hand_cosmos)
+else
+  echo "[cosmos-dealer-e2e] warning: no timeout/gtimeout found; running without command timeout"
+  e2e_cmd=(env COSMOS_OCPD_NUM_NODES="$COSMOS_OCPD_NUM_NODES" pnpm ws7:play_hand_cosmos)
+fi
+
+if ! "${e2e_cmd[@]}"; then
   echo "[cosmos-dealer-e2e] e2e run failed"
   tail -n 200 "$MULTINET_LOG" || true
   exit 1

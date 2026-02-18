@@ -21,7 +21,6 @@ import {
   CURVE_ORDER,
   concatBytes,
   hashToScalar,
-  lagrangeAtZero,
   mulBase,
   mulPoint,
   pointAdd,
@@ -54,10 +53,10 @@ const BUY_IN = BigInt(process.env.COSMOS_BUY_IN ?? "1000000");
 const FAUCET_AMOUNT = BigInt(process.env.COSMOS_FAUCET_AMOUNT ?? "10000000");
 const NO_FAUCET = (process.env.COSMOS_NO_FAUCET ?? "").trim() === "1";
 
-const DKG_COMMIT_BLOCKS = Number(process.env.COSMOS_DKG_COMMIT_BLOCKS ?? "3");
-const DKG_COMPLAINT_BLOCKS = Number(process.env.COSMOS_DKG_COMPLAINT_BLOCKS ?? "3");
-const DKG_REVEAL_BLOCKS = Number(process.env.COSMOS_DKG_REVEAL_BLOCKS ?? "3");
-const DKG_FINALIZE_BLOCKS = Number(process.env.COSMOS_DKG_FINALIZE_BLOCKS ?? "3");
+const DKG_COMMIT_BLOCKS = Number(process.env.COSMOS_DKG_COMMIT_BLOCKS ?? "12");
+const DKG_COMPLAINT_BLOCKS = Number(process.env.COSMOS_DKG_COMPLAINT_BLOCKS ?? "12");
+const DKG_REVEAL_BLOCKS = Number(process.env.COSMOS_DKG_REVEAL_BLOCKS ?? "12");
+const DKG_FINALIZE_BLOCKS = Number(process.env.COSMOS_DKG_FINALIZE_BLOCKS ?? "12");
 const OCPD_NUM_NODES = Number(process.env.COSMOS_OCPD_NUM_NODES ?? process.env.OCPD_NUM_NODES ?? "3");
 
 const OCPD_MULTI_HOME = (process.env.COSMOS_MULTI_HOME ?? process.env.OCPD_MULTI_HOME ?? `${process.cwd()}/apps/cosmos/.ocpd-multi`).trim();
@@ -94,6 +93,27 @@ function sleepMs(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function isRetriableNetworkError(err) {
+  const msg = String(err?.message ?? err);
+  return /ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|socket hang up|network|fetch failed/i.test(msg);
+}
+
+async function withRetry(label, fn, { attempts = 8, delayMs = 400 } = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt >= attempts || !isRetriableNetworkError(err)) {
+        throw err;
+      }
+      await sleepMs(delayMs * attempt);
+    }
+  }
+  throw lastError ?? new Error(`${label}: unknown retry failure`);
+}
+
 function asNumber(v) {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
   if (typeof v === "bigint") return Number(v);
@@ -107,6 +127,16 @@ function asNumber(v) {
 function asString(v) {
   if (v == null) return "";
   return String(v);
+}
+
+function pick(obj, ...keys) {
+  if (!obj || typeof obj !== "object") return undefined;
+  for (const k of keys) {
+    if (Object.prototype.hasOwnProperty.call(obj, k) && obj[k] != null) {
+      return obj[k];
+    }
+  }
+  return undefined;
 }
 
 function decodeBytes(raw) {
@@ -133,27 +163,28 @@ function hexFromOutput(raw) {
 
 function normalizePhase(raw) {
   const s = asString(raw).toLowerCase();
-  const clean = s.replace(/hand_phase_/, "");
-  if (clean === "hand_phase_betting") return "betting";
-  if (clean === "hand_phase_shuffle") return "shuffle";
-  if (clean === "hand_phase_await_flop") return "awaitFlop";
-  if (clean === "hand_phase_await_turn") return "awaitTurn";
-  if (clean === "hand_phase_await_river") return "awaitRiver";
-  if (clean === "hand_phase_await_showdown") return "awaitShowdown";
-  if (clean === "hand_phase_showdown") return "showdown";
+  const clean = s.startsWith("hand_phase_") ? s.slice("hand_phase_".length) : s;
+  if (clean === "betting") return "betting";
+  if (clean === "shuffle") return "shuffle";
+  if (clean === "await_flop") return "awaitFlop";
+  if (clean === "await_turn") return "awaitTurn";
+  if (clean === "await_river") return "awaitRiver";
+  if (clean === "await_showdown") return "awaitShowdown";
+  if (clean === "showdown") return "showdown";
   return clean;
 }
 
 function toCallForSeat(table, seatIdx) {
   const h = table?.hand;
   if (!h) return 0;
-  const betTo = asNumber(h.betTo) ?? 0;
-  const committed = asNumber(h.streetCommit?.[seatIdx]) ?? 0;
+  const betTo = asNumber(pick(h, "betTo", "bet_to")) ?? 0;
+  const streetCommit = pick(h, "streetCommit", "street_commit");
+  const committed = asNumber(Array.isArray(streetCommit) ? streetCommit[seatIdx] : undefined) ?? 0;
   return Math.max(0, betTo - committed);
 }
 
 function findPlayerAtSeat(table, seatIdx) {
-  const seats = Array.isArray(table?.hand?.seats) ? table.hand.seats : [];
+  const seats = Array.isArray(table?.seats) ? table.seats : [];
   const seat = seats?.[seatIdx];
   return seat?.player ?? null;
 }
@@ -164,6 +195,11 @@ function expectedRevealPos(table) {
   const dh = h?.dealer;
   if (!h || !dh) return null;
 
+  const explicitRevealPos = asNumber(pick(dh, "revealPos", "reveal_pos"));
+  if (explicitRevealPos != null && Number.isFinite(explicitRevealPos) && explicitRevealPos >= 0 && explicitRevealPos !== 255) {
+    return explicitRevealPos;
+  }
+
   if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver") {
     const cursor = asNumber(dh.cursor) ?? 0;
     const boardLen = Array.isArray(h.board) ? h.board.length : 0;
@@ -171,7 +207,8 @@ function expectedRevealPos(table) {
   }
 
   if (phase === "awaitShowdown") {
-    const holePos = Array.isArray(dh.holePos) ? dh.holePos.map(asNumber).filter(Number.isFinite) : [];
+    const holePosRaw = pick(dh, "holePos", "hole_pos");
+    const holePos = Array.isArray(holePosRaw) ? holePosRaw.map(asNumber).filter(Number.isFinite) : [];
     if (holePos.length !== 18) return null;
 
     const reveals = new Set();
@@ -180,7 +217,8 @@ function expectedRevealPos(table) {
       if (rp != null && Number.isFinite(rp)) reveals.add(rp);
     }
 
-    const inHand = Array.isArray(h.inHand) ? h.inHand : [];
+    const inHandRaw = pick(h, "inHand", "in_hand");
+    const inHand = Array.isArray(inHandRaw) ? inHandRaw : [];
     const folded = Array.isArray(h.folded) ? h.folded : [];
     const eligible = [];
     for (let seat = 0; seat < 9; seat++) {
@@ -232,6 +270,7 @@ function faucet(toAddr, amount) {
       OCPD_HOME: NODE0_HOME,
       OCPD_NODE: OCP_NODE,
       OCPD_KEYRING_BACKEND: KEYRING_BACKEND,
+      OCPD_WAIT: "0",
     },
   });
   if (res.status !== 0) throw new Error(`faucet failed: exit=${res.status}`);
@@ -282,12 +321,15 @@ async function mkValidatorClient(name, node) {
   if (!address) throw new Error(`${name}: wallet has no account`);
 
   const registry = createOcpRegistry();
-  const signing = await connectOcpCosmosSigningClient({
-    rpcUrl: RPC,
-    signer: wallet,
-    gasPrice: GAS_PRICE,
-    registry,
-  });
+  const signing = await withRetry(`${name}: connect signing client`, () =>
+    connectOcpCosmosSigningClient({
+      rpcUrl: RPC,
+      lcdUrl: LCD,
+      signer: wallet,
+      gasPrice: GAS_PRICE,
+      registry,
+    }),
+  );
   const lcd = new CosmosLcdClient({ baseUrl: LCD });
 
   const valAddress = getNodeValidatorAddress(node, "val").trim();
@@ -365,12 +407,15 @@ async function mkClient(name, mnemonicEnv) {
   faucet(address, FAUCET_AMOUNT);
 
   const registry = createOcpRegistry();
-  const signing = await connectOcpCosmosSigningClient({
-    rpcUrl: RPC,
-    signer: wallet,
-    gasPrice: GAS_PRICE,
-    registry,
-  });
+  const signing = await withRetry(`${name}: connect signing client`, () =>
+    connectOcpCosmosSigningClient({
+      rpcUrl: RPC,
+      lcdUrl: LCD,
+      signer: wallet,
+      gasPrice: GAS_PRICE,
+      registry,
+    }),
+  );
   const lcd = new CosmosLcdClient({ baseUrl: LCD });
   return { name, address, client: createOcpCosmosClient({ signing, lcd }) };
 }
@@ -418,7 +463,8 @@ async function main() {
   for (const [idx, p] of players.entries()) {
     p.seat = idx;
     const sk = nonzeroScalar();
-    p.pkPlayer = groupElementToBytes(mulBase(sk));
+    p.pkPlayerPoint = mulBase(sk);
+    p.pkPlayer = groupElementToBytes(p.pkPlayerPoint);
   }
 
   const validatorSigners = await loadValidatorClients();
@@ -459,7 +505,7 @@ async function main() {
   if (!tableId) throw new Error("could not determine tableId");
 
   await Promise.all(players.map((p, idx) =>
-    alice.client.pokerSit({
+    p.client.pokerSit({
       tableId,
       seat: idx,
       buyIn: BUY_IN,
@@ -470,9 +516,9 @@ async function main() {
 
   const startTx = await alice.client.pokerStartHand({ tableId });
   const parsedHandId = parseHandIdFromTx(startTx);
-  const tableAfterStart = await waitFor("active hand", async () => alice.client.getTable(tableId), (t) => t?.hand?.handId);
+  const tableAfterStart = await waitFor("active hand", async () => alice.client.getTable(tableId), (t) => pick(t?.hand, "handId", "hand_id"));
 
-  const handId = parsedHandId ?? readBigIntLike(tableAfterStart?.hand?.handId);
+  const handId = parsedHandId ?? readBigIntLike(pick(tableAfterStart?.hand, "handId", "hand_id"));
   if (!handId) throw new Error("could not determine handId");
 
   const beginSigner = validatorSigners[0];
@@ -502,25 +548,28 @@ async function main() {
   });
 
   const secretSharesByValidator = new Map();
-  for (const item of polynomials) {
+  for (const member of dkgMembers) {
+    let aggregated = 0n;
+    for (const poly of polynomials) {
+      aggregated = modQ(aggregated + evalPoly(poly.coeffs, BigInt(member.index)));
+    }
+    secretSharesByValidator.set(member.validator, {
+      index: member.index,
+      secretShare: aggregated,
+    });
+  }
+
+  await Promise.all(polynomials.map(async (item) => {
     const validatorClient = validatorByVal.get(normalizeString(item.member.validator));
     if (!validatorClient) {
       throw new Error(`missing validator signer for ${item.member.validator}`);
     }
-
-    const x = BigInt(item.member.index);
-    const share = evalPoly(item.coeffs, x);
-    secretSharesByValidator.set(item.member.validator, {
-      index: item.member.index,
-      secretShare: share,
-    });
-
     await validatorClient.client.dealerDkgCommit({
       dealer: item.member.validator,
       epochId,
       commitments: item.commitments,
     });
-  }
+  }));
 
   await waitFor("all commit submissions", async () => alice.client.getDealerDkg(),
     (dkg) => parseCommitCount(dkg) >= COMMITTEE_SIZE,
@@ -546,20 +595,13 @@ async function main() {
     }
   }
 
-  const epoch = await waitFor("dealer epoch", async () => alice.client.getDealerEpoch(), (e) => Number(asNumber(e?.epochId ?? e?.EpochId)) === epochId);
+  const epoch = await waitFor(
+    "dealer epoch",
+    async () => alice.client.getDealerEpoch(),
+    (e) => Number(asNumber(pick(e, "epochId", "epoch_id", "EpochId"))) === epochId,
+  );
   const epochMembers = parseMembersFromEpoch(epoch);
   if (epochMembers.length < THRESHOLD) throw new Error("dealer epoch members unexpectedly low");
-
-  const tableAfterInitHand = await alice.client.getTable(tableId);
-  const hand = tableAfterInitHand?.hand;
-  if (!hand?.dealer?.pkHand) throw new Error("hand missing dealer.pkHand");
-
-  const deckSize = asNumber(hand?.dealer?.deckSize) ?? 52;
-  const pkHandChain = groupElementFromBytes(decodeBytes(hand.dealer.pkHand));
-  const pkEpoch = groupElementFromBytes(decodeBytes(epoch?.pkEpoch ?? epoch?.PkEpoch));
-  const handScalar = hashToScalar("ocp/v1/dealer/hand-derive", u64le(epochId), u64le(tableId), u64le(handId));
-  const pkHandExpected = mulPoint(pkEpoch, handScalar);
-  if (!pointEq(pkHandExpected, pkHandChain)) throw new Error("pkHand invariant failed");
 
   const initHandTx = await alice.client.dealerInitHand({
     tableId,
@@ -569,10 +611,25 @@ async function main() {
   });
   assertEvent(initHandTx.events, "DealerHandInitialized", "tableId", String(tableId));
 
+  const dealerHandAfterInit = await waitFor(
+    "dealer pk hand",
+    async () => alice.client.getDealerHand(tableId, handId),
+    (dh) => Boolean(pick(dh, "pkHand", "pk_hand")),
+  );
+  const pkHandRaw = pick(dealerHandAfterInit, "pkHand", "pk_hand");
+  if (!pkHandRaw) throw new Error("hand missing dealer.pkHand");
+
+  const deckSize = asNumber(pick(dealerHandAfterInit, "deckSize", "deck_size")) ?? 52;
+  const pkHandChain = groupElementFromBytes(decodeBytes(pkHandRaw));
+  const pkEpoch = groupElementFromBytes(decodeBytes(pick(epoch, "pkEpoch", "pk_epoch", "PkEpoch")));
+  const handScalar = hashToScalar("ocp/v1/dealer/hand-derive", u64le(epochId), u64le(tableId), u64le(handId));
+  const pkHandExpected = mulPoint(pkEpoch, handScalar);
+  if (!pointEq(pkHandExpected, pkHandChain)) throw new Error("pkHand invariant failed");
+
   for (let step = 1; step <= Math.min(SHUFFLE_STEPS, epochMembers.length); step++) {
     const state = await alice.client.getDealerHand(tableId, handId);
     if (!state) throw new Error("dealer hand unavailable during shuffle");
-    const deck = decodeDeck(state.deck || tableAfterInitHand?.hand?.dealer?.deck);
+    const deck = decodeDeck(pick(state, "deck"));
 
     const { proofBytes } = randomDeckProof(pkHandChain, deck);
     const shuffler = epochMembers[(step - 1) % epochMembers.length]?.validator;
@@ -598,13 +655,20 @@ async function main() {
   assertEvent(deckFinalTx.events, "DeckFinalized", "handId", String(handId));
 
   const afterDeck = await waitFor("deck finalization", async () => alice.client.getDealerHand(tableId, handId),
-    (dh) => dh?.finalized === true,
+    (dh) => pick(dh, "finalized", "deck_finalized") === true,
   );
 
-  const holePos = Array.isArray(afterDeck.holePos) ? afterDeck.holePos.map(asNumber) : [];
+  const tableAfterDeck = await waitFor(
+    "table hole positions",
+    async () => alice.client.getTable(tableId),
+    (t) => Array.isArray(pick(t?.hand?.dealer, "holePos", "hole_pos")),
+  );
+
+  const holePosRaw = pick(afterDeck, "holePos", "hole_pos") ?? pick(tableAfterDeck?.hand?.dealer, "holePos", "hole_pos");
+  const holePos = Array.isArray(holePosRaw) ? holePosRaw.map(asNumber) : [];
   if (holePos.length !== 18) throw new Error("holePos length mismatch");
 
-  const deck = decodeDeck(afterDeck.deck);
+  const deck = decodeDeck(pick(afterDeck, "deck"));
   const thresholdMembers = epochMembers.slice(0, THRESHOLD);
 
   // Provide a valid duplicate-enc-share call and ensure it fails.
@@ -632,11 +696,11 @@ async function main() {
         const d = mulPoint(c1, xHand);
         const r = nonzeroScalar();
         const u = mulBase(r);
-        const v = pointAdd(d, mulPoint(p.pkPlayer, r));
+        const v = pointAdd(d, mulPoint(p.pkPlayerPoint, r));
         const proof = encShareProve({
           y: yHand,
           c1,
-          pkP: p.pkPlayer,
+          pkP: p.pkPlayerPoint,
           u,
           v,
           x: xHand,
@@ -683,23 +747,28 @@ async function main() {
   await waitFor("phase after hole shares", async () => alice.client.getTable(tableId),
     (t) => {
       const phase = normalizePhase(t?.hand?.phase);
-      return phase === "betting" || phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver" || phase === "showdown";
+      return phase === "betting" || phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver" || phase === "awaitShowdown" || phase === "showdown";
     },
   );
 
+  let terminalState = "";
   for (let step = 0; step < 220; step++) {
     const t = await alice.client.getTable(tableId);
     const handInfo = t?.hand;
-    if (!handInfo) throw new Error("hand was cleared unexpectedly");
+    if (!handInfo) {
+      terminalState = "cleared";
+      break;
+    }
     const phase = normalizePhase(handInfo.phase);
 
     if (phase === "showdown") {
+      terminalState = "showdown";
       console.log("hand reached showdown");
       break;
     }
 
     if (phase === "betting") {
-      const actionSeat = asNumber(handInfo.actionOn);
+      const actionSeat = asNumber(pick(handInfo, "actionOn", "action_on"));
       if (!Number.isFinite(actionSeat)) throw new Error("missing actionOn");
       const actionPlayer = findPlayerAtSeat(t, actionSeat);
       const local = players.find((p) => p.address === actionPlayer);
@@ -707,7 +776,7 @@ async function main() {
 
       const toCall = toCallForSeat(t, actionSeat);
       const action = toCall === 0 ? "check" : "call";
-      await alice.client.pokerAct({
+      await local.client.pokerAct({
         player: local.address,
         tableId,
         action,
@@ -746,7 +815,7 @@ async function main() {
           tableId,
           handId,
           pos,
-          pubShare: mulPoint(cipher.c1, xHand),
+          pubShare: groupElementToBytes(mulPoint(cipher.c1, xHand)),
           proofShare: encodeChaumPedersenProof(proof),
         });
       }
@@ -763,17 +832,22 @@ async function main() {
     throw new Error(`unexpected phase: ${phase}`);
   }
 
+  if (!terminalState) {
+    throw new Error("hand did not reach a terminal state within step limit");
+  }
+
   const finalTable = await alice.client.getTable(tableId);
   console.log(JSON.stringify({
     tableId,
     handId,
+    terminalState,
     phase: normalizePhase(finalTable?.hand?.phase),
-    actionOn: finalTable?.hand?.actionOn,
+    actionOn: pick(finalTable?.hand, "actionOn", "action_on"),
     seatCards: players.map((p) => ({
       player: p.address,
       seat: p.seat,
       stack: finalTable?.seats?.[p.seat]?.stack,
-      inHand: finalTable?.hand?.inHand?.[p.seat],
+      inHand: (pick(finalTable?.hand, "inHand", "in_hand") ?? [])[p.seat],
     })),
   }, null, 2));
 }

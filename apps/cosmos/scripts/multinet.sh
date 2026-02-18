@@ -359,8 +359,8 @@ start_nodes() {
       --p2p.laddr "tcp://127.0.0.1:${p2p_port}" \
       --grpc.address "127.0.0.1:${grpc_port}" \
       --rpc.pprof_laddr "127.0.0.1:0" \
-      "${api_flags[@]}" \
-      "${peer_flags[@]}" \
+      ${api_flags[@]+"${api_flags[@]}"} \
+      ${peer_flags[@]+"${peer_flags[@]}"} \
       >"$log" 2>&1 &
 
     pids+=("$!")

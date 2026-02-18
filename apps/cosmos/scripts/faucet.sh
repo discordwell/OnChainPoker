@@ -9,6 +9,7 @@ OCPD_CHAIN_ID="${OCPD_CHAIN_ID:-ocp-local-1}"
 OCPD_KEYRING_BACKEND="${OCPD_KEYRING_BACKEND:-test}"
 OCPD_NODE="${OCPD_NODE:-tcp://127.0.0.1:26657}"
 OCPD_FAUCET_KEY="${OCPD_FAUCET_KEY:-faucet}"
+OCPD_BROADCAST_MODE="${OCPD_BROADCAST_MODE:-sync}"
 OCPD_WAIT="${OCPD_WAIT:-1}"
 OCPD_RETRY="${OCPD_RETRY:-1}"
 OCPD_STRICT_WAIT="${OCPD_STRICT_WAIT:-0}"
@@ -69,6 +70,7 @@ Env:
   OCPD_HOME              (default: apps/cosmos/.ocpd)
   OCPD_CHAIN_ID          (default: ocp-local-1)
   OCPD_NODE              (default: tcp://127.0.0.1:26657)
+  OCPD_BROADCAST_MODE    (default: sync; use block for sequence-safe serial sends)
   OCPD_DENOM             (default: auto-detected from genesis)
   OCPD_KEYRING_BACKEND   (default: test)
   OCPD_FAUCET_KEY         (default: faucet)
@@ -104,7 +106,7 @@ for attempt in {1..40}; do
   set +e
   TX_OUT="$("$OCPD" tx bank send "$OCPD_FAUCET_KEY" "$TO" "${AMOUNT}${DENOM}" \
     --yes \
-    --broadcast-mode sync \
+    --broadcast-mode "$OCPD_BROADCAST_MODE" \
     --chain-id "$OCPD_CHAIN_ID" \
     --node "$OCPD_NODE" \
     --home "$OCPD_HOME" \
@@ -120,7 +122,7 @@ for attempt in {1..40}; do
     break
   fi
 
-  if [[ "$OCPD_RETRY" == "1" ]] && echo "$TX_OUT" | grep -Eq "invalid height|not ready|gas wanted -1 is negative"; then
+  if [[ "$OCPD_RETRY" == "1" ]] && echo "$TX_OUT" | grep -Eiq "invalid height|not ready|gas wanted -1 is negative|account sequence mismatch|incorrect account sequence"; then
     sleep 0.5
     continue
   fi
