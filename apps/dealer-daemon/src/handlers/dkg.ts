@@ -110,11 +110,16 @@ export async function handleDkgComplaints(args: {
       .map((c: any) => String(c.dealer ?? "").toLowerCase())
   );
 
-  // File complaints for all other committed members
+  // Only file complaints against members who have actually committed
+  const committedAddrs = new Set(
+    commits.map((c: any) => String(c.dealer ?? "").toLowerCase())
+  );
+
   for (const member of members) {
     const memberAddr = member.validator.toLowerCase();
     if (memberAddr === myAddress) continue;
     if (myComplaints.has(memberAddr)) continue;
+    if (!committedAddrs.has(memberAddr)) continue;
 
     try {
       await client.dealerDkgComplaintMissing({

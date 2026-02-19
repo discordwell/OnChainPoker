@@ -199,6 +199,10 @@ export class DealerDaemon {
           members: dkgMembers,
         }).catch((err) => logError("DKG commit error", err));
 
+        // Re-fetch DKG state after commit to pick up new commits/complaints
+        const dkgAfterCommit = await this.client.getDealerDkg().catch(() => null);
+        if (!dkgAfterCommit) return;
+
         // Phase 2: File "missing" complaints for all other members
         // (forces on-chain share reveals since there's no off-chain channel)
         await handleDkgComplaints({
@@ -206,8 +210,12 @@ export class DealerDaemon {
           config: this.config,
           epochId,
           members: dkgMembers,
-          dkg,
+          dkg: dkgAfterCommit,
         }).catch((err) => logError("DKG complaint error", err));
+
+        // Re-fetch DKG state after complaints to pick up new reveals
+        const dkgAfterComplaints = await this.client.getDealerDkg().catch(() => null);
+        if (!dkgAfterComplaints) return;
 
         // Phase 3: Reveal shares for complaints targeting us
         await handleDkgReveals({
@@ -216,8 +224,12 @@ export class DealerDaemon {
           stateStore: this.stateStore,
           epochId,
           members: dkgMembers,
-          dkg,
+          dkg: dkgAfterComplaints,
         }).catch((err) => logError("DKG reveal error", err));
+
+        // Re-fetch DKG state after reveals for aggregation
+        const dkgAfterReveals = await this.client.getDealerDkg().catch(() => null);
+        if (!dkgAfterReveals) return;
 
         // Phase 4: Aggregate secret share from reveals (must happen BEFORE finalization)
         const aggregated = await handleDkgAggregate({
@@ -225,7 +237,7 @@ export class DealerDaemon {
           config: this.config,
           epochId,
           members: dkgMembers,
-          dkg,
+          dkg: dkgAfterReveals,
         }).catch(() => false);
 
         // Phase 5: Try to finalize epoch (only after aggregation succeeds)
@@ -234,7 +246,7 @@ export class DealerDaemon {
             client: this.client,
             config: this.config,
             epochId,
-          }).catch(() => {});
+          }).catch((err) => logError("maybeFinalizeEpoch error", err));
         }
       }
       return;

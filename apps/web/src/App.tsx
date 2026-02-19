@@ -183,6 +183,9 @@ function getPlayerKeysForAddress(address: string): { sk: bigint; pk: Uint8Array 
     window.localStorage.removeItem(legacyKey);
   }
 
+  // SECURITY: Raw key entropy in localStorage is readable by any JS on this origin.
+  // A future improvement should use Web Crypto API CryptoKey (extractable: false)
+  // or passphrase-encrypt the key material at rest to mitigate XSS exfiltration.
   const entropy = new Uint8Array(64);
   window.crypto.getRandomValues(entropy);
   window.localStorage.setItem(key, uint8ToBase64(entropy));
@@ -774,6 +777,29 @@ export function App() {
       return null;
     }
   }, [playerWallet.status, playerWallet.address]);
+
+  // Warn if local pk doesn't match on-chain pkPlayer (e.g. after key regeneration)
+  useEffect(() => {
+    if (!playerSk || !rawTable.data || !playerWallet.address) return;
+    const raw = rawTable.data as Record<string, unknown>;
+    const seats = Array.isArray(raw?.seats) ? raw.seats : [];
+    const mySeat = (seats as Record<string, unknown>[]).find(
+      (s) => String(s?.player ?? "").toLowerCase() === playerWallet.address.toLowerCase()
+    );
+    if (!mySeat) return;
+    const chainPk = String(
+      mySeat.pkPlayer ?? mySeat.pk_player ?? (mySeat as any).PkPlayer ?? ""
+    );
+    if (!chainPk) return;
+    const { pk } = getPlayerKeysForAddress(playerWallet.address);
+    const localPkBase64 = uint8ToBase64(pk);
+    if (localPkBase64 !== chainPk) {
+      console.warn(
+        `[OCP] Local public key does not match on-chain pkPlayer for ${playerWallet.address}. ` +
+        `You may need to re-sit to register your current key.`
+      );
+    }
+  }, [playerSk, rawTable.data, playerWallet.address]);
 
   // Determine if deck is finalized from raw chain table state
   const deckFinalized = useMemo(() => {

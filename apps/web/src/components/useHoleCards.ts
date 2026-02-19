@@ -64,24 +64,23 @@ function lagrangeCoefficients(xCoords: bigint[]): bigint[] {
 // --- Card decryption ---
 
 /**
- * Precompute lookup table: cardId → mulBase(BigInt(cardId + 1)) bytes as hex.
+ * Lookup table: cardId → mulBase(BigInt(cardId + 1)) bytes as hex.
  * Encoding uses (id+1)*G (not id*G) to avoid the identity point at id=0,
  * matching the Go chain's cardPoint() encoding.
  */
-const CARD_TABLE = new Map<string, number>();
-function initCardTable() {
-  if (CARD_TABLE.size > 0) return;
+const CARD_TABLE: Map<string, number> = (() => {
+  const table = new Map<string, number>();
   for (let id = 0; id < 52; id++) {
     const pt = mulBase(BigInt(id + 1));
     const hex = Array.from(pt.toBytes())
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
-    CARD_TABLE.set(hex, id);
+    table.set(hex, id);
   }
-}
+  return table;
+})();
 
 function lookupCardId(point: GroupElement): number | null {
-  initCardTable();
   const hex = Array.from(point.toBytes())
     .map((b) => b.toString(16).padStart(2, "0"))
     .join("");
@@ -93,8 +92,10 @@ function lookupCardId(point: GroupElement): number | null {
  */
 function decodeShareBytes(raw: string): Uint8Array {
   const s = raw.trim();
-  // Try hex first (64 chars = 32 bytes)
-  if (/^(0x)?[0-9a-fA-F]+$/.test(s)) {
+  // Try hex: strip optional 0x prefix, then require valid hex of known length
+  // (32 bytes = 64 hex chars, or 64 bytes = 128 hex chars)
+  const hexBody = s.startsWith("0x") ? s.slice(2) : s;
+  if (/^[0-9a-fA-F]+$/.test(hexBody) && (hexBody.length === 64 || hexBody.length === 128)) {
     return hexToBytes(s);
   }
   // Try base64
@@ -265,6 +266,17 @@ export function useHoleCards(args: {
 
         if (decryptedShares.length === 0) {
           throw new Error(`No valid enc shares for card ${cardIdx}`);
+        }
+
+        // Threshold sanity check: need at least ceil(members/2) shares for
+        // correct interpolation. With fewer, recoverCard returns null but the
+        // error message would be misleading ("no matching card ID").
+        const estimatedThreshold = Math.max(1, Math.ceil(epochMembers.length / 2));
+        if (decryptedShares.length < estimatedThreshold) {
+          throw new Error(
+            `Insufficient shares for card ${cardIdx}: have ${decryptedShares.length}, ` +
+            `need >= ${estimatedThreshold} (${epochMembers.length} members)`
+          );
         }
 
         const cardId = recoverCard(c2, decryptedShares);

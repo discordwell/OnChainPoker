@@ -21,14 +21,6 @@ Implemented all 6 phases of the plan to bridge the on-chain poker protocol to a 
 
 - **DKG share distribution**: Uses the chain's complaint/reveal mechanism as the share distribution channel. Every validator files `DkgComplaintMissing` against every other after commit phase, forcing on-chain `DkgShareReveal`. Must aggregate shares BEFORE `FinalizeEpoch` since finalization clears DKG state.
 - **Hole card crypto**: Enc share format is `U(32)||V(32)`, decrypt as `V - skPlayer * U = d_j = xHand_j * C1`. Lagrange on group elements yields combined partial decryption `D`. Card recovery: `M = C2 - D`, lookup `M` in precomputed table of `mulBase(BigInt(cardId + 1))` for id 0..51 (uses `id+1` to avoid identity point, matching Go chain's `cardPoint()`).
-- **Deferred security items** (identified 2026-02-20 code review):
-  - MEDIUM: `decodeShareBytes` hex detection too permissive (`useHoleCards.ts:88`) — regex matches base64 strings that happen to be all hex chars. Add length check (64 hex = 32 bytes).
-  - MEDIUM: No threshold check on `decryptedShares.length` (`useHoleCards.ts:134`) — should verify `>= threshold` shares before interpolation. Currently returns null (safe but misleading error).
-  - MEDIUM: `playerSk` in localStorage vulnerable to XSS (`App.tsx:186`) — consider Web Crypto API `CryptoKey` with `extractable: false`, or passphrase-encrypted at-rest.
-  - MEDIUM: Stale DKG state per poll cycle (`daemon.ts:194-229`) — re-fetch DKG between phases to allow multi-phase progress per poll.
-  - MEDIUM: Public key mismatch after key regeneration (`App.tsx:768`) — compare derived pk against on-chain `pkPlayer`, surface error if mismatched.
-  - LOW: `maybeFinalizeEpoch` silently swallows errors (`daemon.ts:237`) — log the error instead of `.catch(() => {})`.
-  - LOW: Wasteful complaints against uncommitted members (`dkg.ts:114`) — filter to only committed members before filing complaints.
-  - LOW: Card table init inside function (`useHoleCards.ts:74`) — move to module-level for cleaner lazy init.
+- **Security items resolved** (2026-02-20): All 8 deferred items addressed — hex length check, threshold check, XSS SECURITY comment + future mitigation path noted, DKG re-fetch between phases, pk mismatch warning, error logging, committed-only complaint filter, module-level card table.
 - **Pre-existing coordinator build error**: `apps/coordinator/src/http.ts:218` has a TypeScript null check issue (`config.corsOrigins`) that predates these changes.
 - **Vite base path**: Already configured to `/ocp/` in vite.config.ts.
