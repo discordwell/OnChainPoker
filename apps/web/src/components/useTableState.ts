@@ -14,6 +14,10 @@ interface RawTableState {
     handId: string;
     phase: string;
     actionOn: number;
+    buttonSeat: number;
+    smallBlindSeat: number;
+    bigBlindSeat: number;
+    actionDeadline: number;
   } | null;
 }
 
@@ -95,6 +99,10 @@ export function deriveTableProps(args: {
         actionOn: raw.hand.actionOn,
         pot,
         board,
+        buttonSeat: raw.hand.buttonSeat,
+        smallBlindSeat: raw.hand.smallBlindSeat,
+        bigBlindSeat: raw.hand.bigBlindSeat,
+        actionDeadline: raw.hand.actionDeadline,
       }
     : null;
 

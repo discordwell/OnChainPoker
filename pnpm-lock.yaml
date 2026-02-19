@@ -112,6 +112,9 @@ importers:
       vite:
         specifier: ^5.4.11
         version: 5.4.21(@types/node@22.19.10)
+      vitest:
+        specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.19.10)
 
   packages/dkg: {}
 

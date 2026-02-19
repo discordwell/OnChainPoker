@@ -215,7 +215,7 @@ export function createHttpApp(opts: {
           : (origin, cb) => {
               if (!origin) return cb(null, true);
               if (config.corsOrigins!.includes("*")) return cb(null, true);
-              if (config.corsOrigins.includes(origin)) return cb(null, true);
+              if (config.corsOrigins!.includes(origin)) return cb(null, true);
               return cb(new Error("CORS blocked"), false);
             }
     })

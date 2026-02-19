@@ -91,6 +91,10 @@ type PlayerHandState = {
   handId: string;
   phase: string;
   actionOn: number;
+  buttonSeat: number;
+  smallBlindSeat: number;
+  bigBlindSeat: number;
+  actionDeadline: number;
 };
 
 type PlayerTableState = {
@@ -247,6 +251,10 @@ function parsePlayerTable(raw: unknown): PlayerTableState | null {
   const handRaw = rawHand;
   const phase = String(handRaw?.phase ?? "");
   const actionOn = Number.isFinite(Number(handRaw?.actionOn)) ? Number(handRaw?.actionOn) : -1;
+  const buttonSeat = Number.isFinite(Number(handRaw?.buttonSeat ?? handRaw?.button)) ? Number(handRaw?.buttonSeat ?? handRaw?.button) : -1;
+  const smallBlindSeat = Number.isFinite(Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat)) ? Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat) : -1;
+  const bigBlindSeat = Number.isFinite(Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat)) ? Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat) : -1;
+  const actionDeadline = Number.isFinite(Number(handRaw?.actionDeadline ?? handRaw?.deadline)) ? Number(handRaw?.actionDeadline ?? handRaw?.deadline) : 0;
 
   return {
     tableId,
@@ -262,7 +270,11 @@ function parsePlayerTable(raw: unknown): PlayerTableState | null {
       ? {
           handId: String(handRaw.handId ?? ""),
           phase,
-          actionOn
+          actionOn,
+          buttonSeat,
+          smallBlindSeat,
+          bigBlindSeat,
+          actionDeadline,
         }
       : null
   };
