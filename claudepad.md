@@ -2,6 +2,11 @@
 
 ## Session Summaries
 
+### 2026-02-19T~UTC — Follow-up Fixes (DKG + Hole Cards)
+Fixed two documented limitations from the initial implementation:
+- **Multi-party DKG**: Updated daemon to use complaint-based share distribution. New flow: commit → file `DkgComplaintMissing` for all other validators → reveal shares in response to complaints → aggregate secret share from own self-evaluation + received reveals → finalize. Added `handleDkgComplaints()`, `handleDkgReveals()`, `handleDkgAggregate()` to `dkg.ts`. Updated daemon.ts polling loop.
+- **Hole card decryption**: Implemented full crypto pipeline in `useHoleCards.ts`. Decrypts enc shares (V - skPlayer * U), computes Lagrange coefficients for validator indices, combines threshold shares via group-element interpolation (Σ λ_j * d_j), recovers card ID from precomputed lookup table (M = C2 - D). Integrated into App.tsx passing `holeCardState.cards` to PokerTable.
+
 ### 2026-02-19T~UTC — Testnet → Live Poker Room (Phases 1-6)
 Implemented all 6 phases of the plan to bridge the on-chain poker protocol to a playable poker room:
 - **Phase 1**: Fixed `getPlayerPkForAddress()` → `getPlayerKeysForAddress()` to store 64-byte entropy (not just pubkey) in localStorage under `ocp.web.skPlayer:<addr>`. Added legacy key migration.
@@ -14,7 +19,7 @@ Implemented all 6 phases of the plan to bridge the on-chain poker protocol to a 
 
 ## Key Findings
 
-- **DKG limitation**: The dealer daemon currently computes secret shares in single-party mode (self-evaluation only). Multi-party aggregation requires all validators' polynomial evaluations, which needs a chain query or off-chain coordination channel not yet built.
-- **Hole card decryption**: `useHoleCards` hook fetches coordinator routes but the final crypto step (`HoleCardRecovery.recoverHoleCards()`) is not yet wired — needs browser-compatible crypto imports.
+- **DKG share distribution**: Uses the chain's complaint/reveal mechanism as the share distribution channel. Every validator files `DkgComplaintMissing` against every other after commit phase, forcing on-chain `DkgShareReveal`. Must aggregate shares BEFORE `FinalizeEpoch` since finalization clears DKG state.
+- **Hole card crypto**: Enc share format is `U(32)||V(32)`, decrypt as `V - skPlayer * U = d_j = xHand_j * C1`. Lagrange on group elements yields combined partial decryption `D`. Card recovery: `M = C2 - D`, lookup `M` in precomputed table of `mulBase(BigInt(cardId))` for id 0..51.
 - **Pre-existing coordinator build error**: `apps/coordinator/src/http.ts:218` has a TypeScript null check issue (`config.corsOrigins`) that predates these changes.
 - **Vite base path**: Already configured to `/ocp/` in vite.config.ts.

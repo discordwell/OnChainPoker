@@ -3,7 +3,12 @@ import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "./config.js";
 import type { EpochStateStore } from "./state.js";
 import { log, logError } from "./log.js";
-import { handleDkgCommit, handleEpochFinalized, evalPoly, modQ } from "./handlers/dkg.js";
+import {
+  handleDkgCommit,
+  handleDkgComplaints,
+  handleDkgReveals,
+  handleDkgAggregate,
+} from "./handlers/dkg.js";
 import { handleShuffle } from "./handlers/shuffle.js";
 import { handleEncShares } from "./handlers/encshares.js";
 import { handlePubShare } from "./handlers/pubshares.js";
@@ -179,12 +184,13 @@ export class DealerDaemon {
       return;
     }
 
-    // If DKG is in progress, handle commit
+    // If DKG is in progress, handle the full multi-party DKG flow
     if (dkg) {
       const dkgMembers = parseMembersFromEpoch(dkg);
       const epochId = asNumber(pick(dkg, "epochId", "epoch_id")) ?? 0;
 
       if (dkgMembers.length > 0 && epochId > 0) {
+        // Phase 1: Submit our polynomial commitment
         await handleDkgCommit({
           client: this.client,
           config: this.config,
@@ -193,12 +199,43 @@ export class DealerDaemon {
           members: dkgMembers,
         }).catch((err) => logError("DKG commit error", err));
 
-        // Try to finalize epoch
-        await maybeFinalizeEpoch({
+        // Phase 2: File "missing" complaints for all other members
+        // (forces on-chain share reveals since there's no off-chain channel)
+        await handleDkgComplaints({
           client: this.client,
           config: this.config,
           epochId,
-        }).catch(() => {});
+          members: dkgMembers,
+          dkg,
+        }).catch((err) => logError("DKG complaint error", err));
+
+        // Phase 3: Reveal shares for complaints targeting us
+        await handleDkgReveals({
+          client: this.client,
+          config: this.config,
+          stateStore: this.stateStore,
+          epochId,
+          members: dkgMembers,
+          dkg,
+        }).catch((err) => logError("DKG reveal error", err));
+
+        // Phase 4: Aggregate secret share from reveals (must happen BEFORE finalization)
+        const aggregated = await handleDkgAggregate({
+          stateStore: this.stateStore,
+          config: this.config,
+          epochId,
+          members: dkgMembers,
+          dkg,
+        }).catch(() => false);
+
+        // Phase 5: Try to finalize epoch (only after aggregation succeeds)
+        if (aggregated) {
+          await maybeFinalizeEpoch({
+            client: this.client,
+            config: this.config,
+            epochId,
+          }).catch(() => {});
+        }
       }
       return;
     }
@@ -208,26 +245,10 @@ export class DealerDaemon {
     const epochId = asNumber(pick(epoch, "epochId", "epoch_id", "EpochId")) ?? 0;
     const epochMembers = parseMembersFromEpoch(epoch);
 
-    // Check if we need to compute our aggregated secret share
-    // (This happens after epoch finalization when we have all DKG commits)
+    // Verify our secret share was computed during DKG (should already be set)
     const secrets = this.stateStore.load(epochId);
     if (secrets && secrets.secretShare === "0") {
-      // We stored our polynomial but haven't computed the aggregated share yet
-      // In a full implementation, we'd need all polynomials. For now, we use the
-      // polynomial evaluation from our own contribution as a single-party approximation.
-      // In production, this should gather commitments from all members.
-      const myMember = epochMembers.find(
-        (m) => m.validator.toLowerCase() === this.config.validatorAddress.toLowerCase()
-      );
-      if (myMember) {
-        const coeffs = secrets.polyCoeffs.map((c) => BigInt(`0x${c}`));
-        // Self-evaluation: in a real DKG, we'd aggregate all members' evaluations at our index
-        let aggregated = 0n;
-        aggregated = modQ(aggregated + evalPoly(coeffs, BigInt(myMember.index)));
-        secrets.secretShare = aggregated.toString(16);
-        this.stateStore.save(secrets);
-        log(`Computed secret share for epoch ${epochId} (single-party mode)`);
-      }
+      log(`WARNING: epoch ${epochId} finalized but secret share not computed — DKG may have been incomplete`);
     }
 
     // 2. List tables and process each

@@ -9,6 +9,7 @@ import {
 import { groupElementToBytes, mulBase, scalarFromBytesModOrder } from "@onchainpoker/ocp-crypto";
 import { PokerTable } from "./components/PokerTable";
 import { deriveTableProps } from "./components/useTableState";
+import { useHoleCards } from "./components/useHoleCards";
 
 type TableInfo = {
   tableId: string;
@@ -763,6 +764,34 @@ export function App() {
     playerSeat && playerTableForSelected?.hand?.actionOn === playerSeat.seat
   );
 
+  // Player secret key for hole card decryption
+  const playerSk = useMemo(() => {
+    if (playerWallet.status !== "connected" || !playerWallet.address) return null;
+    try {
+      const { sk } = getPlayerKeysForAddress(playerWallet.address);
+      return sk;
+    } catch {
+      return null;
+    }
+  }, [playerWallet.status, playerWallet.address]);
+
+  // Determine if deck is finalized from raw chain table state
+  const deckFinalized = useMemo(() => {
+    if (!rawTable.data) return false;
+    const raw = rawTable.data as any;
+    return Boolean(raw?.hand?.dealer?.finalized);
+  }, [rawTable.data]);
+
+  // Hole card recovery
+  const holeCardState = useHoleCards({
+    coordinatorBase,
+    tableId: selectedTableId || null,
+    handId: playerTableForSelected?.hand?.handId ?? null,
+    seat: playerSeat?.seat ?? null,
+    skPlayer: playerSk,
+    deckFinalized,
+  });
+
   const applyCoordinatorBase = useCallback(() => {
     const normalized = normalizeCoordinatorBase(coordinatorInput);
     setCoordinatorInput(normalized);
@@ -1163,7 +1192,7 @@ export function App() {
               raw: playerTableForSelected,
               rawDealer: null,
               localAddress: playerWallet.status === "connected" ? playerWallet.address : null,
-              localHoleCards: null,
+              localHoleCards: holeCardState.cards,
               actionEnabled: playerActionEnabled,
               onAction: (action: string, amount?: string) => {
                 onPlayerActionInputChange("action", action as PlayerActionForm["action"]);
