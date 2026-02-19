@@ -63,12 +63,16 @@ function lagrangeCoefficients(xCoords: bigint[]): bigint[] {
 
 // --- Card decryption ---
 
-/** Precompute lookup table: cardId → mulBase(BigInt(cardId)) bytes as hex */
+/**
+ * Precompute lookup table: cardId → mulBase(BigInt(cardId + 1)) bytes as hex.
+ * Encoding uses (id+1)*G (not id*G) to avoid the identity point at id=0,
+ * matching the Go chain's cardPoint() encoding.
+ */
 const CARD_TABLE = new Map<string, number>();
 function initCardTable() {
   if (CARD_TABLE.size > 0) return;
   for (let id = 0; id < 52; id++) {
-    const pt = mulBase(BigInt(id));
+    const pt = mulBase(BigInt(id + 1));
     const hex = Array.from(pt.toBytes())
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
@@ -120,7 +124,7 @@ function decryptEncShare(encShareBytes: Uint8Array, skPlayer: bigint): GroupElem
  * Recover a card ID from threshold decrypted shares.
  * Each decrypted share d_j = xHand_j * C1 is a group element.
  * Lagrange interpolation on group elements yields D = xHand * C1.
- * Then M = C2 - D, and M encodes the card ID as mulBase(cardId).
+ * Then M = C2 - D, and M encodes the card ID as mulBase(cardId + 1).
  */
 function recoverCard(
   c2: GroupElement,
