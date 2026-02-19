@@ -7,6 +7,8 @@ import {
   type OcpCosmosClient
 } from "@onchainpoker/ocp-sdk/cosmos";
 import { groupElementToBytes, mulBase, scalarFromBytesModOrder } from "@onchainpoker/ocp-crypto";
+import { PokerTable } from "./components/PokerTable";
+import { deriveTableProps } from "./components/useTableState";
 
 type TableInfo = {
   tableId: string;
@@ -150,26 +152,43 @@ const DEFAULT_COSMOS_RPC_URL = import.meta.env.VITE_COSMOS_RPC_URL ?? "http://12
 const DEFAULT_COSMOS_LCD_URL = import.meta.env.VITE_COSMOS_LCD_URL ?? "http://127.0.0.1:1317";
 const DEFAULT_COSMOS_CHAIN_ID = import.meta.env.VITE_COSMOS_CHAIN_ID ?? "ocp-local-1";
 const DEFAULT_COSMOS_GAS_PRICE = import.meta.env.VITE_COSMOS_GAS_PRICE ?? "0uocp";
-const PLAYER_PK_KEY_PREFIX = "ocp.web.pkPlayer";
+const PLAYER_SK_KEY_PREFIX = "ocp.web.skPlayer";
+const LEGACY_PK_KEY_PREFIX = "ocp.web.pkPlayer";
 const MAX_EVENTS = 200;
 
-function getPlayerPkForAddress(address: string): Uint8Array {
+function getPlayerKeysForAddress(address: string): { sk: bigint; pk: Uint8Array } {
   if (typeof window === "undefined") {
     throw new Error("wallet support requires a browser context");
   }
 
-  const key = `${PLAYER_PK_KEY_PREFIX}:${address}`;
+  const key = `${PLAYER_SK_KEY_PREFIX}:${address}`;
   const stored = window.localStorage.getItem(key);
   const existing = base64ToUint8(stored);
-  if (existing && existing.length === 32) return existing;
+
+  if (existing && existing.length === 64) {
+    const scalar = scalarFromBytesModOrder(existing);
+    const pk = groupElementToBytes(mulBase(scalar));
+    return { sk: scalar, pk };
+  }
+
+  // Migration: detect old 32-byte pubkey-only entries and regenerate
+  const legacyKey = `${LEGACY_PK_KEY_PREFIX}:${address}`;
+  const legacy = window.localStorage.getItem(legacyKey);
+  if (legacy) {
+    console.warn(
+      `[OCP] Migrating player key for ${address}: old pubkey-only entry found. ` +
+      `Generating new keypair — you will need to re-sit at tables.`
+    );
+    window.localStorage.removeItem(legacyKey);
+  }
 
   const entropy = new Uint8Array(64);
   window.crypto.getRandomValues(entropy);
+  window.localStorage.setItem(key, uint8ToBase64(entropy));
 
   const scalar = scalarFromBytesModOrder(entropy);
-  const pkPlayer = groupElementToBytes(mulBase(scalar));
-  window.localStorage.setItem(key, uint8ToBase64(pkPlayer));
-  return pkPlayer;
+  const pk = groupElementToBytes(mulBase(scalar));
+  return { sk: scalar, pk };
 }
 
 function parseTableBool(raw: unknown): boolean {
@@ -871,7 +890,7 @@ export function App() {
         return;
       }
 
-      const pkPlayer = getPlayerPkForAddress(playerWallet.address);
+      const { pk: pkPlayer } = getPlayerKeysForAddress(playerWallet.address);
       setPlayerSitSubmit({ kind: "pending", message: "Submitting sit transaction..." });
 
       try {
@@ -950,6 +969,28 @@ export function App() {
       }
     },
     [loadPlayerTable, playerActionForm.action, playerActionForm.amount, playerTable.data, playerWallet.address, selectedTableId]
+  );
+
+  const submitPlayerActionDirect = useCallback(
+    async (action: string, amount?: string) => {
+      const table = playerTable.data;
+      const tableId = selectedTableId;
+      if (!tableId || !table?.hand) return;
+
+      const client = playerClientRef.current;
+      if (!client) return;
+
+      setPlayerActionSubmit({ kind: "pending", message: "Submitting action..." });
+      try {
+        await client.pokerAct({ tableId, action, amount });
+        setPlayerActionSubmit({ kind: "success", message: `Action sent: ${action}.` });
+        setPlayerActionForm(defaultPlayerActionForm());
+        await loadPlayerTable(tableId, false);
+      } catch (err) {
+        setPlayerActionSubmit({ kind: "error", message: errorMessage(err) });
+      }
+    },
+    [loadPlayerTable, playerTable.data, selectedTableId]
   );
 
   const submitSeatIntent = useCallback(
@@ -1115,6 +1156,26 @@ export function App() {
           </div>
 
           {!selectedTable && <p className="placeholder">Select a table to join as a player.</p>}
+
+          {/* Visual poker table */}
+          {playerTableForSelected && (() => {
+            const tableProps = deriveTableProps({
+              raw: playerTableForSelected,
+              rawDealer: null,
+              localAddress: playerWallet.status === "connected" ? playerWallet.address : null,
+              localHoleCards: null,
+              actionEnabled: playerActionEnabled,
+              onAction: (action: string, amount?: string) => {
+                onPlayerActionInputChange("action", action as PlayerActionForm["action"]);
+                if (amount) onPlayerActionInputChange("amount", amount);
+                // Auto-submit simple actions
+                if (action === "fold" || action === "check" || action === "call") {
+                  void submitPlayerActionDirect(action, amount);
+                }
+              },
+            });
+            return tableProps ? <PokerTable {...tableProps} /> : null;
+          })()}
 
           <div className="stack-two">
             <div>

@@ -365,6 +365,125 @@ export function createHttpApp(opts: {
     });
   });
 
+  // ---- Dealer hand LCD proxy routes ----
+
+  app.get("/v1/dealer/hand/:tableId/:handId", async (req, res) => {
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support dealer queries" });
+    }
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    const handId = String(req.params.handId ?? "").trim();
+    if (!tableId || !handId) return res.status(400).json({ error: "tableId and handId required" });
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "table not found" });
+
+    const dh = table?.hand?.dealer;
+    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
+      return res.status(404).json({ error: "dealer hand not found" });
+    }
+
+    return res.json({ hand: dh, tableId, handId });
+  });
+
+  app.get("/v1/dealer/hand/:tableId/:handId/hole-positions/:seat", async (req, res) => {
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support dealer queries" });
+    }
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    const handId = String(req.params.handId ?? "").trim();
+    const seat = asNumber(req.params.seat);
+    if (!tableId || !handId || seat == null || seat < 0 || seat > 8) {
+      return res.status(400).json({ error: "tableId, handId, and seat (0-8) required" });
+    }
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "table not found" });
+
+    const dh = table?.hand?.dealer;
+    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
+      return res.status(404).json({ error: "dealer hand not found" });
+    }
+
+    const holePos = decodeU8Array(dh.holePos ?? dh.hole_pos);
+    if (!holePos || holePos.length !== 18) {
+      return res.status(404).json({ error: "hole positions not available" });
+    }
+
+    const pos0 = holePos[seat * 2];
+    const pos1 = holePos[seat * 2 + 1];
+    return res.json({ pos0, pos1 });
+  });
+
+  app.get("/v1/dealer/hand/:tableId/:handId/enc-shares/:pos", async (req, res) => {
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support dealer queries" });
+    }
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    const handId = String(req.params.handId ?? "").trim();
+    const pos = asNumber(req.params.pos);
+    if (!tableId || !handId || pos == null || pos < 0) {
+      return res.status(400).json({ error: "tableId, handId, and pos required" });
+    }
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "table not found" });
+
+    const dh = table?.hand?.dealer;
+    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
+      return res.status(404).json({ error: "dealer hand not found" });
+    }
+
+    const encShares = Array.isArray(dh.encShares ?? dh.enc_shares)
+      ? (dh.encShares ?? dh.enc_shares)
+      : [];
+    const filtered = encShares.filter((s: any) => asNumber(s?.pos) === pos);
+
+    return res.json({
+      shares: filtered.map((s: any) => ({
+        validator: String(s.validatorId ?? s.validator_id ?? s.validator ?? ""),
+        encShare: String(s.encShare ?? s.enc_share ?? ""),
+        proofEncShare: String(s.proofEncShare ?? s.proof_enc_share ?? ""),
+        pkPlayer: String(s.pkPlayer ?? s.pk_player ?? "")
+      }))
+    });
+  });
+
+  app.get("/v1/dealer/hand/:tableId/:handId/ciphertext/:pos", async (req, res) => {
+    if (chain.kind !== "comet" || !chain.queryJson) {
+      return res.status(400).json({ error: "chain adapter does not support dealer queries" });
+    }
+
+    const tableId = String(req.params.tableId ?? "").trim();
+    const handId = String(req.params.handId ?? "").trim();
+    const pos = asNumber(req.params.pos);
+    if (!tableId || !handId || pos == null || pos < 0) {
+      return res.status(400).json({ error: "tableId, handId, and pos required" });
+    }
+
+    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    if (!table) return res.status(404).json({ error: "table not found" });
+
+    const dh = table?.hand?.dealer;
+    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
+      return res.status(404).json({ error: "dealer hand not found" });
+    }
+
+    const deck = Array.isArray(dh.deck) ? dh.deck : [];
+    const entry = deck[pos];
+    if (!entry) {
+      return res.status(404).json({ error: `deck position ${pos} not found` });
+    }
+
+    return res.json({
+      c1: String(entry.c1 ?? ""),
+      c2: String(entry.c2 ?? "")
+    });
+  });
+
   // Convenience: store a shuffle proof artifact using its sha256(proofBytes) hex as the artifactId.
   // This lines up with the `proofHash` attribute emitted by the chain on `ShuffleAccepted`.
   app.post("/v1/appchain/v0/artifacts/shuffle", ...writeGuards, (req, res) => {

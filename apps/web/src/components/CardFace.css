@@ -1,0 +1,159 @@
+/* ─── Card Base ─── */
+
+.card {
+  position: relative;
+  border-radius: 6px;
+  flex-shrink: 0;
+  user-select: none;
+  transition: transform 180ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.card--sm { width: 36px; height: 52px; font-size: 10px; }
+.card--md { width: 52px; height: 74px; font-size: 13px; }
+.card--lg { width: 72px; height: 102px; font-size: 17px; }
+
+/* ─── Face-Up Card ─── */
+
+.card--face {
+  background: linear-gradient(168deg, #fffef9 0%, #f7f4eb 60%, #eee9da 100%);
+  border: 1px solid #d5d0c0;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.12),
+    0 4px 8px rgba(0, 0, 0, 0.06),
+    inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  overflow: hidden;
+}
+
+.card--face::before {
+  content: "";
+  position: absolute;
+  inset: 2px;
+  border: 1px solid #e8e4d8;
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.card--red { color: #b8192a; }
+.card--black { color: #1a1a1a; }
+
+.card__rank-top,
+.card__rank-bot {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  line-height: 1;
+  font-weight: 700;
+  font-family: "Georgia", "Times New Roman", serif;
+}
+
+.card__rank-top {
+  top: 4px;
+  left: 4px;
+}
+
+.card__rank-bot {
+  bottom: 4px;
+  right: 4px;
+  transform: rotate(180deg);
+}
+
+.card__suit-small {
+  font-size: 0.75em;
+  line-height: 1;
+  margin-top: -1px;
+}
+
+.card__pip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-size: 1.8em;
+  line-height: 1;
+  opacity: 0.85;
+}
+
+/* Larger sizing tweaks for lg */
+.card--lg .card__rank-top,
+.card--lg .card__rank-bot {
+  top: 6px;
+  left: 6px;
+}
+.card--lg .card__rank-bot {
+  top: auto;
+  left: auto;
+  bottom: 6px;
+  right: 6px;
+}
+.card--lg .card__pip {
+  font-size: 2.2em;
+}
+
+/* Smaller sizing tweaks */
+.card--sm .card__rank-top,
+.card--sm .card__rank-bot {
+  top: 2px;
+  left: 2px;
+}
+.card--sm .card__rank-bot {
+  top: auto;
+  left: auto;
+  bottom: 2px;
+  right: 2px;
+}
+.card--sm .card__pip {
+  font-size: 1.4em;
+}
+
+/* ─── Face-Down Card ─── */
+
+.card--back {
+  background: #1a3a2e;
+  border: 1.5px solid #0d2219;
+  box-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.2),
+    0 4px 8px rgba(0, 0, 0, 0.1),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.card__back-pattern {
+  position: absolute;
+  inset: 3px;
+  border-radius: 3px;
+  border: 1.5px solid #2a5a48;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      transparent,
+      transparent 3px,
+      rgba(240, 191, 79, 0.08) 3px,
+      rgba(240, 191, 79, 0.08) 4px
+    ),
+    repeating-linear-gradient(
+      -45deg,
+      transparent,
+      transparent 3px,
+      rgba(240, 191, 79, 0.08) 3px,
+      rgba(240, 191, 79, 0.08) 4px
+    ),
+    radial-gradient(ellipse at center, #1e4a3a 0%, #132e24 100%);
+}
+
+.card__back-pattern::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 60%;
+  height: 60%;
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(240, 191, 79, 0.18);
+  border-radius: 2px;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(240, 191, 79, 0.06) 0%,
+    transparent 70%
+  );
+}

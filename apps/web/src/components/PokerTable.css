@@ -1,0 +1,460 @@
+/* ═══════════════════════════════════════════════════════
+   POKER ROOM — Emerald Velvet
+   ═══════════════════════════════════════════════════════ */
+
+.poker-room {
+  position: relative;
+  width: 100%;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 2rem 0;
+}
+
+/* ─── Ambient Overhead Glow ─── */
+
+.poker-room__ambient {
+  position: absolute;
+  top: -60px;
+  left: 50%;
+  width: 500px;
+  height: 300px;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    ellipse at center,
+    rgba(240, 191, 79, 0.08) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* ─── Phase Banner ─── */
+
+.poker-room__phase {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: center;
+  margin-bottom: 1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted, #4e5f59);
+}
+
+.poker-room__phase-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent, #0e7a5d);
+  box-shadow: 0 0 6px rgba(14, 122, 93, 0.5);
+  animation: phase-pulse 2s ease-in-out infinite;
+}
+
+@keyframes phase-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ═══════════════════════════════════════════════════════
+   THE FELT TABLE
+   ═══════════════════════════════════════════════════════ */
+
+.felt {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 10;
+  min-height: 380px;
+}
+
+.felt__surface {
+  position: absolute;
+  top: 15%;
+  left: 10%;
+  width: 80%;
+  height: 70%;
+  border-radius: 50%;
+  background:
+    radial-gradient(ellipse at 40% 35%, #1b6b4f 0%, transparent 50%),
+    radial-gradient(ellipse at 60% 65%, #186045 0%, transparent 50%),
+    linear-gradient(160deg, #175941 0%, #0f4a35 40%, #0d3e2d 100%);
+  border: 6px solid #2a1f14;
+  box-shadow:
+    0 0 0 3px #3d2c1a,
+    0 0 0 6px #1a1108,
+    0 8px 32px rgba(0, 0, 0, 0.35),
+    0 2px 8px rgba(0, 0, 0, 0.2),
+    inset 0 2px 40px rgba(0, 0, 0, 0.15),
+    inset 0 0 80px rgba(240, 191, 79, 0.02);
+}
+
+/* Subtle inner felt line */
+.felt__inner-line {
+  position: absolute;
+  top: 8%;
+  left: 8%;
+  width: 84%;
+  height: 84%;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  pointer-events: none;
+}
+
+/* ─── Board Cards (center of table) ─── */
+
+.felt__board {
+  position: absolute;
+  top: 38%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  z-index: 2;
+}
+
+.felt__board-card {
+  animation: card-deal 300ms cubic-bezier(0.34, 1.56, 0.64, 1) both;
+}
+
+@keyframes card-deal {
+  from {
+    opacity: 0;
+    transform: translateY(-12px) scale(0.85);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.felt__waiting {
+  font-size: 0.72rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.2);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+/* ─── Pot Display ─── */
+
+.felt__pot {
+  position: absolute;
+  top: 58%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 14px;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(4px);
+  font-size: 0.82rem;
+  font-weight: 700;
+  color: #f0bf4f;
+  letter-spacing: 0.02em;
+  z-index: 2;
+  white-space: nowrap;
+}
+
+.felt__pot-chip {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 35%, #f7d06b, #c59520);
+  border: 1px solid #a07a10;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════
+   SEATS
+   ═══════════════════════════════════════════════════════ */
+
+.seat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  transition: opacity 200ms ease;
+}
+
+.seat--empty {
+  opacity: 0.35;
+}
+
+.seat--folded {
+  opacity: 0.45;
+}
+
+.seat--folded .seat__cards {
+  filter: grayscale(0.8);
+}
+
+/* ─── Active Turn Ring ─── */
+
+.seat__ring {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 110px;
+  height: 90px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  border: 2px solid var(--ring, #f0bf4f);
+  box-shadow: 0 0 12px rgba(240, 191, 79, 0.4);
+  animation: ring-glow 1.5s ease-in-out infinite;
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes ring-glow {
+  0%, 100% { box-shadow: 0 0 12px rgba(240, 191, 79, 0.3); }
+  50% { box-shadow: 0 0 20px rgba(240, 191, 79, 0.6); }
+}
+
+.seat__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ─── Cards above seat ─── */
+
+.seat__cards {
+  display: flex;
+  gap: 3px;
+  min-height: 20px;
+  transition: filter 200ms ease;
+}
+
+.seat--local .seat__cards {
+  gap: 4px;
+}
+
+/* ─── Seat Info Chip ─── */
+
+.seat__info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  min-width: 70px;
+  text-align: center;
+}
+
+.seat--active .seat__info {
+  border-color: rgba(240, 191, 79, 0.35);
+  background: rgba(0, 0, 0, 0.65);
+}
+
+.seat--local .seat__info {
+  border-color: rgba(14, 122, 93, 0.4);
+  background: rgba(14, 58, 43, 0.7);
+}
+
+.seat__name {
+  font-size: 0.65rem;
+  font-weight: 600;
+  color: #e8e4d8;
+  letter-spacing: 0.01em;
+  max-width: 90px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seat__stack {
+  font-size: 0.62rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.55);
+  font-family: "IBM Plex Mono", monospace;
+}
+
+.seat__empty-label {
+  font-size: 0.62rem;
+  color: rgba(255, 255, 255, 0.3);
+  font-style: italic;
+}
+
+.seat__badge {
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-top: 1px;
+}
+
+.seat__badge--fold {
+  background: rgba(163, 42, 42, 0.3);
+  color: #e07070;
+}
+
+.seat__badge--allin {
+  background: rgba(240, 191, 79, 0.2);
+  color: #f0bf4f;
+}
+
+.seat__number {
+  position: absolute;
+  bottom: -14px;
+  font-size: 0.52rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.15);
+  pointer-events: none;
+}
+
+/* ═══════════════════════════════════════════════════════
+   ACTION PANEL
+   ═══════════════════════════════════════════════════════ */
+
+.action-panel {
+  margin-top: 1rem;
+  padding: 12px 16px;
+  border-radius: 14px;
+  background: rgba(26, 42, 38, 0.85);
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  opacity: 0.5;
+  transition: opacity 200ms ease;
+}
+
+.action-panel--live {
+  opacity: 1;
+}
+
+.action-panel__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.action-btn {
+  padding: 8px 18px !important;
+  border-radius: 8px !important;
+  font-size: 0.8rem !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.03em;
+  border: 1px solid transparent !important;
+  cursor: pointer;
+  transition: all 150ms ease !important;
+  text-transform: uppercase;
+  font-family: "IBM Plex Mono", monospace !important;
+}
+
+.action-btn:disabled {
+  opacity: 0.35 !important;
+  cursor: not-allowed !important;
+  transform: none !important;
+  box-shadow: none !important;
+}
+
+.action-btn--fold {
+  background: linear-gradient(135deg, #6b2a2a, #8b3a3a) !important;
+  color: #f0c8c8 !important;
+  border-color: #a04040 !important;
+}
+
+.action-btn--fold:hover:not(:disabled) {
+  background: linear-gradient(135deg, #7a3030, #a04545) !important;
+}
+
+.action-btn--check {
+  background: linear-gradient(135deg, #2a4a3a, #355a48) !important;
+  color: #c8e8d8 !important;
+  border-color: #4a7a60 !important;
+}
+
+.action-btn--check:hover:not(:disabled) {
+  background: linear-gradient(135deg, #305540, #3d6a52) !important;
+}
+
+.action-btn--call {
+  background: linear-gradient(135deg, #0e6a4d, #0f8060) !important;
+  color: #d0f5e5 !important;
+  border-color: #18a070 !important;
+}
+
+.action-btn--call:hover:not(:disabled) {
+  background: linear-gradient(135deg, #10805a, #12956d) !important;
+}
+
+.action-btn--raise {
+  background: linear-gradient(135deg, #8a6a10, #b08a20) !important;
+  color: #fff8e0 !important;
+  border-color: #c8a030 !important;
+}
+
+.action-btn--raise:hover:not(:disabled) {
+  background: linear-gradient(135deg, #9a7818, #c09a28) !important;
+}
+
+.action-panel__bet-group {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.action-panel__bet-input {
+  width: 100px !important;
+  padding: 7px 10px !important;
+  border-radius: 8px !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  background: rgba(0, 0, 0, 0.3) !important;
+  color: #e8e4d8 !important;
+  font-size: 0.78rem !important;
+  font-family: "IBM Plex Mono", monospace !important;
+}
+
+.action-panel__bet-input::placeholder {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.action-panel__bet-input:focus {
+  border-color: var(--ring, #f0bf4f) !important;
+  box-shadow: 0 0 0 2px rgba(240, 191, 79, 0.15) !important;
+}
+
+/* ═══════════════════════════════════════════════════════
+   RESPONSIVE
+   ═══════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+  .felt {
+    aspect-ratio: 4 / 3;
+    min-height: 320px;
+  }
+
+  .seat__info {
+    min-width: 56px;
+    padding: 3px 6px;
+  }
+
+  .seat__name { font-size: 0.56rem; max-width: 64px; }
+  .seat__stack { font-size: 0.52rem; }
+
+  .action-btn {
+    padding: 6px 12px !important;
+    font-size: 0.72rem !important;
+  }
+
+  .action-panel__bet-input {
+    width: 72px !important;
+  }
+}

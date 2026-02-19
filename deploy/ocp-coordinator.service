@@ -1,0 +1,20 @@
+[Unit]
+Description=OCP Coordinator Server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocp
+WorkingDirectory=/opt/ocp/coordinator
+ExecStart=/usr/bin/node /opt/ocp/coordinator/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+Environment=PORT=8788
+Environment=OCP_CHAIN_ADAPTER=comet
+Environment=OCP_COMET_RPC_URL=http://127.0.0.1:26657
+Environment=OCP_DEV_ROUTES=false
+
+[Install]
+WantedBy=multi-user.target

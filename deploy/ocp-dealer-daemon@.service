@@ -1,0 +1,17 @@
+[Unit]
+Description=OCP Dealer Daemon (validator %i)
+After=network-online.target ocp-chain-node@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocp
+WorkingDirectory=/opt/ocp/dealer-daemon
+ExecStart=/usr/bin/node /opt/ocp/dealer-daemon/dist/index.js
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/opt/ocp/config/dealer-%i.env
+
+[Install]
+WantedBy=multi-user.target
