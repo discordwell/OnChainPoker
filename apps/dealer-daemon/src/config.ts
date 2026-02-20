@@ -17,8 +17,6 @@ export interface DealerDaemonConfig {
   stateDir: string;
   /** Passphrase for encrypting state files at rest */
   statePassphrase: string;
-  /** Whether this daemon is the designated gamemaster */
-  isGamemaster: boolean;
   /** Auto-begin new epochs when none active */
   autoBeginEpoch: boolean;
   /** Auto-init hands when table ready */
@@ -73,7 +71,6 @@ export function loadConfig(): DealerDaemonConfig {
     gasPrice: envStr("DEALER_GAS_PRICE", "0uocp"),
     stateDir: envStr("DEALER_STATE_DIR", `${process.env.HOME ?? "/tmp"}/.ocp-dealer`),
     statePassphrase: envStr("DEALER_STATE_PASSPHRASE", ""),
-    isGamemaster: envBool("DEALER_IS_GAMEMASTER", false),
     autoBeginEpoch: envBool("DEALER_AUTO_BEGIN_EPOCH", true),
     autoInitHand: envBool("DEALER_AUTO_INIT_HAND", true),
     autoFinalize: envBool("DEALER_AUTO_FINALIZE", true),

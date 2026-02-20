@@ -2,15 +2,6 @@ import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import { log } from "../log.js";
 
-function asNumber(v: unknown): number | undefined {
-  if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
-  if (typeof v === "string" && v.trim() !== "") {
-    const n = Number(v);
-    return Number.isFinite(n) ? n : undefined;
-  }
-  return undefined;
-}
-
 function pick(obj: any, ...keys: string[]): any {
   if (!obj || typeof obj !== "object") return undefined;
   for (const k of keys) {
@@ -21,25 +12,12 @@ function pick(obj: any, ...keys: string[]): any {
   return undefined;
 }
 
-/** Returns true if this validator is the designated gamemaster (lowest sorted address) */
-function isGamemasterForEpoch(
-  config: DealerDaemonConfig,
-  members: Array<{ validator: string; index: number }>
-): boolean {
-  if (!config.isGamemaster) return false;
-  if (members.length === 0) return true; // no epoch yet, we can try
-  const sorted = [...members].sort((a, b) =>
-    a.validator.localeCompare(b.validator)
-  );
-  return sorted[0]?.validator.toLowerCase() === config.validatorAddress.toLowerCase();
-}
-
 export async function maybeBeginEpoch(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
 }): Promise<boolean> {
   const { client, config } = args;
-  if (!config.autoBeginEpoch || !config.isGamemaster) return false;
+  if (!config.autoBeginEpoch) return false;
 
   // Check if there's already an active epoch
   const epoch = await client.getDealerEpoch().catch(() => null);
@@ -96,7 +74,7 @@ export async function maybeStartAndInitHand(args: {
   epochId: number;
 }): Promise<boolean> {
   const { client, config, tableId, epochId } = args;
-  if (!config.autoInitHand || !config.isGamemaster) return false;
+  if (!config.autoInitHand) return false;
 
   const table = await client.getTable(tableId).catch(() => null);
   if (!table) return false;
@@ -185,8 +163,7 @@ export async function maybeTick(args: {
   config: DealerDaemonConfig;
   tableId: string;
 }): Promise<boolean> {
-  const { client, config, tableId } = args;
-  if (!config.isGamemaster) return false;
+  const { client, tableId } = args;
 
   try {
     await client.pokerTick({ tableId });
@@ -204,8 +181,7 @@ export async function maybeDealerTimeout(args: {
   tableId: string;
   handId: string;
 }): Promise<boolean> {
-  const { client, config, tableId, handId } = args;
-  if (!config.isGamemaster) return false;
+  const { client, tableId, handId } = args;
 
   try {
     await client.dealerTimeout({ tableId, handId });
@@ -216,4 +192,3 @@ export async function maybeDealerTimeout(args: {
     return false;
   }
 }
-

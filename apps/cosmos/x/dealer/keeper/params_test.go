@@ -1,7 +1,6 @@
 package keeper
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
@@ -29,11 +28,9 @@ func newParamsKeeper(t *testing.T) (sdk.Context, Keeper) {
 	ir := codectypes.NewInterfaceRegistry()
 	cdc := codec.NewProtoCodec(ir)
 
-	auth := sdk.AccAddress(bytes.Repeat([]byte{0x11}, 20)).String()
 	k := Keeper{
 		storeService: storeService,
 		cdc:          cdc,
-		authority:    auth,
 	}
 
 	return sdkCtx, k
@@ -63,58 +60,4 @@ func TestKeeperParams_SetGetRoundTrip(t *testing.T) {
 	got, err := k.GetParams(ctx)
 	require.NoError(t, err)
 	require.Equal(t, want, got)
-}
-
-func TestMsgUpdateParams_Unauthorized(t *testing.T) {
-	sdkCtx, k := newParamsKeeper(t)
-	ctx := sdk.WrapSDKContext(sdkCtx)
-
-	ms := msgServer{Keeper: k}
-
-	badAuth := sdk.AccAddress(bytes.Repeat([]byte{0x22}, 20)).String()
-	_, err := ms.UpdateParams(ctx, &dealertypes.MsgUpdateParams{
-		Authority: badAuth,
-		Params:    dealertypes.DefaultParams(),
-	})
-	require.Error(t, err)
-	require.ErrorIs(t, err, dealertypes.ErrUnauthorized)
-}
-
-func TestMsgUpdateParams_SetsParams(t *testing.T) {
-	sdkCtx, k := newParamsKeeper(t)
-	ctx := sdk.WrapSDKContext(sdkCtx)
-
-	ms := msgServer{Keeper: k}
-
-	next := dealertypes.Params{
-		SlashBpsDkg:           500,
-		SlashBpsHandDealer:    250,
-		JailSecondsDkg:        0,
-		JailSecondsHandDealer: 10,
-	}
-	_, err := ms.UpdateParams(ctx, &dealertypes.MsgUpdateParams{
-		Authority: k.Authority(),
-		Params:    next,
-	})
-	require.NoError(t, err)
-
-	got, err := k.GetParams(ctx)
-	require.NoError(t, err)
-	require.Equal(t, next, got)
-}
-
-func TestMsgUpdateParams_RejectsInvalidParams(t *testing.T) {
-	sdkCtx, k := newParamsKeeper(t)
-	ctx := sdk.WrapSDKContext(sdkCtx)
-
-	ms := msgServer{Keeper: k}
-
-	_, err := ms.UpdateParams(ctx, &dealertypes.MsgUpdateParams{
-		Authority: k.Authority(),
-		Params: dealertypes.Params{
-			SlashBpsDkg:        dealertypes.MaxBps + 1,
-			SlashBpsHandDealer: 0,
-		},
-	})
-	require.Error(t, err)
 }

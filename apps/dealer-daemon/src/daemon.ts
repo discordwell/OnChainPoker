@@ -138,7 +138,7 @@ export class DealerDaemon {
 
   async start(): Promise<void> {
     log(`Daemon starting for validator ${this.config.validatorAddress}`);
-    log(`Gamemaster: ${this.config.isGamemaster}, Poll interval: ${this.config.pollIntervalMs}ms`);
+    log(`Poll interval: ${this.config.pollIntervalMs}ms`);
 
     this.abortController = new AbortController();
     this.startPolling();

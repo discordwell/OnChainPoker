@@ -15,8 +15,6 @@ import "onchainpoker/dealer/v1/dealer.proto";
 service Msg {
   option (cosmos.msg.v1.service) = true;
 
-  rpc UpdateParams(MsgUpdateParams) returns (MsgUpdateParamsResponse);
-
   rpc BeginEpoch(MsgBeginEpoch) returns (MsgBeginEpochResponse);
   rpc DkgCommit(MsgDkgCommit) returns (MsgDkgCommitResponse);
   rpc DkgComplaintMissing(MsgDkgComplaintMissing) returns (MsgDkgComplaintMissingResponse);
@@ -33,18 +31,6 @@ service Msg {
   rpc FinalizeReveal(MsgFinalizeReveal) returns (MsgFinalizeRevealResponse);
   rpc Timeout(MsgTimeout) returns (MsgTimeoutResponse);
 }
-
-message MsgUpdateParams {
-  option (cosmos.msg.v1.signer) = "authority";
-  option (gogoproto.goproto_getters) = false;
-
-  // Authority is the address allowed to update module params (typically x/gov).
-  string authority = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
-
-  Params params = 2 [(gogoproto.nullable) = false];
-}
-
-message MsgUpdateParamsResponse {}
 
 message MsgBeginEpoch {
   option (cosmos.msg.v1.signer) = "caller";

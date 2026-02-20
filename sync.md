@@ -117,7 +117,7 @@ Code:
 
 New (2026-02-10): dealer penalty economics are now on-chain params:
 - `Query/Params`: `GET /onchainpoker/dealer/v1/params`
-- `MsgUpdateParams`: authority-controlled param updates (defaults to `x/gov` module account)
+- Runtime updates are intentionally disabled for one-and-done operation; params are set via genesis.
 - Defaults match previous constants: `slash_bps_dkg=5000`, `slash_bps_hand_dealer=1000`, `jail_seconds_dkg=86400`, `jail_seconds_hand_dealer=3600`
 
 How to use (when `x/dealer` finalizes a fault):

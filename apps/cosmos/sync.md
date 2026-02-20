@@ -58,7 +58,7 @@ Implication for clients (Agent 6):
 
 Dealer penalty economics are on-chain params:
 - `Query/Params`: `GET /onchainpoker/dealer/v1/params`
-- `MsgUpdateParams`: authority-controlled param updates (defaults to `x/gov` module account)
+- Runtime updates are intentionally disabled for one-and-done operation; params are set via genesis.
 
 ## Agent 3: Port Game Logic Into Cosmos Modules
 
@@ -76,4 +76,3 @@ Dealer penalty economics are on-chain params:
 - Wiring:
   - Module config protos added under `apps/cosmos/proto/onchainpoker/{poker,dealer}/module/v1`.
   - `apps/cosmos/app/app_config.go` updated to include both modules + poker module account perms + block external sends to `poker`.
-

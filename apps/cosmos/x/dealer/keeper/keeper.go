@@ -19,8 +19,6 @@ type Keeper struct {
 	storeService store.KVStoreService
 	cdc          codec.BinaryCodec
 
-	authority string
-
 	stakingKeeper          types.StakingKeeper
 	committeeStakingKeeper committee.StakingKeeper
 	slashingKeeper         types.SlashingKeeper
@@ -31,7 +29,6 @@ type Keeper struct {
 func NewKeeper(
 	cdc codec.BinaryCodec,
 	storeService store.KVStoreService,
-	authority string,
 	stakingKeeper types.StakingKeeper,
 	committeeStakingKeeper committee.StakingKeeper,
 	slashingKeeper types.SlashingKeeper,
@@ -42,9 +39,6 @@ func NewKeeper(
 	}
 	if storeService == nil {
 		panic("dealer keeper: store service is nil")
-	}
-	if authority == "" {
-		panic("dealer keeper: authority is empty")
 	}
 	if stakingKeeper == nil {
 		panic("dealer keeper: staking keeper is nil")
@@ -61,7 +55,6 @@ func NewKeeper(
 	return Keeper{
 		storeService:           storeService,
 		cdc:                    cdc,
-		authority:              authority,
 		stakingKeeper:          stakingKeeper,
 		committeeStakingKeeper: committeeStakingKeeper,
 		slashingKeeper:         slashingKeeper,

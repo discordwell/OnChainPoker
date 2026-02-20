@@ -6,10 +6,6 @@ import (
 	"onchainpoker/apps/cosmos/x/dealer/types"
 )
 
-func (k Keeper) Authority() string {
-	return k.authority
-}
-
 func (k Keeper) GetParams(ctx context.Context) (types.Params, error) {
 	store := k.storeService.OpenKVStore(ctx)
 	bz, err := store.Get(types.ParamsKey)

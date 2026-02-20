@@ -126,6 +126,31 @@ func TestCreateTable_NormalizesSeats(t *testing.T) {
 	}
 }
 
+func TestCreateTable_RejectsNonZeroRake(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x51).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:           creator,
+		SmallBlind:        1,
+		BigBlind:          2,
+		MinBuyIn:          100,
+		MaxBuyIn:          1000,
+		ActionTimeoutSecs: 0,
+		DealerTimeoutSecs: 0,
+		PlayerBond:        0,
+		RakeBps:           1,
+		MaxPlayers:        9,
+		Label:             "non-zero-rake",
+	})
+	require.ErrorContains(t, err, "rake_bps must be 0")
+
+	next, getErr := k.GetNextTableID(ctx)
+	require.NoError(t, getErr)
+	require.Equal(t, uint64(1), next)
+}
+
 func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
 	sdk.DefaultBondDenom = "uocp"

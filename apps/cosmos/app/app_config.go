@@ -9,11 +9,9 @@ import (
 	distrmodulev1 "cosmossdk.io/api/cosmos/distribution/module/v1"
 	evidencemodulev1 "cosmossdk.io/api/cosmos/evidence/module/v1"
 	genutilmodulev1 "cosmossdk.io/api/cosmos/genutil/module/v1"
-	govmodulev1 "cosmossdk.io/api/cosmos/gov/module/v1"
 	slashingmodulev1 "cosmossdk.io/api/cosmos/slashing/module/v1"
 	stakingmodulev1 "cosmossdk.io/api/cosmos/staking/module/v1"
 	txconfigv1 "cosmossdk.io/api/cosmos/tx/config/v1"
-	upgrademodulev1 "cosmossdk.io/api/cosmos/upgrade/module/v1"
 	vestingmodulev1 "cosmossdk.io/api/cosmos/vesting/module/v1"
 	"cosmossdk.io/core/appconfig"
 	"cosmossdk.io/depinject"
@@ -41,15 +39,10 @@ import (
 	evidencetypes "github.com/cosmos/cosmos-sdk/x/evidence/types"
 	"github.com/cosmos/cosmos-sdk/x/genutil"
 	genutiltypes "github.com/cosmos/cosmos-sdk/x/genutil/types"
-	"github.com/cosmos/cosmos-sdk/x/gov"
-	govclient "github.com/cosmos/cosmos-sdk/x/gov/client"
-	govtypes "github.com/cosmos/cosmos-sdk/x/gov/types"
 	_ "github.com/cosmos/cosmos-sdk/x/slashing" // import for side-effects
 	slashingtypes "github.com/cosmos/cosmos-sdk/x/slashing/types"
 	_ "github.com/cosmos/cosmos-sdk/x/staking" // import for side-effects
 	stakingtypes "github.com/cosmos/cosmos-sdk/x/staking/types"
-	_ "github.com/cosmos/cosmos-sdk/x/upgrade" // import for side-effects
-	upgradetypes "github.com/cosmos/cosmos-sdk/x/upgrade/types"
 
 	_ "onchainpoker/apps/cosmos/x/dealer" // import for side-effects
 	_ "onchainpoker/apps/cosmos/x/poker"  // import for side-effects
@@ -62,7 +55,6 @@ var (
 		{Account: distrtypes.ModuleName},
 		{Account: stakingtypes.BondedPoolName, Permissions: []string{authtypes.Burner, stakingtypes.ModuleName}},
 		{Account: stakingtypes.NotBondedPoolName, Permissions: []string{authtypes.Burner, stakingtypes.ModuleName}},
-		{Account: govtypes.ModuleName, Permissions: []string{authtypes.Burner}},
 		// Game escrow module account (holds table buy-ins/bonds).
 		{Account: pokertypes.ModuleName},
 	}
@@ -75,7 +67,6 @@ var (
 		stakingtypes.BondedPoolName,
 		stakingtypes.NotBondedPoolName,
 		pokertypes.ModuleName,
-		// We allow govtypes.ModuleName to receive funds (proposal deposits).
 	}
 
 	ModuleConfig = []*appv1alpha1.ModuleConfig{
@@ -83,9 +74,7 @@ var (
 			Name: runtime.ModuleName,
 			Config: appconfig.WrapAny(&runtimev1alpha1.Module{
 				AppName: params.AppName,
-				// NOTE: upgrade module is required to be prioritized
 				PreBlockers: []string{
-					upgradetypes.ModuleName,
 					authtypes.ModuleName,
 				},
 				// During begin block slashing happens after distr.BeginBlocker so that
@@ -99,7 +88,6 @@ var (
 				},
 				EndBlockers: []string{
 					banktypes.ModuleName,
-					govtypes.ModuleName,
 					stakingtypes.ModuleName,
 				},
 				SkipStoreKeys: []string{
@@ -116,10 +104,8 @@ var (
 					stakingtypes.ModuleName,
 					slashingtypes.ModuleName,
 					dealertypes.ModuleName,
-					govtypes.ModuleName,
 					genutiltypes.ModuleName,
 					evidencetypes.ModuleName,
-					upgradetypes.ModuleName,
 					vestingtypes.ModuleName,
 				},
 				ExportGenesis: []string{
@@ -131,10 +117,8 @@ var (
 					stakingtypes.ModuleName,
 					slashingtypes.ModuleName,
 					dealertypes.ModuleName,
-					govtypes.ModuleName,
 					genutiltypes.ModuleName,
 					evidencetypes.ModuleName,
-					upgradetypes.ModuleName,
 					vestingtypes.ModuleName,
 				},
 			}),
@@ -187,16 +171,8 @@ var (
 			Config: appconfig.WrapAny(&genutilmodulev1.Module{}),
 		},
 		{
-			Name:   upgradetypes.ModuleName,
-			Config: appconfig.WrapAny(&upgrademodulev1.Module{}),
-		},
-		{
 			Name:   distrtypes.ModuleName,
 			Config: appconfig.WrapAny(&distrmodulev1.Module{}),
-		},
-		{
-			Name:   govtypes.ModuleName,
-			Config: appconfig.WrapAny(&govmodulev1.Module{}),
 		},
 		{
 			Name:   evidencetypes.ModuleName,
@@ -217,9 +193,6 @@ var (
 			// Custom module basics
 			map[string]module.AppModuleBasic{
 				genutiltypes.ModuleName: genutil.NewAppModuleBasic(genutiltypes.DefaultMessageValidator),
-				govtypes.ModuleName: gov.NewAppModuleBasic(
-					[]govclient.ProposalHandler{},
-				),
 			},
 		),
 	)

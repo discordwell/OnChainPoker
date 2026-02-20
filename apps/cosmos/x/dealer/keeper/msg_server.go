@@ -52,25 +52,6 @@ func validateDKGWindow(name string, blocks uint64) error {
 	return nil
 }
 
-func (m msgServer) UpdateParams(ctx context.Context, req *dealertypes.MsgUpdateParams) (*dealertypes.MsgUpdateParamsResponse, error) {
-	if req == nil {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
-	}
-	if req.Authority == "" {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("missing authority")
-	}
-	if _, err := sdk.AccAddressFromBech32(req.Authority); err != nil {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid authority address")
-	}
-	if req.Authority != m.Authority() {
-		return nil, dealertypes.ErrUnauthorized.Wrapf("expected %s got %s", m.Authority(), req.Authority)
-	}
-	if err := m.SetParams(ctx, req.Params); err != nil {
-		return nil, err
-	}
-	return &dealertypes.MsgUpdateParamsResponse{}, nil
-}
-
 func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoch) (*dealertypes.MsgBeginEpochResponse, error) {
 	if req == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")

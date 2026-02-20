@@ -15,22 +15,14 @@ export const protobufPackage = "onchainpoker.dealer.module.v1";
  * It is intentionally empty for now; add fields as module-level params/wiring needs grow.
  */
 export interface Module {
-  /**
-   * Authority defines the custom module authority. If not set, the governance
-   * module account (x/gov) is used by default.
-   */
-  authority: string;
 }
 
 function createBaseModule(): Module {
-  return { authority: "" };
+  return {};
 }
 
 export const Module: MessageFns<Module> = {
-  encode(message: Module, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
-    if (message.authority !== "") {
-      writer.uint32(10).string(message.authority);
-    }
+  encode(_: Module, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
     return writer;
   },
 
@@ -41,14 +33,6 @@ export const Module: MessageFns<Module> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
-        case 1: {
-          if (tag !== 10) {
-            break;
-          }
-
-          message.authority = reader.string();
-          continue;
-        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -58,24 +42,20 @@ export const Module: MessageFns<Module> = {
     return message;
   },
 
-  fromJSON(object: any): Module {
-    return { authority: isSet(object.authority) ? globalThis.String(object.authority) : "" };
+  fromJSON(_: any): Module {
+    return {};
   },
 
-  toJSON(message: Module): unknown {
+  toJSON(_: Module): unknown {
     const obj: any = {};
-    if (message.authority !== "") {
-      obj.authority = message.authority;
-    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<Module>, I>>(base?: I): Module {
     return Module.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<Module>, I>>(object: I): Module {
+  fromPartial<I extends Exact<DeepPartial<Module>, I>>(_: I): Module {
     const message = createBaseModule();
-    message.authority = object.authority ?? "";
     return message;
   },
 };
@@ -91,10 +71,6 @@ export type DeepPartial<T> = T extends Builtin ? T
 type KeysOfUnion<T> = T extends T ? keyof T : never;
 export type Exact<P, I extends P> = P extends Builtin ? P
   : P & { [K in keyof P]: Exact<P[K], I[K]> } & { [K in Exclude<keyof I, KeysOfUnion<P>>]: never };
-
-function isSet(value: any): boolean {
-  return value !== null && value !== undefined;
-}
 
 export interface MessageFns<T> {
   encode(message: T, writer?: BinaryWriter): BinaryWriter;

@@ -116,7 +116,6 @@ func newDealerMsgServerForOverflowTests(t *testing.T, blockTime time.Time, block
 	k := NewKeeper(
 		cdc,
 		storeService,
-		sdk.AccAddress(bytes.Repeat([]byte{0x7a}, 20)).String(),
 		stakingKeeper,
 		stakingKeeper,
 		fakeDealerSlashingKeeper{},

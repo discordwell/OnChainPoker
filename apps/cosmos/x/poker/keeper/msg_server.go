@@ -53,6 +53,9 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 	if req.DealerTimeoutSecs > uint64(math.MaxInt64) {
 		return nil, types.ErrInvalidTableCfg.Wrap("dealer_timeout_secs exceeds int64 max")
 	}
+	if req.RakeBps != 0 {
+		return nil, types.ErrInvalidTableCfg.Wrap("rake_bps must be 0")
+	}
 
 	id, err := m.GetNextTableID(ctx)
 	if err != nil {
