@@ -77,6 +77,6 @@ export function loadConfig(): DealerDaemonConfig {
     pollIntervalMs: envInt("DEALER_POLL_INTERVAL_MS", 2000),
     committeeSize: envInt("DEALER_COMMITTEE_SIZE", 3),
     threshold: envInt("DEALER_THRESHOLD", 3),
-    shuffleRounds: envInt("DEALER_SHUFFLE_ROUNDS", 8),
+    shuffleRounds: envInt("DEALER_SHUFFLE_ROUNDS", 26),
   };
 }
