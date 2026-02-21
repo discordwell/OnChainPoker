@@ -6,7 +6,7 @@ import (
 	"time"
 
 	sdkmath "cosmossdk.io/math"
-	cmtprotocrypto "github.com/cometbft/cometbft/api/cometbft/crypto/v1"
+	cmtprotocrypto "github.com/cometbft/cometbft/proto/tendermint/crypto"
 
 	cryptotypes "github.com/cosmos/cosmos-sdk/crypto/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
@@ -53,6 +53,7 @@ func (v fakeValidator) SharesFromTokens(_ sdkmath.Int) (sdkmath.LegacyDec, error
 func (v fakeValidator) SharesFromTokensTruncated(_ sdkmath.Int) (sdkmath.LegacyDec, error) {
 	return sdkmath.LegacyZeroDec(), nil
 }
+func (v fakeValidator) GetValidatorPower() sdkmath.Int { return sdkmath.ZeroInt() }
 
 type fakeStakingKeeper struct {
 	val    stakingtypes.ValidatorI

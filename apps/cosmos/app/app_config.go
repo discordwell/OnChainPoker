@@ -22,6 +22,9 @@ import (
 	pokermodulev1 "onchainpoker/apps/cosmos/x/poker/module/v1"
 	pokertypes "onchainpoker/apps/cosmos/x/poker/types"
 
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+
 	"github.com/cosmos/cosmos-sdk/runtime"
 	"github.com/cosmos/cosmos-sdk/types/module"
 	_ "github.com/cosmos/cosmos-sdk/x/auth"           // import for side-effects
@@ -57,6 +60,8 @@ var (
 		{Account: stakingtypes.NotBondedPoolName, Permissions: []string{authtypes.Burner, stakingtypes.ModuleName}},
 		// Game escrow module account (holds table buy-ins/bonds).
 		{Account: pokertypes.ModuleName},
+		// ICS-20 transfer module needs Minter + Burner for cross-chain tokens.
+		{Account: ibctransfertypes.ModuleName, Permissions: []string{authtypes.Minter, authtypes.Burner}},
 	}
 
 	// blockedModuleAccounts is the list of module account names that cannot
@@ -85,10 +90,14 @@ var (
 					slashingtypes.ModuleName,
 					evidencetypes.ModuleName,
 					stakingtypes.ModuleName,
+					ibcexported.ModuleName,
+					ibctransfertypes.ModuleName,
 				},
 				EndBlockers: []string{
 					banktypes.ModuleName,
 					stakingtypes.ModuleName,
+					ibcexported.ModuleName,
+					ibctransfertypes.ModuleName,
 				},
 				SkipStoreKeys: []string{
 					"tx",
@@ -103,6 +112,8 @@ var (
 					distrtypes.ModuleName,
 					stakingtypes.ModuleName,
 					slashingtypes.ModuleName,
+					ibcexported.ModuleName,
+					ibctransfertypes.ModuleName,
 					dealertypes.ModuleName,
 					genutiltypes.ModuleName,
 					evidencetypes.ModuleName,
@@ -116,6 +127,8 @@ var (
 					distrtypes.ModuleName,
 					stakingtypes.ModuleName,
 					slashingtypes.ModuleName,
+					ibcexported.ModuleName,
+					ibctransfertypes.ModuleName,
 					dealertypes.ModuleName,
 					genutiltypes.ModuleName,
 					evidencetypes.ModuleName,

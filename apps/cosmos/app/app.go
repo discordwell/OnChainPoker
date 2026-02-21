@@ -23,12 +23,26 @@ import (
 	"github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
 	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
+	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
 	consensuskeeper "github.com/cosmos/cosmos-sdk/x/consensus/keeper"
 	distrkeeper "github.com/cosmos/cosmos-sdk/x/distribution/keeper"
 	evidencekeeper "github.com/cosmos/cosmos-sdk/x/evidence/keeper"
 	slashingkeeper "github.com/cosmos/cosmos-sdk/x/slashing/keeper"
 	stakingkeeper "github.com/cosmos/cosmos-sdk/x/staking/keeper"
+
+	// IBC
+	"github.com/cosmos/ibc-go/v10/modules/apps/transfer"
+	ibctransferkeeper "github.com/cosmos/ibc-go/v10/modules/apps/transfer/keeper"
+	ibctransfertypes "github.com/cosmos/ibc-go/v10/modules/apps/transfer/types"
+	transferv2 "github.com/cosmos/ibc-go/v10/modules/apps/transfer/v2"
+	ibc "github.com/cosmos/ibc-go/v10/modules/core"
+	porttypes "github.com/cosmos/ibc-go/v10/modules/core/05-port/types"
+	ibcapi "github.com/cosmos/ibc-go/v10/modules/core/api"
+	ibcexported "github.com/cosmos/ibc-go/v10/modules/core/exported"
+	ibckeeper "github.com/cosmos/ibc-go/v10/modules/core/keeper"
+	solomachine "github.com/cosmos/ibc-go/v10/modules/light-clients/06-solomachine"
+	ibctm "github.com/cosmos/ibc-go/v10/modules/light-clients/07-tendermint"
 )
 
 // DefaultNodeHome is the default node home directory for `ocpd`.
@@ -57,6 +71,10 @@ type OcpApp struct {
 	DistrKeeper           distrkeeper.Keeper
 	EvidenceKeeper        evidencekeeper.Keeper
 	ConsensusParamsKeeper consensuskeeper.Keeper
+
+	// IBC keepers (manually wired — ibc-go v10 does not support depinject).
+	IBCKeeper      *ibckeeper.Keeper
+	TransferKeeper *ibctransferkeeper.Keeper
 }
 
 func init() {
@@ -110,6 +128,70 @@ func NewOcpApp(
 	}
 
 	app.App = appBuilder.Build(db, traceStore, baseAppOptions...)
+
+	// ── IBC: register stores, keepers, router, light clients, modules ──
+
+	ibcStoreKey := storetypes.NewKVStoreKey(ibcexported.StoreKey)
+	transferStoreKey := storetypes.NewKVStoreKey(ibctransfertypes.StoreKey)
+	if err := app.RegisterStores(ibcStoreKey, transferStoreKey); err != nil {
+		panic(err)
+	}
+
+	// IBC authority — set to the IBC module address so nobody can submit
+	// governance-style IBC messages (chain has no x/gov).
+	ibcAuthority := authtypes.NewModuleAddress(ibcexported.ModuleName).String()
+
+	app.IBCKeeper = ibckeeper.NewKeeper(
+		app.appCodec,
+		runtime.NewKVStoreService(ibcStoreKey),
+		noopUpgradeKeeper{sentinel: 1},
+		ibcAuthority,
+	)
+
+	app.TransferKeeper = ibctransferkeeper.NewKeeper(
+		app.appCodec,
+		app.AccountKeeper.AddressCodec(),
+		runtime.NewKVStoreService(transferStoreKey),
+		app.IBCKeeper.ChannelKeeper,
+		app.MsgServiceRouter(),
+		app.AccountKeeper,
+		app.BankKeeper,
+		ibcAuthority,
+	)
+
+	// IBC v1 router (classic IBC modules).
+	ibcRouter := porttypes.NewRouter()
+	transferStack := porttypes.NewIBCStackBuilder(app.IBCKeeper.ChannelKeeper)
+	transferApp := transfer.NewIBCModule(app.TransferKeeper)
+	transferStack.Base(transferApp)
+	ibcRouter.AddRoute(ibctransfertypes.ModuleName, transferStack.Build())
+	app.IBCKeeper.SetRouter(ibcRouter)
+
+	// IBC v2 router.
+	ibcRouterV2 := ibcapi.NewRouter()
+	ibcRouterV2.AddRoute(ibctransfertypes.PortID, transferv2.NewIBCModule(app.TransferKeeper))
+	app.IBCKeeper.SetRouterV2(ibcRouterV2)
+
+	// Light clients.
+	storeProvider := app.IBCKeeper.ClientKeeper.GetStoreProvider()
+
+	tmLightClient := ibctm.NewLightClientModule(app.appCodec, storeProvider)
+	app.IBCKeeper.ClientKeeper.AddRoute(ibctm.ModuleName, &tmLightClient)
+
+	smLightClient := solomachine.NewLightClientModule(app.appCodec, storeProvider)
+	app.IBCKeeper.ClientKeeper.AddRoute(solomachine.ModuleName, &smLightClient)
+
+	// Register IBC modules with the runtime (not managed by depinject).
+	if err := app.RegisterModules(
+		ibc.NewAppModule(app.IBCKeeper),
+		transfer.NewAppModule(app.TransferKeeper),
+		ibctm.NewAppModule(tmLightClient),
+		solomachine.NewAppModule(smLightClient),
+	); err != nil {
+		panic(err)
+	}
+
+	// ── end IBC ──
 
 	// Register streaming services (if enabled via app.toml).
 	if err := app.RegisterStreamingServices(appOpts, app.kvStoreKeys()); err != nil {
