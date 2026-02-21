@@ -56,6 +56,18 @@ Three files referenced `cometbft/v2` or `cometbft/api` proto types that the SDK 
 - `go build ./cmd/ocpd` ✅
 - `go test ./...` ✅ (all packages pass)
 
+### Phase 1E: IBCStackBuilder middleware panic — FIXED
+ibc-go v10's `IBCStackBuilder.Build()` requires at least one middleware via `.Next()`. Bypassed the builder entirely by wiring the transfer module directly to the IBC router with manual `SetICS4Wrapper` call. See `app.go` lines 163-169.
+
+### Phase 1F: GoLevelDB empty-value bug breaking state queries — FIXED
+File: `apps/cosmos/app/querywrap.go`
+
+**Root cause:** `cosmos-db`'s `GoLevelDB.Has()` returns false for keys stored with empty values (`[]byte{}`), because `GoLevelDB.Get()` returns nil for empty values and `Has` checks `bytes != nil`. IAVL's `SaveEmptyRoot()` writes `[]byte{}` for stores with no data (evidence, ibc, transfer at genesis). This made those versions invisible to IAVL's `hasVersion()` and `GetRoot()`, causing `CacheMultiStoreWithVersion` (used by all gRPC/REST queries) to fail with "version does not exist" for every height.
+
+**Fix:** Created `queryMultiStore` wrapper that overrides `CacheMultiStoreWithVersion`. When `GetImmutable` fails for a store, it checks the `CommitInfo` hash — if the store has an empty-tree hash (SHA256 of empty string), it substitutes a MemDB-backed dummy store instead of returning an error. Wired via `app.SetQueryMultiStore()` after `app.Load()`.
+
+**Verified:** All gRPC, REST, and CLI queries work correctly (bank, staking, IBC endpoints).
+
 ---
 
 ## What Comes Next
@@ -111,6 +123,7 @@ Three files referenced `cometbft/v2` or `cometbft/api` proto types that the SDK 
 | `apps/cosmos/app/app_config.go` | Modified (IBC imports, permissions, ordering) |
 | `apps/cosmos/app/app.go` | Modified (IBC keepers, router, light clients, module registration) |
 | `apps/cosmos/app/noopupgrade.go` | **New** (no-op UpgradeKeeper for IBC) |
+| `apps/cosmos/app/querywrap.go` | **New** (GoLevelDB empty-value workaround for state queries) |
 | `apps/cosmos/scripts/production-genesis.sh` | **Created** |
 | `deploy/ocp-relayer.service` | **Not yet created** |
 | `deploy/hermes-config.toml` | **Not yet created** |

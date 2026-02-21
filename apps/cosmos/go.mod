@@ -13,8 +13,6 @@ require (
 	cosmossdk.io/store v1.10.0-rc.2
 	cosmossdk.io/tools/confix v0.1.2
 	cosmossdk.io/x/upgrade v0.2.0
-	github.com/cometbft/cometbft/api v1.1.0-rc1
-	github.com/cometbft/cometbft/v2 v2.0.0-rc1
 	github.com/cosmos/cosmos-db v1.1.3
 	github.com/cosmos/cosmos-proto v1.0.0-beta.5
 	github.com/cosmos/cosmos-sdk v0.54.0-rc.1.0.20251215170539-f6237824459b
@@ -30,6 +28,8 @@ require (
 	google.golang.org/genproto/googleapis/api v0.0.0-20260128011058-8636f8732409
 	google.golang.org/grpc v1.79.1
 )
+
+require github.com/cometbft/cometbft v0.39.0-beta.2
 
 require (
 	cosmossdk.io/collections v1.4.0 // indirect
@@ -60,7 +60,6 @@ require (
 	github.com/cockroachdb/pebble v1.1.5 // indirect
 	github.com/cockroachdb/redact v1.1.6 // indirect
 	github.com/cockroachdb/tokenbucket v0.0.0-20250429170803-42689b6311bb // indirect
-	github.com/cometbft/cometbft v0.39.0-beta.2 // indirect
 	github.com/cometbft/cometbft-db v1.0.4 // indirect
 	github.com/cosmos/btcutil v1.0.5 // indirect
 	github.com/cosmos/go-bip39 v1.0.0 // indirect
@@ -126,7 +125,6 @@ require (
 	github.com/kr/text v0.2.0 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/linxGnu/grocksdb v1.10.4 // indirect
-	github.com/lmittmann/tint v1.0.7 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/manifoldco/promptui v0.9.0 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -221,7 +219,4 @@ require (
 	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
-// ibc-go@main + cosmos-sdk@main require store v1.3.0-beta.0 (from the SDK
-// main branch). Go's MVS selects v1.10.0-rc.2 (higher semver, different
-// branch) which lacks ObjKVStore. Force the correct version.
 replace cosmossdk.io/store => cosmossdk.io/store v1.3.0-beta.0

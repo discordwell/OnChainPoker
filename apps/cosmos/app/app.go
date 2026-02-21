@@ -8,6 +8,7 @@ import (
 	clienthelpers "cosmossdk.io/client/v2/helpers"
 	"cosmossdk.io/depinject"
 	"cosmossdk.io/log"
+	"cosmossdk.io/store/rootmulti"
 	storetypes "cosmossdk.io/store/types"
 
 	appparams "onchainpoker/apps/cosmos/app/params"
@@ -161,11 +162,12 @@ func NewOcpApp(
 	)
 
 	// IBC v1 router (classic IBC modules).
+	// Wire the transfer module directly (no middleware needed yet).
+	// SetICS4Wrapper points outbound packets at the channel keeper.
 	ibcRouter := porttypes.NewRouter()
-	transferStack := porttypes.NewIBCStackBuilder(app.IBCKeeper.ChannelKeeper)
 	transferApp := transfer.NewIBCModule(app.TransferKeeper)
-	transferStack.Base(transferApp)
-	ibcRouter.AddRoute(ibctransfertypes.ModuleName, transferStack.Build())
+	transferApp.SetICS4Wrapper(app.IBCKeeper.ChannelKeeper)
+	ibcRouter.AddRoute(ibctransfertypes.ModuleName, transferApp)
 	app.IBCKeeper.SetRouter(ibcRouter)
 
 	// IBC v2 router.
@@ -218,6 +220,14 @@ func NewOcpApp(
 
 	if err := app.Load(loadLatest); err != nil {
 		panic(err)
+	}
+
+	// Workaround for GoLevelDB treating empty []byte{} values as non-existent.
+	// IAVL's SaveEmptyRoot writes []byte{} for stores with no data, which breaks
+	// CacheMultiStoreWithVersion (used by gRPC/REST queries) for those stores.
+	// See querywrap.go for details.
+	if rms, ok := app.CommitMultiStore().(*rootmulti.Store); ok {
+		app.SetQueryMultiStore(&queryMultiStore{Store: rms})
 	}
 
 	return app

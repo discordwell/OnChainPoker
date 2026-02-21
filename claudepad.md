@@ -2,6 +2,13 @@
 
 ## Session Summaries
 
+### 2026-02-21T~UTC — IBC State Query Fix (GoLevelDB Empty-Value Bug)
+Fixed the blocking issue preventing all gRPC/REST state queries when IBC is enabled:
+- **Root cause**: `cosmos-db`'s `GoLevelDB.Has()` returns false for keys with empty values (`[]byte{}`). IAVL's `SaveEmptyRoot()` writes `[]byte{}` for empty stores (evidence, ibc, transfer). This breaks `CacheMultiStoreWithVersion()` for all queries.
+- **Fix**: Created `queryMultiStore` wrapper (`app/querywrap.go`) overriding `CacheMultiStoreWithVersion`. When `GetImmutable` fails and CommitInfo shows an empty-tree hash, substitutes a MemDB dummy instead of erroring. Wired via `SetQueryMultiStore()`.
+- Also fixed IBCStackBuilder middleware panic (bypass builder, wire transfer module directly).
+- All gRPC, REST, CLI queries now work: bank, staking, IBC endpoints verified.
+
 ### 2026-02-19T~UTC — Follow-up Fixes (DKG + Hole Cards)
 Fixed two documented limitations from the initial implementation:
 - **Multi-party DKG**: Updated daemon to use complaint-based share distribution. New flow: commit → file `DkgComplaintMissing` for all other validators → reveal shares in response to complaints → aggregate secret share from own self-evaluation + received reveals → finalize. Added `handleDkgComplaints()`, `handleDkgReveals()`, `handleDkgAggregate()` to `dkg.ts`. Updated daemon.ts polling loop.
@@ -24,3 +31,5 @@ Implemented all 6 phases of the plan to bridge the on-chain poker protocol to a 
 - **Security items resolved** (2026-02-20): All 8 deferred items addressed — hex length check, threshold check, XSS SECURITY comment + future mitigation path noted, DKG re-fetch between phases, pk mismatch warning, error logging, committed-only complaint filter, module-level card table.
 - **Pre-existing coordinator build error**: `apps/coordinator/src/http.ts:218` has a TypeScript null check issue (`config.corsOrigins`) that predates these changes.
 - **Vite base path**: Already configured to `/ocp/` in vite.config.ts.
+- **GoLevelDB empty-value quirk**: `GoLevelDB.Get()` returns `nil` for keys stored with `[]byte{}` (empty value). `GoLevelDB.Has()` uses `Get()` internally and checks `bytes != nil`, so it returns false for empty values. Iterators still find these keys. This affects IAVL's `SaveEmptyRoot()` which writes `[]byte{}` for empty trees, making `hasVersion()` and `GetRoot()` fail for stores with no data.
+- **Store version compatibility**: SDK pseudo-version `v0.54.0-rc.1` requires `cosmossdk.io/store v1.3.0-beta.0` (for `ObjKVStore`), forced via `replace` directive. Both SDK and ibc-go pin this same version.
