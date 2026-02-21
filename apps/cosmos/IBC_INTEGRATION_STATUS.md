@@ -110,7 +110,7 @@ Three files referenced `cometbft/v2` or `cometbft/api` proto types that the SDK 
 | `apps/cosmos/app/app_config.go` | Modified (IBC imports, permissions, ordering) |
 | `apps/cosmos/app/app.go` | Modified (IBC keepers, router, light clients, module registration) |
 | `apps/cosmos/app/noopupgrade.go` | **New** (no-op UpgradeKeeper for IBC) |
-| `apps/cosmos/scripts/production-genesis.sh` | **Not yet created** |
+| `apps/cosmos/scripts/production-genesis.sh` | **Created** |
 | `deploy/ocp-relayer.service` | **Not yet created** |
 | `deploy/hermes-config.toml` | **Not yet created** |
 | `docs/LAUNCH_MANIFEST.md` | **Not yet updated** |
