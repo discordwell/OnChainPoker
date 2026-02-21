@@ -1,0 +1,15 @@
+[Unit]
+Description=OCP Hermes IBC Relayer
+After=network-online.target ocp-chain-node@0.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocp
+ExecStart=/usr/local/bin/hermes --config /opt/ocp/deploy/hermes.toml start
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

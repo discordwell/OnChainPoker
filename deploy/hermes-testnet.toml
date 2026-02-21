@@ -1,0 +1,96 @@
+# Hermes relayer config: local OCP chain <-> Osmosis testnet (osmo-test-5)
+#
+# Usage:
+#   hermes --config deploy/hermes-testnet.toml health-check
+#   hermes --config deploy/hermes-testnet.toml start
+#
+# Prerequisites:
+#   - Local OCP chain running (apps/cosmos/scripts/localnet.sh)
+#   - Hermes keys added for both chains (see scripts/ibc-testnet.sh)
+
+[global]
+log_level = 'info'
+
+[mode]
+
+[mode.clients]
+enabled = true
+refresh = true
+misbehaviour = true
+
+[mode.connections]
+enabled = false
+
+[mode.channels]
+enabled = false
+
+[mode.packets]
+enabled = true
+clear_interval = 100
+clear_on_start = true
+tx_confirmation = false
+
+[rest]
+enabled = false
+host = '127.0.0.1'
+port = 3000
+
+[telemetry]
+enabled = false
+host = '127.0.0.1'
+port = 3001
+
+# ── Local OCP chain ─────────────────────────────────────────────────
+
+[[chains]]
+id = 'ocp-local-1'
+type = 'CosmosSdk'
+rpc_addr = 'http://127.0.0.1:26657'
+grpc_addr = 'http://127.0.0.1:9090'
+event_source = { mode = 'push', url = 'ws://127.0.0.1:26657/websocket', batch_delay = '500ms' }
+rpc_timeout = '10s'
+trusted_node = true
+account_prefix = 'ocp'
+key_name = 'relayer'
+key_store_type = 'Test'
+store_prefix = 'ibc'
+default_gas = 200000
+max_gas = 1000000
+gas_price = { price = '0.0', denom = 'uocp' }
+gas_multiplier = 1.2
+max_msg_num = 30
+max_tx_size = 180000
+max_grpc_decoding_size = 33554432
+clock_drift = '5s'
+max_block_time = '30s'
+trusting_period = '14days'
+trust_threshold = { numerator = '1', denominator = '3' }
+address_type = { derivation = 'cosmos' }
+
+# ── Osmosis testnet ─────────────────────────────────────────────────
+
+[[chains]]
+id = 'osmo-test-5'
+type = 'CosmosSdk'
+rpc_addr = 'https://rpc.testnet.osmosis.zone'
+grpc_addr = 'https://grpc.testnet.osmosis.zone'
+event_source = { mode = 'push', url = 'wss://rpc.testnet.osmosis.zone/websocket', batch_delay = '500ms' }
+rpc_timeout = '15s'
+trusted_node = true
+account_prefix = 'osmo'
+key_name = 'relayer'
+key_store_type = 'Test'
+store_prefix = 'ibc'
+default_gas = 300000
+max_gas = 3000000
+gas_price = { price = '0.025', denom = 'uosmo' }
+gas_multiplier = 1.3
+max_msg_num = 30
+max_tx_size = 180000
+max_grpc_decoding_size = 33554432
+clock_drift = '20s'
+max_block_time = '30s'
+# osmo-test-5 unbonding period is ~1 day; trusting_period must be shorter
+trusting_period = '20hours'
+trust_threshold = { numerator = '1', denominator = '3' }
+address_type = { derivation = 'cosmos' }
