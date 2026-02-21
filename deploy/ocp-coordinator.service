@@ -11,10 +11,16 @@ ExecStart=/usr/bin/node /opt/ocp/coordinator/dist/index.js
 Restart=on-failure
 RestartSec=5
 
-Environment=PORT=8788
-Environment=OCP_CHAIN_ADAPTER=comet
-Environment=OCP_COMET_RPC_URL=http://127.0.0.1:26657
-Environment=OCP_DEV_ROUTES=false
+Environment=NODE_ENV=production
+Environment=COORDINATOR_HOST=127.0.0.1
+Environment=COORDINATOR_PORT=8788
+Environment=COORDINATOR_CHAIN_ADAPTER=cosmos
+Environment=COORDINATOR_COSMOS_RPC_URL=http://127.0.0.1:26657
+Environment=COORDINATOR_COSMOS_LCD_URL=http://127.0.0.1:1317
+Environment=COORDINATOR_DEV_ROUTES=false
+Environment=COORDINATOR_REQUIRE_WRITE_AUTH=true
+Environment=COORDINATOR_WRITE_RATE_LIMIT_ENABLED=true
+EnvironmentFile=/opt/ocp/config/coordinator.env
 
 [Install]
 WantedBy=multi-user.target

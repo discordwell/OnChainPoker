@@ -11,6 +11,7 @@ ExecStart=/usr/bin/node /opt/ocp/dealer-daemon/dist/index.js
 Restart=on-failure
 RestartSec=5
 
+Environment=NODE_ENV=production
 EnvironmentFile=/opt/ocp/config/dealer-%i.env
 
 [Install]

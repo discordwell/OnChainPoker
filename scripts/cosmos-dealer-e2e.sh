@@ -3,15 +3,30 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-export COSMOS_RPC_URL="${COSMOS_RPC_URL:-http://127.0.0.1:26657}"
-export COSMOS_LCD_URL="${COSMOS_LCD_URL:-http://127.0.0.1:1317}"
+# Use isolated default ports so local single-node devnets on 26657/1317 do not
+# interfere with multinet e2e runs.
+export COSMOS_RPC_URL="${COSMOS_RPC_URL:-http://127.0.0.1:27657}"
+export COSMOS_LCD_URL="${COSMOS_LCD_URL:-http://127.0.0.1:1417}"
 export COSMOS_OCPD_NUM_NODES="${COSMOS_OCPD_NUM_NODES:-${OCPD_NUM_NODES:-3}}"
+
+rpc_port="$(echo "$COSMOS_RPC_URL" | sed -nE 's#^https?://[^:/]+:([0-9]+).*$#\1#p')"
+lcd_port="$(echo "$COSMOS_LCD_URL" | sed -nE 's#^https?://[^:/]+:([0-9]+).*$#\1#p')"
+if [[ -z "$rpc_port" || -z "$lcd_port" ]]; then
+  echo "[cosmos-dealer-e2e] invalid COSMOS_RPC_URL or COSMOS_LCD_URL"
+  echo "[cosmos-dealer-e2e] COSMOS_RPC_URL=$COSMOS_RPC_URL"
+  echo "[cosmos-dealer-e2e] COSMOS_LCD_URL=$COSMOS_LCD_URL"
+  exit 1
+fi
 
 export OCPD_NUM_NODES="${COSMOS_OCPD_NUM_NODES}"
 export OCPD_MULTI_HOME="${OCPD_MULTI_HOME:-${RUNNER_TEMP:-$ROOT/.tmp}/ocpd-multivalidator}"
 export OCPD_KEYRING_BACKEND="${OCPD_KEYRING_BACKEND:-test}"
 export OCPD_BIN="${OCPD_BIN:-$ROOT/apps/cosmos/bin/ocpd}"
 export OCPD_NODE="${OCPD_NODE:-$(echo "$COSMOS_RPC_URL" | sed 's#^https\?://#tcp://#')}"
+export OCPD_RPC_PORT_BASE="${OCPD_RPC_PORT_BASE:-$rpc_port}"
+export OCPD_P2P_PORT_BASE="${OCPD_P2P_PORT_BASE:-$((rpc_port - 1))}"
+export OCPD_GRPC_PORT_BASE="${OCPD_GRPC_PORT_BASE:-$((rpc_port - 17567))}"
+export OCPD_API_PORT_BASE="${OCPD_API_PORT_BASE:-$lcd_port}"
 
 # Keep each invocation isolated and deterministic.
 export OCPD_RESET="${OCPD_RESET:-1}"
