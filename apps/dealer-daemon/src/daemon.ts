@@ -58,7 +58,7 @@ function expectedRevealPos(table: any): number | null {
   const h = table?.hand;
   const dh = h?.dealer;
   if (!h || !dh) return null;
-  if (!(dh.finalized || dh.deckFinalized || dh.deck_finalized)) return null;
+  if (!pick(dh, "finalized", "deckFinalized", "deck_finalized")) return null;
 
   const phase = normalizePhase(h.phase);
 
@@ -318,7 +318,6 @@ export class DealerDaemon {
         config: this.config,
         tableId,
         handId,
-        shuffleStep: 0, // ignored — handleShuffle reads from DealerHand
         epochMembers,
       }).catch((err) => logError("shuffle error", err));
 

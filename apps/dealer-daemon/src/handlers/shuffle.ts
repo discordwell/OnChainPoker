@@ -32,7 +32,6 @@ export async function handleShuffle(args: {
   config: DealerDaemonConfig;
   tableId: string;
   handId: string;
-  shuffleStep: number;
   epochMembers: Array<{ validator: string; index: number }>;
 }): Promise<void> {
   const { client, config, tableId, handId, epochMembers } = args;

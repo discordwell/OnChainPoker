@@ -219,7 +219,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     const c = ensureLcd();
     const id = toU64String(tableId, "tableId");
     const json = await c.getJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(id)}`).catch(() => null);
-    return json?.table ?? json ?? null;
+    return json?.table || null;
   }
 
   async function getDealerEpoch(): Promise<any | null> {
