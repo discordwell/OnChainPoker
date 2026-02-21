@@ -53,6 +53,11 @@ if [ "$SKIP_BUILD" = false ]; then
   echo ">> Building dealer-daemon..."
   pnpm -C apps/dealer-daemon build
 
+  echo ">> Cross-compiling ocpd (linux/amd64)..."
+  OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
+  (cd "$PROJECT_ROOT/apps/cosmos" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$OCPD_BIN" ./cmd/ocpd)
+  echo "   Built: $OCPD_BIN ($(du -h "$OCPD_BIN" | cut -f1))"
+
   echo ">> Build complete."
 fi
 
@@ -67,7 +72,7 @@ echo ""
 echo ">> Syncing artifacts to $VPS_SSH:$VPS_OCP_DIR ..."
 
 # Ensure remote directories exist
-ssh "$VPS_SSH" "mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,config,bin}"
+ssh "$VPS_SSH" "mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,config,bin,chain}"
 
 # Web (static)
 rsync -az --delete \
@@ -89,6 +94,20 @@ rsync -az --delete \
 rsync -az \
   "$PROJECT_ROOT/apps/dealer-daemon/package.json" \
   "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/"
+
+# Chain binary (linux/amd64)
+OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
+if [[ -f "$OCPD_BIN" ]]; then
+  rsync -az "$OCPD_BIN" "$VPS_SSH:$VPS_OCP_DIR/bin/ocpd"
+  ssh "$VPS_SSH" "chmod +x $VPS_OCP_DIR/bin/ocpd"
+else
+  echo "   WARN: ocpd-linux-amd64 not found, skipping chain binary deploy"
+fi
+
+# Production genesis script
+rsync -az \
+  "$PROJECT_ROOT/apps/cosmos/scripts/production-genesis.sh" \
+  "$VPS_SSH:$VPS_OCP_DIR/chain/"
 
 # Shared packages (for node_modules resolution)
 for pkg in ocp-crypto ocp-shuffle ocp-sdk; do
@@ -116,7 +135,15 @@ ssh "$VPS_SSH" "cd $VPS_OCP_DIR/dealer-daemon && npm install --omit=dev 2>/dev/n
 echo ">> Restarting services..."
 ssh "$VPS_SSH" "systemctl daemon-reload && systemctl restart ocp-coordinator ocp-dealer-daemon@0 ocp-dealer-daemon@1 ocp-dealer-daemon@2 2>/dev/null || true"
 
+# Restart chain node if it's already initialized
+ssh "$VPS_SSH" "if [[ -f $VPS_OCP_DIR/chain/node0/config/genesis.json ]]; then systemctl restart ocp-chain-node@0; else echo '   Chain not initialized yet — run production-genesis.sh on VPS first'; fi 2>/dev/null || true"
+
 echo ""
 echo "=== Deploy complete ==="
-echo "Web:   https://$VPS_HOST/ocp"
-echo "API:   https://$VPS_HOST/ocp/api/health"
+echo "Web:     https://$VPS_HOST/ocp"
+echo "API:     https://$VPS_HOST/ocp/api/health"
+echo ""
+echo "Chain initialization (first deploy only):"
+echo "  ssh $VPS_SSH"
+echo "  OCPD_HOME=$VPS_OCP_DIR/chain/node0 OCPD_BIN=$VPS_OCP_DIR/bin/ocpd bash $VPS_OCP_DIR/chain/production-genesis.sh"
+echo "  systemctl enable --now ocp-chain-node@0"

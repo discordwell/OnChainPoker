@@ -76,10 +76,11 @@ Three files referenced `cometbft/v2` or `cometbft/api` proto types that the SDK 
 - IBC genesis auto-included from module registration
 - Modeled on existing `apps/cosmos/scripts/localnet.sh`
 
-### Phase 3: Deploy chain to VPS
-- Cross-compile: `GOOS=linux GOARCH=amd64 go build -o apps/cosmos/bin/ocpd-linux-amd64 ./apps/cosmos/cmd/ocpd`
-- Extend `scripts/deploy-vps.sh` to also deploy chain binary
-- Initialize chain on VPS, copy genesis, start via existing systemd template (`deploy/ocp-chain-node@.service`)
+### Phase 3: Deploy chain to VPS — DONE
+- Cross-compile: `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/ocpd-linux-amd64 ./cmd/ocpd`
+- Extended `scripts/deploy-vps.sh`: builds linux binary, deploys to `/opt/ocp/bin/ocpd`, copies genesis script
+- Chain initialization on VPS: `OCPD_HOME=/opt/ocp/chain/node0 OCPD_BIN=/opt/ocp/bin/ocpd bash /opt/ocp/chain/production-genesis.sh`
+- Start via systemd: `systemctl enable --now ocp-chain-node@0`
 - Verify blocks: `curl http://discordwell.com:26657/status`
 
 ### Phase 4: IBC relayer + Osmosis connection
