@@ -32,7 +32,7 @@ function ranksDesc(cards: readonly CardId[]): Rank[] {
   return ranks;
 }
 
-function evaluate5(cards5: readonly CardId[]): HandRank {
+export function evaluate5(cards5: readonly CardId[]): HandRank {
   if (cards5.length !== 5) {
     throw new RangeError(`evaluate5 expected 5 cards, got ${cards5.length}.`);
   }
