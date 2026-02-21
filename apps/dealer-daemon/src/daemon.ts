@@ -58,7 +58,7 @@ function expectedRevealPos(table: any): number | null {
   const h = table?.hand;
   const dh = h?.dealer;
   if (!h || !dh) return null;
-  if (!dh.finalized) return null;
+  if (!(dh.finalized || dh.deckFinalized || dh.deck_finalized)) return null;
 
   const phase = normalizePhase(h.phase);
 
@@ -298,34 +298,43 @@ export class DealerDaemon {
     const phase = normalizePhase(hand.phase);
     const dealer = hand.dealer ?? hand.dealerState;
 
-    if (phase === "shuffle") {
-      const shuffleStep = asNumber(dealer?.shuffleStep ?? dealer?.shuffle_step) ?? 0;
+    const deckFinalized = !!(pick(dealer, "deckFinalized", "deck_finalized"));
 
-      // Try to shuffle
+    if (phase === "shuffle" && !deckFinalized) {
+      // If the poker hand was started externally (e.g., by a bot) without
+      // dealerInitHand, the dealer epoch_id will be 0.  Init it now.
+      const dealerEpochId = asNumber(pick(dealer, "epochId", "epoch_id")) ?? 0;
+      if (dealerEpochId === 0) {
+        log(`Table ${tableId} hand ${handId}: dealer hand not initialized, calling initHand`);
+        await this.client.dealerInitHand({ tableId, handId, epochId }).catch((err) =>
+          logError(`initHand for table ${tableId} hand ${handId} failed`, err)
+        );
+        return; // re-process on next poll
+      }
+
+      // Try to shuffle (handleShuffle reads authoritative shuffleStep from DealerHand)
       await handleShuffle({
         client: this.client,
         config: this.config,
         tableId,
         handId,
-        shuffleStep,
+        shuffleStep: 0, // ignored — handleShuffle reads from DealerHand
         epochMembers,
       }).catch((err) => logError("shuffle error", err));
 
-      // Check if all shuffles done, try to finalize deck
-      const qualCount = epochMembers.length;
-      if (shuffleStep >= qualCount) {
-        await maybeFinalizeDeck({
-          client: this.client,
-          config: this.config,
-          tableId,
-          handId,
-        }).catch(() => {});
-      }
+      // Always attempt finalization — maybeFinalizeDeck checks readiness internally
+      await maybeFinalizeDeck({
+        client: this.client,
+        config: this.config,
+        tableId,
+        handId,
+      }).catch(() => {});
       return;
     }
 
     // After deck finalization, submit enc shares for hole cards
-    if (dealer?.finalized && phase === "betting") {
+    // Phase may still be SHUFFLE (poker module transitions after enc shares) or BETTING
+    if (deckFinalized && (phase === "shuffle" || phase === "betting")) {
       await handleEncShares({
         client: this.client,
         config: this.config,
@@ -365,7 +374,6 @@ export class DealerDaemon {
           pos,
         }).catch(() => {});
       }
-      return;
     }
 
     // Betting phase - check for timeouts
@@ -375,17 +383,14 @@ export class DealerDaemon {
         config: this.config,
         tableId,
       }).catch(() => {});
-      return;
     }
 
-    // Dealer timeout check
-    if (dealer && !dealer.finalized && phase !== "shuffle") {
-      await maybeDealerTimeout({
-        client: this.client,
-        config: this.config,
-        tableId,
-        handId,
-      }).catch(() => {});
-    }
+    // Dealer timeout check — always runs; covers shuffle, enc share, and reveal deadlines
+    await maybeDealerTimeout({
+      client: this.client,
+      config: this.config,
+      tableId,
+      handId,
+    }).catch(() => {});
   }
 }

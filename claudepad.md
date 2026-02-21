@@ -2,6 +2,14 @@
 
 ## Session Summaries
 
+### 2026-02-21T10:00~UTC — Dealer Daemon Bugfixes + Bot Integration Test
+Fixed multiple field-name mismatches and control-flow bugs in the dealer daemon that prevented hands from completing:
+- **Shuffle round**: `handleShuffle` now reads `shuffleStep` from `DealerHand` proto (authoritative) instead of poker table metadata.
+- **Enc shares**: Read `holePos` from `table.hand.dealer` (poker module metadata), not `DealerHand` proto. Added `seatData.pk` field fallback. Catch "not in shuffle phase" gracefully.
+- **Deck finalized**: Use `pick(dealer, "deckFinalized", "deck_finalized")` everywhere (both `processTable` and `expectedRevealPos`).
+- **Timeout flow**: Removed `return` from reveal/betting phase handlers so `maybeDealerTimeout` always runs.
+- **Result**: Full hands flow autonomously — DKG → shuffle → enc shares → preflop → flop → turn → river → showdown → next hand. Bots (calling-station + TAG) playing continuously.
+
 ### 2026-02-21T~UTC — IBC State Query Fix (GoLevelDB Empty-Value Bug)
 Fixed the blocking issue preventing all gRPC/REST state queries when IBC is enabled:
 - **Root cause**: `cosmos-db`'s `GoLevelDB.Has()` returns false for keys with empty values (`[]byte{}`). IAVL's `SaveEmptyRoot()` writes `[]byte{}` for empty stores (evidence, ibc, transfer). This breaks `CacheMultiStoreWithVersion()` for all queries.

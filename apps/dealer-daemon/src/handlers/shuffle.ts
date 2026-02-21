@@ -35,20 +35,23 @@ export async function handleShuffle(args: {
   shuffleStep: number;
   epochMembers: Array<{ validator: string; index: number }>;
 }): Promise<void> {
-  const { client, config, tableId, handId, shuffleStep, epochMembers } = args;
+  const { client, config, tableId, handId, epochMembers } = args;
+
+  // Fetch current dealer hand state — this is the authoritative source for shuffleStep
+  const dealerHand = await client.getDealerHand(tableId, handId);
+  if (!dealerHand) throw new Error(`dealer hand not found for table ${tableId} hand ${handId}`);
+
+  const actualStep = Number(dealerHand.shuffleStep ?? dealerHand.shuffle_step ?? 0);
 
   // Determine if it's our turn
-  const memberIdx = shuffleStep % epochMembers.length;
+  const memberIdx = actualStep % epochMembers.length;
   const expectedShuffler = epochMembers[memberIdx]?.validator;
   if (!expectedShuffler || expectedShuffler.toLowerCase() !== config.validatorAddress.toLowerCase()) {
     return; // Not our turn
   }
 
-  log(`Shuffle: our turn (step ${shuffleStep + 1}) for table ${tableId} hand ${handId}`);
-
-  // Fetch current dealer hand state to get the deck
-  const dealerHand = await client.getDealerHand(tableId, handId);
-  if (!dealerHand) throw new Error(`dealer hand not found for table ${tableId} hand ${handId}`);
+  const round = actualStep + 1;
+  log(`Shuffle: our turn (step ${round}/${epochMembers.length}) for table ${tableId} hand ${handId}`);
 
   const pkHandRaw = dealerHand.pkHand ?? dealerHand.pk_hand;
   if (!pkHandRaw) throw new Error("dealer hand missing pkHand");
@@ -63,7 +66,6 @@ export async function handleShuffle(args: {
     seed,
   });
 
-  const round = shuffleStep + 1;
   log(`Shuffle: submitting proof for round ${round}`);
 
   await client.dealerSubmitShuffle({

@@ -70,17 +70,15 @@ export async function handleEncShares(args: {
   const xHand = scalarMul(secretShare, handScalar);
   const yHand = mulBase(xHand);
 
-  // Get the dealer hand state
-  const dealerHand = await client.getDealerHand(tableId, handId);
-  if (!dealerHand) {
-    log(`EncShares: dealer hand not available for table ${tableId} hand ${handId}`);
+  // Get the table to find player pubkeys and holePos (on table.hand.dealer)
+  const table = await client.getTable(tableId);
+  if (!table) {
+    log(`EncShares: table ${tableId} not found`);
     return;
   }
 
-  const rawDeck = dealerHand.deck ?? [];
-  const deck = decodeDeck(rawDeck);
-
-  const holePosRaw = dealerHand.holePos ?? dealerHand.hole_pos;
+  const dealer = table?.hand?.dealer ?? table?.hand?.dealerState;
+  const holePosRaw = dealer?.holePos ?? dealer?.hole_pos;
   const holePos: number[] = Array.isArray(holePosRaw)
     ? holePosRaw.map((x: unknown) => asNumber(x)).filter((x): x is number => x !== undefined)
     : [];
@@ -90,12 +88,15 @@ export async function handleEncShares(args: {
     return;
   }
 
-  // Get the table to find player pubkeys
-  const table = await client.getTable(tableId);
-  if (!table) {
-    log(`EncShares: table ${tableId} not found`);
+  // Get the dealer hand state for the deck
+  const dealerHand = await client.getDealerHand(tableId, handId);
+  if (!dealerHand) {
+    log(`EncShares: dealer hand not available for table ${tableId} hand ${handId}`);
     return;
   }
+
+  const rawDeck = dealerHand.deck ?? [];
+  const deck = decodeDeck(rawDeck);
 
   const seats = Array.isArray(table.seats) ? table.seats : [];
 
@@ -103,7 +104,7 @@ export async function handleEncShares(args: {
     const seatData = seats[seat];
     if (!seatData?.player) continue;
 
-    const pkPlayerRaw = seatData.pkPlayer ?? seatData.pk_player;
+    const pkPlayerRaw = seatData.pkPlayer ?? seatData.pk_player ?? seatData.pk;
     if (!pkPlayerRaw) continue;
 
     let pkPlayerPoint;
@@ -155,7 +156,10 @@ export async function handleEncShares(args: {
       } catch (err) {
         const msg = String((err as Error)?.message ?? err);
         if (msg.includes("already") || msg.includes("duplicate")) {
-          log(`EncShares: already submitted for pos ${pos}, skipping`);
+          // Already submitted — skip this position
+        } else if (msg.includes("not in shuffle phase")) {
+          log(`EncShares: hand already advanced past shuffle, done`);
+          return;
         } else {
           throw err;
         }

@@ -225,13 +225,13 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
   async function getDealerEpoch(): Promise<any | null> {
     const c = ensureLcd();
     const json = await c.getJson<any>("/onchainpoker/dealer/v1/epoch").catch(() => null);
-    return json?.epoch ?? json ?? null;
+    return json?.epoch || null;
   }
 
   async function getDealerDkg(): Promise<any | null> {
     const c = ensureLcd();
     const json = await c.getJson<any>("/onchainpoker/dealer/v1/dkg").catch(() => null);
-    return json?.dkg ?? json ?? null;
+    return json?.dkg || null;
   }
 
   async function getDealerHand(tableId: UintLike, handId: UintLike): Promise<any | null> {
@@ -239,7 +239,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     const tid = toU64String(tableId, "tableId");
     const hid = toU64String(handId, "handId");
     const json = await c.getJson<any>(`/onchainpoker/dealer/v1/tables/${encodeURIComponent(tid)}/hands/${encodeURIComponent(hid)}`).catch(() => null);
-    return json?.hand ?? json ?? null;
+    return json?.hand || null;
   }
 
   async function pokerCreateTable(a: {
