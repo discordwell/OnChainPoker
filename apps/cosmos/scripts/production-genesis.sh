@@ -5,6 +5,11 @@
 # This script initializes a chain home directory with the final mainnet genesis.
 # It is NOT idempotent: it will refuse to overwrite an existing genesis.
 #
+# Three keys are created:
+#   validator   — node operator, self-delegates stake
+#   pool-seeder — holds ~3.87B OCP for IBC transfer to Osmosis
+#   operator    — operations reserve (~419M OCP)
+#
 # Usage:
 #   ./production-genesis.sh                     # interactive (prompts for passphrase)
 #   OCPD_KEYRING_BACKEND=test ./production-genesis.sh  # non-interactive (test keyring)
@@ -37,8 +42,6 @@ OPS_RESERVE_UOCP="419496730000000"
 TOTAL_UOCP="4294967295000000"
 
 DENOM="uocp"
-DISPLAY_DENOM="ocp"
-DENOM_EXPONENT=6
 
 MIN_GAS_PRICES="0.025${DENOM}"
 TIMEOUT_COMMIT="6s"
@@ -47,7 +50,7 @@ TIMEOUT_COMMIT="6s"
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-OCPD_HOME="${OCPD_HOME:-$HOME/.ocpd}"
+OCPD_HOME="${OCPD_HOME:-${HOME:?HOME must be set}/.ocpd}"
 OCPD_MONIKER="${OCPD_MONIKER:-$(hostname -s)}"
 OCPD_KEYRING_BACKEND="${OCPD_KEYRING_BACKEND:-os}"
 OCPD="${OCPD_BIN:-$ROOT/bin/ocpd}"
@@ -58,8 +61,14 @@ log() { echo "[production-genesis] $*"; }
 die() { echo "[production-genesis] ERROR: $*" >&2; exit 1; }
 
 pick_python() {
-  command -v python3 2>/dev/null && return 0
-  command -v python  2>/dev/null && return 0
+  if command -v python3 >/dev/null 2>&1; then
+    echo "python3"
+    return 0
+  fi
+  if command -v python >/dev/null 2>&1; then
+    echo "python"
+    return 0
+  fi
   return 1
 }
 
@@ -87,6 +96,36 @@ key_addr() {
   "$OCPD" keys show "$1" -a --home "$OCPD_HOME" --keyring-backend "$OCPD_KEYRING_BACKEND"
 }
 
+# Save key mnemonic to a secure file. Captures the mnemonic from `keys add`
+# output and writes it to $OCPD_HOME/keys/<name>.mnemonic with mode 0600.
+create_key_secure() {
+  local name="$1"
+  local keys_dir="$OCPD_HOME/keys"
+  mkdir -p "$keys_dir"
+  chmod 700 "$keys_dir"
+
+  if "$OCPD" keys show "$name" --home "$OCPD_HOME" --keyring-backend "$OCPD_KEYRING_BACKEND" >/dev/null 2>&1; then
+    log "  key '$name' already exists, skipping"
+    return 0
+  fi
+
+  local output
+  output="$("$OCPD" keys add "$name" --home "$OCPD_HOME" --keyring-backend "$OCPD_KEYRING_BACKEND" 2>&1)"
+
+  # Extract the mnemonic (last line after the "Important" warning).
+  local mnemonic
+  mnemonic="$(echo "$output" | tail -1)"
+
+  local mnemonic_file="$keys_dir/${name}.mnemonic"
+  echo "$mnemonic" > "$mnemonic_file"
+  chmod 600 "$mnemonic_file"
+
+  # Print address info (everything except the mnemonic line) to terminal.
+  echo "$output" | sed '$d' >&2
+
+  log "  created key '$name' — mnemonic saved to $mnemonic_file"
+}
+
 # ── Sanity checks ──
 
 if [[ ! -x "$OCPD" ]]; then
@@ -97,11 +136,17 @@ if [[ -f "$OCPD_HOME/config/genesis.json" ]]; then
   die "genesis already exists at $OCPD_HOME/config/genesis.json — remove $OCPD_HOME to start fresh"
 fi
 
-# Verify total = sum of parts.
-COMPUTED_TOTAL=$(( POOL_UOCP + VALIDATOR_STAKE_UOCP + OPS_RESERVE_UOCP ))
-if [[ "$COMPUTED_TOTAL" != "$TOTAL_UOCP" ]]; then
-  die "token allocation mismatch: $COMPUTED_TOTAL != $TOTAL_UOCP"
-fi
+PY="$(pick_python)" || die "python3 or python required for genesis patching"
+
+# Verify total = sum of parts using python (safe on all architectures).
+"$PY" -c "
+pool = $POOL_UOCP
+stake = $VALIDATOR_STAKE_UOCP
+ops = $OPS_RESERVE_UOCP
+total = $TOTAL_UOCP
+computed = pool + stake + ops
+assert computed == total, f'token allocation mismatch: {computed} != {total}'
+" || die "token allocation verification failed"
 
 # ── Init chain ──
 
@@ -109,40 +154,43 @@ log "initializing chain home at $OCPD_HOME"
 runq "$OCPD" init "$OCPD_MONIKER" --chain-id "$CHAIN_ID" --home "$OCPD_HOME"
 
 # ── Create keys ──
+#
+# Three separate keys to limit blast radius if any single key is compromised:
+#   validator   — only holds self-delegation stake (10M OCP)
+#   pool-seeder — holds Osmosis pool seeding funds (~3.87B OCP)
+#   operator    — holds operations reserve (~419M OCP)
 
 log "creating keys (keyring-backend=$OCPD_KEYRING_BACKEND)"
-log "  You will be prompted for a passphrase if using the 'os' or 'file' backend."
+if [[ "$OCPD_KEYRING_BACKEND" != "test" ]]; then
+  log "  You will be prompted for a passphrase for each key."
+fi
 
-for KEY_NAME in validator operator; do
-  if "$OCPD" keys show "$KEY_NAME" --home "$OCPD_HOME" --keyring-backend "$OCPD_KEYRING_BACKEND" >/dev/null 2>&1; then
-    log "  key '$KEY_NAME' already exists, skipping"
-  else
-    "$OCPD" keys add "$KEY_NAME" --home "$OCPD_HOME" --keyring-backend "$OCPD_KEYRING_BACKEND"
-    log "  created key '$KEY_NAME'"
-  fi
+for KEY_NAME in validator pool-seeder operator; do
+  create_key_secure "$KEY_NAME"
 done
 
 VALIDATOR_ADDR="$(key_addr validator)"
+POOL_SEEDER_ADDR="$(key_addr pool-seeder)"
 OPERATOR_ADDR="$(key_addr operator)"
 
-log "  validator: $VALIDATOR_ADDR"
-log "  operator:  $OPERATOR_ADDR"
+log "  validator:   $VALIDATOR_ADDR"
+log "  pool-seeder: $POOL_SEEDER_ADDR"
+log "  operator:    $OPERATOR_ADDR"
 
 # ── Fund genesis accounts ──
 
-# Validator gets self-delegation stake + pool seeding tokens.
-VALIDATOR_TOTAL_UOCP=$(( VALIDATOR_STAKE_UOCP + POOL_UOCP ))
-log "funding validator account: ${VALIDATOR_TOTAL_UOCP}${DENOM}"
-genesis_cmd add-genesis-account "$VALIDATOR_ADDR" "${VALIDATOR_TOTAL_UOCP}${DENOM}" --home "$OCPD_HOME"
+log "funding validator account: ${VALIDATOR_STAKE_UOCP}${DENOM} (self-delegation)"
+genesis_cmd add-genesis-account "$VALIDATOR_ADDR" "${VALIDATOR_STAKE_UOCP}${DENOM}" --home "$OCPD_HOME"
 
-# Operator gets the operations reserve.
-log "funding operator account: ${OPS_RESERVE_UOCP}${DENOM}"
+log "funding pool-seeder account: ${POOL_UOCP}${DENOM} (Osmosis pool)"
+genesis_cmd add-genesis-account "$POOL_SEEDER_ADDR" "${POOL_UOCP}${DENOM}" --home "$OCPD_HOME"
+
+log "funding operator account: ${OPS_RESERVE_UOCP}${DENOM} (operations reserve)"
 genesis_cmd add-genesis-account "$OPERATOR_ADDR" "${OPS_RESERVE_UOCP}${DENOM}" --home "$OCPD_HOME"
 
 # ── Patch genesis JSON ──
 
 GENESIS="$OCPD_HOME/config/genesis.json"
-PY="$(pick_python)" || die "python3 or python required for genesis patching"
 
 log "patching genesis: denom metadata, staking params"
 "$PY" - "$GENESIS" <<'PYEOF'
@@ -171,18 +219,6 @@ g["app_state"]["bank"]["denom_metadata"] = [
 # Ensure staking bond_denom is uocp.
 g["app_state"]["staking"]["params"]["bond_denom"] = "uocp"
 
-# Ensure mint is disabled (no inflation — fixed supply).
-if "mint" in g["app_state"]:
-    mint = g["app_state"]["mint"]
-    if "minter" in mint:
-        mint["minter"]["inflation"] = "0.000000000000000000"
-        mint["minter"]["annual_provisions"] = "0.000000000000000000"
-    if "params" in mint:
-        mint["params"]["inflation_max"] = "0.000000000000000000"
-        mint["params"]["inflation_min"] = "0.000000000000000000"
-        mint["params"]["inflation_rate_change"] = "0.000000000000000000"
-        mint["params"]["mint_denom"] = "uocp"
-
 with open(path, "w") as f:
     json.dump(g, f, indent=2)
     f.write("\n")
@@ -207,23 +243,22 @@ genesis_cmd collect-gentxs --home "$OCPD_HOME"
 
 CONFIG_TOML="$OCPD_HOME/config/config.toml"
 APP_TOML="$OCPD_HOME/config/app.toml"
+CLIENT_TOML="$OCPD_HOME/config/client.toml"
 
 log "patching config.toml: timeout_commit=${TIMEOUT_COMMIT}"
 sed -i.bak -E "s/^timeout_commit = .*/timeout_commit = \"${TIMEOUT_COMMIT}\"/" "$CONFIG_TOML"
 rm -f "$CONFIG_TOML.bak"
 
-log "patching app.toml: minimum-gas-prices=${MIN_GAS_PRICES}"
+log "patching app.toml: minimum-gas-prices=${MIN_GAS_PRICES}, api.enable=true"
 sed -i.bak -E "s/^minimum-gas-prices = .*/minimum-gas-prices = \"${MIN_GAS_PRICES}\"/" "$APP_TOML"
 rm -f "$APP_TOML.bak"
 
 # Enable API (needed for coordinator/dealer-daemon LCD queries).
-# macOS sed doesn't support range-in-braces, so use python for this patch.
 "$PY" - "$APP_TOML" <<'PYEOF2'
 import re, sys
 path = sys.argv[1]
 with open(path, "r") as f:
     content = f.read()
-# Enable the first `enable = false` after `[api]`.
 content = re.sub(
     r'(\[api\][^\[]*?)enable = false',
     r'\1enable = true',
@@ -234,6 +269,14 @@ content = re.sub(
 with open(path, "w") as f:
     f.write(content)
 PYEOF2
+
+# Patch client.toml for operator convenience.
+if [[ -f "$CLIENT_TOML" ]]; then
+  log "patching client.toml: chain-id, keyring-backend"
+  sed -i.bak -E "s/^chain-id = .*/chain-id = \"${CHAIN_ID}\"/" "$CLIENT_TOML"
+  sed -i.bak -E "s/^keyring-backend = .*/keyring-backend = \"${OCPD_KEYRING_BACKEND}\"/" "$CLIENT_TOML"
+  rm -f "$CLIENT_TOML.bak"
+fi
 
 # ── Validate ──
 
@@ -252,21 +295,26 @@ log "  Home:           $OCPD_HOME"
 log "  Genesis:        $GENESIS"
 log "  Genesis SHA256: $GENESIS_HASH"
 log ""
-log "  Validator addr: $VALIDATOR_ADDR"
-log "  Operator addr:  $OPERATOR_ADDR"
+log "  Validator addr:   $VALIDATOR_ADDR"
+log "  Pool-seeder addr: $POOL_SEEDER_ADDR"
+log "  Operator addr:    $OPERATOR_ADDR"
 log ""
 log "  Total supply:   4,294,967,295 OCP ($TOTAL_UOCP uocp)"
-log "    Pool seeding:       3,865,470,565 OCP (held by validator, IBC transfer to Osmosis)"
-log "    Validator stake:    10,000,000 OCP (self-delegation)"
-log "    Operations reserve: 419,496,730 OCP (held by operator)"
+log "    Pool seeding:       3,865,470,565 OCP (pool-seeder key)"
+log "    Validator stake:    10,000,000 OCP (validator key, self-delegated)"
+log "    Operations reserve: 419,496,730 OCP (operator key)"
 log ""
 log "  Config:"
 log "    timeout_commit:     $TIMEOUT_COMMIT"
 log "    minimum-gas-prices: $MIN_GAS_PRICES"
 log ""
+log "  Key mnemonics saved to: $OCPD_HOME/keys/"
+log "    BACK THESE UP IMMEDIATELY and delete the files."
+log ""
 log "  Next steps:"
-log "    1. Back up key mnemonics from keyring"
+log "    1. Securely back up mnemonics from $OCPD_HOME/keys/, then delete them"
 log "    2. Copy $OCPD_HOME to VPS"
 log "    3. Start node: ocpd start --home $OCPD_HOME"
 log "    4. Verify blocks: curl http://localhost:26657/status"
+log "    5. Add persistent_peers in config.toml before connecting to other networks"
 log ""

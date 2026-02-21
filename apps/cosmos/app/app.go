@@ -22,6 +22,7 @@ import (
 	"github.com/cosmos/cosmos-sdk/server/api"
 	"github.com/cosmos/cosmos-sdk/server/config"
 	servertypes "github.com/cosmos/cosmos-sdk/server/types"
+	"github.com/cosmos/cosmos-sdk/x/auth/ante"
 	authkeeper "github.com/cosmos/cosmos-sdk/x/auth/keeper"
 	authtypes "github.com/cosmos/cosmos-sdk/x/auth/types"
 	bankkeeper "github.com/cosmos/cosmos-sdk/x/bank/keeper"
@@ -192,6 +193,21 @@ func NewOcpApp(
 	}
 
 	// ── end IBC ──
+
+	// Custom ante handler (includes IBC RedundantRelayDecorator).
+	anteHandler, err := NewAnteHandler(AnteHandlerOptions{
+		HandlerOptions: ante.HandlerOptions{
+			AccountKeeper:   app.AccountKeeper,
+			BankKeeper:      app.BankKeeper,
+			SignModeHandler: app.txConfig.SignModeHandler(),
+			SigGasConsumer:  ante.DefaultSigVerificationGasConsumer,
+		},
+		IBCKeeper: app.IBCKeeper,
+	})
+	if err != nil {
+		panic(err)
+	}
+	app.SetAnteHandler(anteHandler)
 
 	// Register streaming services (if enabled via app.toml).
 	if err := app.RegisterStreamingServices(appOpts, app.kvStoreKeys()); err != nil {

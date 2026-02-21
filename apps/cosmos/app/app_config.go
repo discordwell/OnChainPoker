@@ -105,6 +105,8 @@ var (
 				// NOTE: The genutils module must occur after staking so that pools are
 				// properly initialized with tokens from genesis accounts.
 				// NOTE: The genutils module must also occur after auth so that it can access the params from auth.
+				// NOTE: consensus is omitted here (handled internally by depinject)
+				// but included in ExportGenesis to capture consensus params.
 				InitGenesis: []string{
 					authtypes.ModuleName,
 					banktypes.ModuleName,
@@ -176,7 +178,9 @@ var (
 		{
 			Name: "tx",
 			Config: appconfig.WrapAny(&txconfigv1.Config{
-				SkipAnteHandler: false,
+				// Custom ante handler (app/ante.go) includes IBC's
+				// RedundantRelayDecorator; skip the auto-generated one.
+				SkipAnteHandler: true,
 			}),
 		},
 		{

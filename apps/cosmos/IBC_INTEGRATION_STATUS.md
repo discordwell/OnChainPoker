@@ -122,6 +122,31 @@ Three files referenced `cometbft/v2` or `cometbft/api` proto types that the SDK 
 
 ibc-go v10 does not provide depinject `ProvideModule` functions or proto-based module configs. The standard pattern (from ibc-go's own simapp) is manual keeper construction. The SDK's `runtime.App` provides `RegisterModules()` and `RegisterStores()` specifically for this — adding non-depinject modules to a depinject-based app. This is the documented hybrid approach.
 
+## Architecture Decision: Custom ante handler with IBC decorator
+
+The SDK's depinject-managed ante handler (`x/auth/tx/config`) doesn't include IBC decorators. We set `SkipAnteHandler: true` in the tx config module and build a custom ante handler chain in `app/ante.go` that includes the standard SDK decorators plus `ibcante.NewRedundantRelayDecorator(app.IBCKeeper)`. This prevents relayers from submitting already-processed IBC messages (gas griefing prevention).
+
 ## Architecture Decision: noopUpgradeKeeper
 
 IBC's keeper constructor panics if `UpgradeKeeper` is nil or zero-value (reflection check). Since this chain has no governance and no upgrade module, a no-op implementation satisfies the interface. Normal IBC operations (transfers, relaying, channel handshakes) don't use upgrade methods. Only governance-initiated IBC client upgrades would fail — which is acceptable since there's no governance module to initiate them.
+
+## Known Operational Risks
+
+### IBC client recovery
+
+The combination of `noopUpgradeKeeper` and an unreachable IBC authority address (set to the IBC module's own address, which cannot sign transactions) means:
+
+- **If an IBC client expires or freezes**, `MsgRecoverClient` cannot be called by anyone.
+- **If a counterparty chain upgrades** (e.g., Osmosis changes consensus), the IBC light client on this chain cannot be upgraded via governance proposals.
+- **IBC parameters cannot be changed post-launch.**
+
+The only recovery path is a coordinated chain upgrade that adds `x/upgrade` (and potentially a minimal governance mechanism). For the initial launch phase, this is acceptable because:
+1. The chain will connect to a single counterparty (Osmosis) initially.
+2. The IBC transfer is a one-time operation to seed the liquidity pool.
+3. After the pool is seeded, ongoing IBC relaying is not critical to chain operation.
+
+**Future improvement:** Before adding more IBC connections, consider adding `x/upgrade` with authority set to a multisig address to enable IBC client upgrades.
+
+### Persistent peers
+
+The production genesis script does NOT configure `persistent_peers` or `seeds` in `config.toml`. For a single-validator chain at genesis this is correct, but peers must be added manually before connecting to other networks or onboarding additional validators.
