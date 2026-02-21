@@ -80,7 +80,7 @@ func (qms *queryMultiStore) CacheMultiStoreWithVersion(version int64) (storetype
 func (qms *queryMultiStore) isEmptyStoreAtVersion(storeName string, version int64) bool {
 	cInfo, err := qms.Store.GetCommitInfo(version)
 	if err != nil {
-		return true // can't get commit info → treat as non-existent
+		return false // can't get commit info (pruned?) → let caller return the original error
 	}
 	for _, si := range cInfo.StoreInfos {
 		if si.Name == storeName {
