@@ -394,6 +394,57 @@ pre {
   color: var(--muted);
 }
 
+.btn-leave {
+  background: var(--danger);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  padding: 0.4rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 500;
+  cursor: pointer;
+}
+.btn-leave:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.table-tabs {
+  display: flex;
+  gap: 0.35rem;
+  overflow-x: auto;
+  padding: 0.35rem 0;
+  margin-bottom: 0.5rem;
+  scrollbar-width: thin;
+}
+.table-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.table-tab {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.75rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--panel-solid);
+  font-size: 0.72rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, border-color 0.15s;
+}
+.table-tab:hover {
+  border-color: var(--accent);
+}
+.table-tab.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--ink);
+  font-weight: 500;
+}
+
 .event-list {
   display: grid;
   gap: 0.55rem;

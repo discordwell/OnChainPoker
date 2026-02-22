@@ -461,6 +461,12 @@ export function App() {
     kind: "idle",
     message: null
   });
+  const [playerLeaveSubmit, setPlayerLeaveSubmit] = useState<PlayerTxState>({
+    kind: "idle",
+    message: null
+  });
+
+  const [seatedTableIds, setSeatedTableIds] = useState<string[]>([]);
 
   const [events, setEvents] = useState<ChainEvent[]>([]);
   const [handHistory, setHandHistory] = useState<Map<string, HandResult[]>>(new Map());
@@ -801,6 +807,22 @@ export function App() {
     playerSeat && playerTableForSelected?.hand?.actionOn === playerSeat.seat
   );
 
+  // Sync seatedTableIds from observed player table state
+  useEffect(() => {
+    if (!selectedTableId || !playerTableForSelected || playerWallet.status !== "connected") return;
+    const isSeated = playerTableForSelected.seats.some((s) => s.player === playerWallet.address);
+    setSeatedTableIds((prev) => {
+      if (isSeated && !prev.includes(selectedTableId)) return [...prev, selectedTableId];
+      if (!isSeated && prev.includes(selectedTableId)) return prev.filter((id) => id !== selectedTableId);
+      return prev;
+    });
+  }, [playerTableForSelected, selectedTableId, playerWallet.status, playerWallet.address]);
+
+  // Clear seated tables on wallet disconnect
+  useEffect(() => {
+    if (playerWallet.status !== "connected") setSeatedTableIds([]);
+  }, [playerWallet.status]);
+
   // Track hand completion for history (per-table)
   const lastHandRef = useRef<{ handId: string; pot: string; board: number[] } | null>(null);
 
@@ -1055,6 +1077,7 @@ export function App() {
     setPlayerWallet((prev) => ({ ...prev, status: "connecting", error: null }));
     setPlayerSitSubmit({ kind: "idle", message: null });
     setPlayerActionSubmit({ kind: "idle", message: null });
+    setPlayerLeaveSubmit({ kind: "idle", message: null });
 
     try {
       const keplr = (window as WindowWithKeplr).keplr;
@@ -1225,6 +1248,48 @@ export function App() {
     },
     [loadPlayerTable, playerActionForm.action, playerActionForm.amount, playerTable.data, playerWallet.address, selectedTableId]
   );
+
+  const submitPlayerLeave = useCallback(async () => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
+
+    if (playerWallet.status !== "connected" || !playerWallet.address) {
+      setPlayerLeaveSubmit({ kind: "error", message: "Connect wallet first." });
+      return;
+    }
+
+    const client = playerClientRef.current;
+    if (!client) {
+      setPlayerLeaveSubmit({ kind: "error", message: "Wallet is not connected." });
+      return;
+    }
+
+    const table = playerTable.data;
+    if (!table) {
+      setPlayerLeaveSubmit({ kind: "error", message: "Table state not loaded." });
+      return;
+    }
+
+    const mySeat = table.seats.find((s) => s.player === playerWallet.address);
+    if (!mySeat) {
+      setPlayerLeaveSubmit({ kind: "error", message: "You are not seated at this table." });
+      return;
+    }
+
+    if (table.hand && mySeat.inHand) {
+      setPlayerLeaveSubmit({ kind: "error", message: "Cannot leave during an active hand." });
+      return;
+    }
+
+    setPlayerLeaveSubmit({ kind: "pending", message: "Submitting leave transaction..." });
+    try {
+      await client.pokerLeave({ tableId });
+      setPlayerLeaveSubmit({ kind: "success", message: "Left table successfully." });
+      await loadPlayerTable(tableId, false);
+    } catch (err) {
+      setPlayerLeaveSubmit({ kind: "error", message: errorMessage(err) });
+    }
+  }, [loadPlayerTable, playerTable.data, playerWallet.address, playerWallet.status, selectedTableId]);
 
   const submitPlayerActionDirect = useCallback(
     async (action: string, amount?: string) => {
@@ -1410,6 +1475,26 @@ export function App() {
             </button>
           </div>
 
+          {seatedTableIds.length > 0 && (
+            <div className="table-tabs">
+              {seatedTableIds.map((tid) => {
+                const info = tableList.find((t) => t.tableId === tid);
+                return (
+                  <button
+                    key={tid}
+                    type="button"
+                    className={`table-tab${tid === selectedTableId ? " active" : ""}`}
+                    onClick={() => setSelectedTableId(tid)}
+                  >
+                    <span>#{tid}</span>
+                    {info && <span>{info.params.smallBlind}/{info.params.bigBlind}</span>}
+                    {info && <span className={`badge ${statusTone(info.status)}`}>{info.status}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {!selectedTable && <p className="placeholder">Select a table to join as a player.</p>}
 
           {/* Visual poker table */}
@@ -1501,6 +1586,29 @@ export function App() {
               <p className={playerSitSubmit.kind === "error" ? "error-banner" : "hint"}>
                 {playerSitSubmit.message}
               </p>
+
+              {playerSeat && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <button
+                    type="button"
+                    className="btn-leave"
+                    disabled={
+                      playerLeaveSubmit.kind === "pending" ||
+                      playerWallet.status !== "connected" ||
+                      !selectedTableId ||
+                      Boolean(playerTableForSelected?.hand && playerSeat.inHand)
+                    }
+                    onClick={submitPlayerLeave}
+                  >
+                    {playerLeaveSubmit.kind === "pending" ? "Leaving..." : "Leave Table"}
+                  </button>
+                  {playerLeaveSubmit.message && (
+                    <p className={playerLeaveSubmit.kind === "error" ? "error-banner" : "hint"}>
+                      {playerLeaveSubmit.message}
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

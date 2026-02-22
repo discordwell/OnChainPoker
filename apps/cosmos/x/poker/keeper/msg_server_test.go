@@ -467,3 +467,373 @@ func TestTick_HugeActionTimeoutOverflowDoesNotMutate(t *testing.T) {
 	require.NotNil(t, tbl2.Hand)
 	require.Equal(t, int64(0), tbl2.Hand.ActionDeadline)
 }
+
+// ---------------------------------------------------------------------------
+// Hand‑flow integration tests
+// ---------------------------------------------------------------------------
+
+// setupHeadsUpBetting creates a table with two seated players and constructs
+// a hand state directly in the BETTING phase with Dealer: nil (bypassing the
+// shuffle protocol) so that betting/fold/check/call logic can be exercised.
+// Blinds: SB=1, BB=2. P0 at seat 0 (SB/Button), P1 at seat 1 (BB).
+// ActionOn starts at seat 0 (UTG in heads-up = button/SB, first to act preflop).
+func setupHeadsUpBetting(t *testing.T, now time.Time) (sdk.Context, keeper.Keeper, types.MsgServer, *fakeBankKeeper, sdk.AccAddress, sdk.AccAddress) {
+	t.Helper()
+
+	sdkCtx, k, ms, bk := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xA0)
+	p1 := addr(0xA1)
+
+	tbl := &types.Table{
+		Id:      1,
+		Creator: p0.String(),
+		Label:   "heads-up-test",
+		Params: types.TableParams{
+			MaxPlayers:        9,
+			SmallBlind:        1,
+			BigBlind:          2,
+			MinBuyIn:          100,
+			MaxBuyIn:          1000,
+			ActionTimeoutSecs: 0,
+			DealerTimeoutSecs: 0,
+			PlayerBond:        0,
+			RakeBps:           0,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: 0,
+		Hand: &types.Hand{
+			HandId:         1,
+			Phase:          types.HandPhase_HAND_PHASE_BETTING,
+			Street:         types.Street_STREET_PREFLOP,
+			ButtonSeat:     0,
+			SmallBlindSeat: 0,
+			BigBlindSeat:   1,
+			ActionOn:       0, // SB/Button acts first preflop in heads-up
+			BetTo:          2,
+			MinRaiseSize:   2,
+			IntervalId:     0,
+			Dealer:         nil, // No dealer: pure betting tests
+
+			InHand:            make([]bool, 9),
+			Folded:            make([]bool, 9),
+			AllIn:             make([]bool, 9),
+			StreetCommit:      make([]uint64, 9),
+			TotalCommit:       make([]uint64, 9),
+			LastIntervalActed: make([]int32, 9),
+			Board:             nil,
+			ActionDeadline:    0,
+		},
+	}
+	for i := 0; i < 9; i++ {
+		tbl.Hand.LastIntervalActed[i] = -1
+	}
+
+	tbl.Hand.InHand[0] = true
+	tbl.Hand.InHand[1] = true
+
+	// Post blinds: P0 posts SB=1, P1 posts BB=2
+	tbl.Seats[0] = &types.Seat{Player: p0.String(), Stack: 99, Bond: 0, Hole: []uint32{255, 255}}
+	tbl.Hand.StreetCommit[0] = 1
+	tbl.Hand.TotalCommit[0] = 1
+
+	tbl.Seats[1] = &types.Seat{Player: p1.String(), Stack: 98, Bond: 0, Hole: []uint32{255, 255}}
+	tbl.Hand.StreetCommit[1] = 2
+	tbl.Hand.TotalCommit[1] = 2
+
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	return sdkCtx, k, ms, bk, p0, p1
+}
+
+func TestHeadsUpAllFold(t *testing.T) {
+	sdkCtx, k, ms, _, p0, _ := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P0 (seat 0, actionOn) folds preflop → P1 wins.
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p0.String(),
+		TableId: 1,
+		Action:  "fold",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	require.Nil(t, tbl.Hand, "hand should be cleared after all-fold")
+
+	// P1 (seat 1) should have won the pot (SB=1 + BB=2 = 3).
+	// P1 started with 98 stack, blind 2 already deducted, so final = 98 + 3 = 101.
+	require.Equal(t, uint64(101), tbl.Seats[1].Stack, "P1 should win the pot")
+	// P0 folded, stack unchanged from post-blind state (99).
+	require.Equal(t, uint64(99), tbl.Seats[0].Stack, "P0 stack unchanged after fold")
+}
+
+func TestHeadsUpCallCheck(t *testing.T) {
+	sdkCtx, k, ms, _, p0, p1 := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P0 (seat 0) calls the BB (needs 1 more to match BetTo=2).
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p0.String(),
+		TableId: 1,
+		Action:  "call",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	require.NotNil(t, tbl.Hand, "hand should still be active after call")
+	require.Equal(t, int32(1), tbl.Hand.ActionOn, "action should move to P1 (seat 1)")
+
+	// P1 (seat 1, BB) checks.
+	_, err = ms.Act(ctx, &types.MsgAct{
+		Player:  p1.String(),
+		TableId: 1,
+		Action:  "check",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	// With Dealer: nil, maybeAdvance returns nil at end of street (no street transition).
+	// The hand remains active but street is complete.
+	tbl2, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl2)
+	// Hand stays active (no dealer to deal next street).
+	require.NotNil(t, tbl2.Hand, "hand should remain with no dealer")
+	// Both players should have committed 2 each.
+	require.Equal(t, uint64(2), tbl2.Hand.StreetCommit[0])
+	require.Equal(t, uint64(2), tbl2.Hand.StreetCommit[1])
+}
+
+func TestActRejectsWrongPlayer(t *testing.T) {
+	sdkCtx, _, ms, _, _, p1 := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P1 (seat 1) tries to act, but actionOn is seat 0 (P0).
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p1.String(),
+		TableId: 1,
+		Action:  "check",
+		Amount:  0,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "not your turn")
+}
+
+func TestLeaveRejectsDuringHand(t *testing.T) {
+	sdkCtx, _, ms, _, p0, _ := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P0 is in an active hand (InHand[0] = true). Leave should be rejected.
+	_, err := ms.Leave(ctx, &types.MsgLeave{
+		Player:  p0.String(),
+		TableId: 1,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot leave during active hand")
+}
+
+func TestHeadsUpFoldAfterRaise(t *testing.T) {
+	sdkCtx, k, ms, _, p0, p1 := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P0 (seat 0) raises to 6 (BetTo was 2, raise size = 4 >= minRaise=2).
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p0.String(),
+		TableId: 1,
+		Action:  "raise",
+		Amount:  6,
+	})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl.Hand)
+	require.Equal(t, int32(1), tbl.Hand.ActionOn, "action should move to P1")
+	require.Equal(t, uint64(6), tbl.Hand.BetTo)
+
+	// P1 (seat 1) folds → P0 wins.
+	_, err = ms.Act(ctx, &types.MsgAct{
+		Player:  p1.String(),
+		TableId: 1,
+		Action:  "fold",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	tbl2, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Nil(t, tbl2.Hand, "hand should be cleared")
+
+	// P0 raised to 6 (committed 6), P1 had BB=2 committed. Pot = 6 + 2 = 8.
+	// But uncalled excess is returned: P0 committed 6, P1 committed 2, excess = 4 returned to P0.
+	// So P0 wins pot = 2 + 2 = 4 (after excess return).
+	// P0 started with 99. Posted SB=1, then raised 5 more (to 6 total). Stack before win = 94.
+	// Excess of 4 returned, then pot of 4 awarded: P0 = 94 + 4 + 4 = 102.
+	// Actually let me recalculate: P0 started with stack=99 (after SB=1 posted).
+	// Raise to 6 means 5 more chips from stack (already committed 1). Stack = 99 - 5 = 94.
+	// P1 folds. Uncalled excess: P0 committed 6, second max = P1's 2. Excess = 4 returned.
+	// P0 stack after excess return = 94 + 4 = 98.
+	// Pot after return: P0 commit = 2, P1 commit = 2. Total pot = 4.
+	// P0 wins pot: 98 + 4 = 102.
+	require.Equal(t, uint64(102), tbl2.Seats[0].Stack, "P0 should win pot after P1 folds")
+	require.Equal(t, uint64(98), tbl2.Seats[1].Stack, "P1 stack unchanged after fold")
+}
+
+func TestAllInCall(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	sdkCtx, k, ms, _ := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xB0)
+	p1 := addr(0xB1)
+
+	// P0 has only 1 chip (less than BB=2), will be all-in from SB posting.
+	tbl := &types.Table{
+		Id:      1,
+		Creator: p0.String(),
+		Label:   "allin-test",
+		Params: types.TableParams{
+			MaxPlayers:        9,
+			SmallBlind:        1,
+			BigBlind:          2,
+			MinBuyIn:          1,
+			MaxBuyIn:          1000,
+			ActionTimeoutSecs: 0,
+			DealerTimeoutSecs: 0,
+			PlayerBond:        0,
+			RakeBps:           0,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: 0,
+		Hand: &types.Hand{
+			HandId:         1,
+			Phase:          types.HandPhase_HAND_PHASE_BETTING,
+			Street:         types.Street_STREET_PREFLOP,
+			ButtonSeat:     0,
+			SmallBlindSeat: 0,
+			BigBlindSeat:   1,
+			ActionOn:       1, // P1 (BB) to act since P0 is all-in
+			BetTo:          2,
+			MinRaiseSize:   2,
+			IntervalId:     0,
+			Dealer:         nil,
+
+			InHand:            make([]bool, 9),
+			Folded:            make([]bool, 9),
+			AllIn:             make([]bool, 9),
+			StreetCommit:      make([]uint64, 9),
+			TotalCommit:       make([]uint64, 9),
+			LastIntervalActed: make([]int32, 9),
+			Board:             nil,
+			ActionDeadline:    0,
+		},
+	}
+	for i := 0; i < 9; i++ {
+		tbl.Hand.LastIntervalActed[i] = -1
+	}
+
+	tbl.Hand.InHand[0] = true
+	tbl.Hand.InHand[1] = true
+	tbl.Hand.AllIn[0] = true // P0 is all-in from blind posting
+
+	tbl.Seats[0] = &types.Seat{Player: p0.String(), Stack: 0, Bond: 0, Hole: []uint32{255, 255}}
+	tbl.Hand.StreetCommit[0] = 1
+	tbl.Hand.TotalCommit[0] = 1
+
+	tbl.Seats[1] = &types.Seat{Player: p1.String(), Stack: 98, Bond: 0, Hole: []uint32{255, 255}}
+	tbl.Hand.StreetCommit[1] = 2
+	tbl.Hand.TotalCommit[1] = 2
+
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	// P1 checks (BetTo=2, P1 already committed 2).
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p1.String(),
+		TableId: 1,
+		Action:  "check",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	tbl2, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl2)
+	// With Dealer: nil and no one left to act, street should be complete.
+	// Both are no longer able to act (P0 all-in, P1 checked). Hand remains with no dealer.
+	require.NotNil(t, tbl2.Hand, "hand remains active with no dealer to advance")
+	require.True(t, tbl2.Hand.AllIn[0], "P0 should still be all-in")
+}
+
+func TestStartHandRejectsOnePlayer(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xC0).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	// Create table and sit only one player.
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    p0,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "one-player",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	// StartHand should fail with only 1 player.
+	_, err = ms.StartHand(ctx, &types.MsgStartHand{Caller: p0, TableId: 1})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "need at least 2 players with chips")
+}
+
+func TestSitRejectsOccupiedSeat(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xD0).String()
+	p1 := addr(0xD1).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    p0,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "occupied",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	// P1 tries to sit in the same seat 0.
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p1, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "seat occupied")
+}
