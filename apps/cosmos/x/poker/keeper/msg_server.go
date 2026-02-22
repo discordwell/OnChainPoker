@@ -1,7 +1,9 @@
 package keeper
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"math"
 
@@ -69,6 +71,12 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 		return nil, err
 	}
 
+	var passwordHash []byte
+	if req.Password != "" {
+		h := sha256.Sum256([]byte(req.Password))
+		passwordHash = h[:]
+	}
+
 	t := &types.Table{
 		Id:      id,
 		Creator: req.Creator,
@@ -83,6 +91,7 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 			DealerTimeoutSecs: req.DealerTimeoutSecs,
 			PlayerBond:        req.PlayerBond,
 			RakeBps:           req.RakeBps,
+			PasswordHash:      passwordHash,
 		},
 		Seats:      make([]*types.Seat, 9),
 		NextHandId: 1,
@@ -123,12 +132,28 @@ func (m msgServer) Sit(ctx context.Context, req *types.MsgSit) (*types.MsgSitRes
 		return nil, types.ErrTableNotFound.Wrapf("table %d not found", req.TableId)
 	}
 
-	if req.Seat > 8 {
-		return nil, types.ErrInvalidRequest.Wrap("invalid seat")
+	// Double-seat fix: reject if player is already seated at this table.
+	if seatOfPlayer(t, req.Player) >= 0 {
+		return nil, types.ErrSeatOccupied.Wrap("already seated at this table")
 	}
-	if t.Seats[req.Seat] != nil && t.Seats[req.Seat].Player != "" {
-		return nil, types.ErrSeatOccupied.Wrap("seat occupied")
+
+	// Password check.
+	if len(t.Params.PasswordHash) > 0 {
+		if req.Password == "" {
+			return nil, types.ErrInvalidRequest.Wrap("password required")
+		}
+		h := sha256.Sum256([]byte(req.Password))
+		if !bytes.Equal(h[:], t.Params.PasswordHash) {
+			return nil, types.ErrInvalidRequest.Wrap("wrong password")
+		}
 	}
+
+	// Auto-assign seat.
+	assignedSeat, err := autoAssignSeat(t)
+	if err != nil {
+		return nil, types.ErrSeatOccupied.Wrap(err.Error())
+	}
+
 	if req.BuyIn < t.Params.MinBuyIn || req.BuyIn > t.Params.MaxBuyIn {
 		return nil, types.ErrInvalidRequest.Wrap("buy-in out of range")
 	}
@@ -156,7 +181,7 @@ func (m msgServer) Sit(ctx context.Context, req *types.MsgSit) (*types.MsgSitRes
 		return nil, err
 	}
 
-	t.Seats[req.Seat] = &types.Seat{
+	t.Seats[assignedSeat] = &types.Seat{
 		Player: req.Player,
 		Pk:     append([]byte(nil), req.PkPlayer...),
 		Stack:  req.BuyIn,
@@ -172,13 +197,13 @@ func (m msgServer) Sit(ctx context.Context, req *types.MsgSit) (*types.MsgSitRes
 	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
 		types.EventTypePlayerSat,
 		sdk.NewAttribute("tableId", fmt.Sprintf("%d", req.TableId)),
-		sdk.NewAttribute("seat", fmt.Sprintf("%d", req.Seat)),
+		sdk.NewAttribute("seat", fmt.Sprintf("%d", assignedSeat)),
 		sdk.NewAttribute("player", req.Player),
 		sdk.NewAttribute("buyIn", fmt.Sprintf("%d", req.BuyIn)),
 		sdk.NewAttribute("bond", fmt.Sprintf("%d", bond)),
 	))
 
-	return &types.MsgSitResponse{}, nil
+	return &types.MsgSitResponse{Seat: uint32(assignedSeat)}, nil
 }
 
 func (m msgServer) StartHand(ctx context.Context, req *types.MsgStartHand) (*types.MsgStartHandResponse, error) {

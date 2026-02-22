@@ -3,6 +3,7 @@ package keeper_test
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"math"
 	"testing"
 	"time"
@@ -183,7 +184,6 @@ func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 	_, err = ms.Sit(ctx, &types.MsgSit{
 		Player:   player,
 		TableId:  1,
-		Seat:     0,
 		BuyIn:    100,
 		PkPlayer: pkBytes,
 	})
@@ -387,9 +387,9 @@ func TestStartHand_NextHandIDOverflow(t *testing.T) {
 		Label:             "hand-overflow",
 	})
 	require.NoError(t, err)
-	_, err = ms.Sit(ctx, &types.MsgSit{Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes})
+	_, err = ms.Sit(ctx, &types.MsgSit{Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
 	require.NoError(t, err)
-	_, err = ms.Sit(ctx, &types.MsgSit{Player: p1, TableId: 1, Seat: 1, BuyIn: 100, PkPlayer: pkBytes})
+	_, err = ms.Sit(ctx, &types.MsgSit{Player: p1, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
 	require.NoError(t, err)
 
 	tbl, err := k.GetTable(ctx, 1)
@@ -795,7 +795,7 @@ func TestStartHandRejectsOnePlayer(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ms.Sit(ctx, &types.MsgSit{
-		Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
 	})
 	require.NoError(t, err)
 
@@ -805,12 +805,12 @@ func TestStartHandRejectsOnePlayer(t *testing.T) {
 	require.ErrorContains(t, err, "need at least 2 players with chips")
 }
 
-func TestSitRejectsOccupiedSeat(t *testing.T) {
+func TestSitAutoAssignDifferentPlayers(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
 	sdk.DefaultBondDenom = "uocp"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
-	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
 	ctx := sdk.WrapSDKContext(sdkCtx)
 
 	p0 := addr(0xD0).String()
@@ -821,19 +821,295 @@ func TestSitRejectsOccupiedSeat(t *testing.T) {
 		Creator:    p0,
 		SmallBlind: 1, BigBlind: 2,
 		MinBuyIn: 100, MaxBuyIn: 1000,
-		MaxPlayers: 9, Label: "occupied",
+		MaxPlayers: 9, Label: "auto-assign",
+	})
+	require.NoError(t, err)
+
+	resp0, err := ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), resp0.Seat, "first player gets seat 0")
+
+	// P1 sits — should auto-assign a different seat.
+	resp1, err := ms.Sit(ctx, &types.MsgSit{
+		Player: p1, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), resp1.Seat, "second player gets seat 1")
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, p0, tbl.Seats[0].Player)
+	require.Equal(t, p1, tbl.Seats[1].Player)
+}
+
+// ---------------------------------------------------------------------------
+// Password, double-seat, auto-assign tests
+// ---------------------------------------------------------------------------
+
+func TestSitRejectsSamePlayerTwice(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xE0).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    p0,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "double-seat",
 	})
 	require.NoError(t, err)
 
 	_, err = ms.Sit(ctx, &types.MsgSit{
-		Player: p0, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
 	})
 	require.NoError(t, err)
 
-	// P1 tries to sit in the same seat 0.
+	// Same player tries to sit again.
 	_, err = ms.Sit(ctx, &types.MsgSit{
-		Player: p1, TableId: 1, Seat: 0, BuyIn: 100, PkPlayer: pkBytes,
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
 	})
 	require.Error(t, err)
-	require.ErrorContains(t, err, "seat occupied")
+	require.ErrorContains(t, err, "already seated")
+}
+
+func TestSitPasswordRequired(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xE1).String()
+	p0 := addr(0xE2).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	// Create password-protected table.
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "pw-table",
+		Password: "secret",
+	})
+	require.NoError(t, err)
+
+	// Sit without password → rejected.
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "password required")
+
+	// Sit with wrong password → rejected.
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+		Password: "wrong",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "wrong password")
+
+	// Sit with correct password → success.
+	resp, err := ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+		Password: "secret",
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), resp.Seat)
+}
+
+func TestSitAutoAssignSeat(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+	p0 := addr(0xE3).String()
+	p1 := addr(0xE4).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    p0,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "auto-seat",
+	})
+	require.NoError(t, err)
+
+	resp0, err := ms.Sit(ctx, &types.MsgSit{Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), resp0.Seat, "first player on fresh table gets seat 0")
+
+	resp1, err := ms.Sit(ctx, &types.MsgSit{Player: p1, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+	require.Equal(t, uint32(1), resp1.Seat, "second player gets seat 1")
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, p0, tbl.Seats[0].Player)
+	require.Equal(t, p1, tbl.Seats[1].Player)
+}
+
+func TestAutoAssignSeatFullTable(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+	creator := addr(0xF0).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "full-table",
+	})
+	require.NoError(t, err)
+
+	// Fill all 9 seats.
+	for i := 0; i < 9; i++ {
+		p := addr(byte(0xF0 + i + 1)).String()
+		_, err := ms.Sit(ctx, &types.MsgSit{Player: p, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+		require.NoError(t, err, "player %d should sit", i)
+	}
+
+	// 10th player → table full.
+	p10 := addr(0xFA).String()
+	_, err = ms.Sit(ctx, &types.MsgSit{Player: p10, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "table full")
+}
+
+func TestAutoAssignSeatEmptyTable(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+	p0 := addr(0xE5).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    p0,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "empty",
+	})
+	require.NoError(t, err)
+
+	// Verify ButtonSeat is -1 (fresh table).
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, int32(-1), tbl.ButtonSeat)
+
+	// First player gets seat 0.
+	resp, err := ms.Sit(ctx, &types.MsgSit{Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), resp.Seat)
+}
+
+func TestAutoAssignSeatPlacement(t *testing.T) {
+	// Test that new player is placed after the BB position.
+	// Setup: 3 players at seats 0, 3, 7. Button at seat 0.
+	// BB should be at seat 7 (SB at seat 3 in 3-player, BB = next after SB).
+	// New player should get first empty seat after seat 7 → seat 1.
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+	p0 := addr(0xE6).String()
+	p3 := addr(0xE7).String()
+	p7 := addr(0xE8).String()
+	pNew := addr(0xE9).String()
+
+	// Create table and manually set up seats.
+	tbl := &types.Table{
+		Id:      1,
+		Creator: p0,
+		Label:   "placement-test",
+		Params: types.TableParams{
+			MaxPlayers: 9,
+			SmallBlind: 1, BigBlind: 2,
+			MinBuyIn: 100, MaxBuyIn: 1000,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: 0,
+		Hand:       nil,
+	}
+	tbl.Seats[0] = &types.Seat{Player: p0, Stack: 100, Hole: []uint32{255, 255}}
+	tbl.Seats[3] = &types.Seat{Player: p3, Stack: 100, Hole: []uint32{255, 255}}
+	tbl.Seats[7] = &types.Seat{Player: p7, Stack: 100, Hole: []uint32{255, 255}}
+	require.NoError(t, k.SetNextTableID(ctx, 2))
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	// Sit new player — should be placed after BB (seat 7) → seat 1 (first empty after 7).
+	resp, err := ms.Sit(ctx, &types.MsgSit{Player: pNew, TableId: 1, BuyIn: 100, PkPlayer: pkBytes})
+	require.NoError(t, err)
+	// BB is at seat 7 (SB=3, BB=7 for 3-player with button=0).
+	// Clockwise from 7: seats 8, 0, 1, 2, ... — seat 8 is empty → gets seat 8.
+	// Wait: let me re-check. With button=0, active seats with stack = [0, 3, 7].
+	// SB = nextOccupiedSeat(0) = 3, BB = nextOccupiedSeat(3) = 7. BB = 7.
+	// Walk from 7+1=8: seat 8 is nil → empty → assign seat 8.
+	require.Equal(t, uint32(8), resp.Seat, "new player placed after BB at seat 7 → first empty is seat 8")
+}
+
+func TestCreateTableWithPassword(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xEA).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "pw",
+		Password: "testpass",
+	})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotEmpty(t, tbl.Params.PasswordHash, "password hash should be set")
+	require.Len(t, tbl.Params.PasswordHash, 32, "SHA-256 produces 32 bytes")
+
+	// Verify hash matches SHA-256 of "testpass".
+	expected := sha256.Sum256([]byte("testpass"))
+	require.Equal(t, expected[:], tbl.Params.PasswordHash)
+}
+
+func TestCreateTableNoPassword(t *testing.T) {
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xEB).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "no-pw",
+	})
+	require.NoError(t, err)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Empty(t, tbl.Params.PasswordHash, "password hash should be empty")
 }

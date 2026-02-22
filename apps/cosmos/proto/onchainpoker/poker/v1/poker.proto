@@ -24,6 +24,7 @@ message TableParams {
   uint64 dealer_timeout_secs = 7;
   uint64 player_bond = 8;
   uint32 rake_bps = 9;
+  bytes password_hash = 10; // SHA-256 hash; empty = no password required
 }
 
 message Seat {

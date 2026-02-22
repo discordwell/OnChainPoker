@@ -39,6 +39,7 @@ message MsgCreateTable {
 
   uint32 max_players = 10; // default 9
   string label = 11;
+  string password = 12; // plaintext; keeper hashes before storage
 }
 
 message MsgCreateTableResponse {
@@ -51,13 +52,16 @@ message MsgSit {
 
   string player = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
   uint64 table_id = 2;
-  uint32 seat = 3; // 0..8
+  reserved 3; // was seat, now auto-assigned
   uint64 buy_in = 4;
 
   bytes pk_player = 5; // 32-byte ristretto point (required for dealer mode)
+  string password = 6; // plaintext; validated against table password_hash
 }
 
-message MsgSitResponse {}
+message MsgSitResponse {
+  uint32 seat = 1; // server-assigned seat
+}
 
 message MsgStartHand {
   option (cosmos.msg.v1.signer) = "caller";

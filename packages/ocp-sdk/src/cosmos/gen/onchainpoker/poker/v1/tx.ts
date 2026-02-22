@@ -22,6 +22,8 @@ export interface MsgCreateTable {
   /** default 9 */
   maxPlayers: number;
   label: string;
+  /** plaintext; keeper hashes before storage */
+  password: string;
 }
 
 export interface MsgCreateTableResponse {
@@ -31,14 +33,17 @@ export interface MsgCreateTableResponse {
 export interface MsgSit {
   player: string;
   tableId: string;
-  /** 0..8 */
-  seat: number;
+  /** field 3 removed (was seat, now auto-assigned) */
   buyIn: string;
   /** 32-byte ristretto point (required for dealer mode) */
   pkPlayer: Uint8Array;
+  /** plaintext; validated against table password_hash */
+  password: string;
 }
 
 export interface MsgSitResponse {
+  /** server-assigned seat */
+  seat: number;
 }
 
 export interface MsgStartHand {
@@ -90,6 +95,7 @@ function createBaseMsgCreateTable(): MsgCreateTable {
     rakeBps: 0,
     maxPlayers: 0,
     label: "",
+    password: "",
   };
 }
 
@@ -127,6 +133,9 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     }
     if (message.label !== "") {
       writer.uint32(90).string(message.label);
+    }
+    if (message.password !== "") {
+      writer.uint32(98).string(message.password);
     }
     return writer;
   },
@@ -226,6 +235,14 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
           message.label = reader.string();
           continue;
         }
+        case 12: {
+          if (tag !== 98) {
+            break;
+          }
+
+          message.password = reader.string();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -284,6 +301,7 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
         ? globalThis.Number(object.max_players)
         : 0,
       label: isSet(object.label) ? globalThis.String(object.label) : "",
+      password: isSet(object.password) ? globalThis.String(object.password) : "",
     };
   },
 
@@ -322,6 +340,9 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     if (message.label !== "") {
       obj.label = message.label;
     }
+    if (message.password !== "") {
+      obj.password = message.password;
+    }
     return obj;
   },
 
@@ -341,6 +362,7 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     message.rakeBps = object.rakeBps ?? 0;
     message.maxPlayers = object.maxPlayers ?? 0;
     message.label = object.label ?? "";
+    message.password = object.password ?? "";
     return message;
   },
 };
@@ -410,7 +432,7 @@ export const MsgCreateTableResponse: MessageFns<MsgCreateTableResponse> = {
 };
 
 function createBaseMsgSit(): MsgSit {
-  return { player: "", tableId: "0", seat: 0, buyIn: "0", pkPlayer: new Uint8Array(0) };
+  return { player: "", tableId: "0", buyIn: "0", pkPlayer: new Uint8Array(0), password: "" };
 }
 
 export const MsgSit: MessageFns<MsgSit> = {
@@ -421,14 +443,14 @@ export const MsgSit: MessageFns<MsgSit> = {
     if (message.tableId !== "0") {
       writer.uint32(16).uint64(message.tableId);
     }
-    if (message.seat !== 0) {
-      writer.uint32(24).uint32(message.seat);
-    }
     if (message.buyIn !== "0") {
       writer.uint32(32).uint64(message.buyIn);
     }
     if (message.pkPlayer.length !== 0) {
       writer.uint32(42).bytes(message.pkPlayer);
+    }
+    if (message.password !== "") {
+      writer.uint32(50).string(message.password);
     }
     return writer;
   },
@@ -456,14 +478,6 @@ export const MsgSit: MessageFns<MsgSit> = {
           message.tableId = reader.uint64().toString();
           continue;
         }
-        case 3: {
-          if (tag !== 24) {
-            break;
-          }
-
-          message.seat = reader.uint32();
-          continue;
-        }
         case 4: {
           if (tag !== 32) {
             break;
@@ -478,6 +492,14 @@ export const MsgSit: MessageFns<MsgSit> = {
           }
 
           message.pkPlayer = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.password = reader.string();
           continue;
         }
       }
@@ -497,7 +519,6 @@ export const MsgSit: MessageFns<MsgSit> = {
         : isSet(object.table_id)
         ? globalThis.String(object.table_id)
         : "0",
-      seat: isSet(object.seat) ? globalThis.Number(object.seat) : 0,
       buyIn: isSet(object.buyIn)
         ? globalThis.String(object.buyIn)
         : isSet(object.buy_in)
@@ -508,6 +529,7 @@ export const MsgSit: MessageFns<MsgSit> = {
         : isSet(object.pk_player)
         ? bytesFromBase64(object.pk_player)
         : new Uint8Array(0),
+      password: isSet(object.password) ? globalThis.String(object.password) : "",
     };
   },
 
@@ -519,14 +541,14 @@ export const MsgSit: MessageFns<MsgSit> = {
     if (message.tableId !== "0") {
       obj.tableId = message.tableId;
     }
-    if (message.seat !== 0) {
-      obj.seat = Math.round(message.seat);
-    }
     if (message.buyIn !== "0") {
       obj.buyIn = message.buyIn;
     }
     if (message.pkPlayer.length !== 0) {
       obj.pkPlayer = base64FromBytes(message.pkPlayer);
+    }
+    if (message.password !== "") {
+      obj.password = message.password;
     }
     return obj;
   },
@@ -538,19 +560,22 @@ export const MsgSit: MessageFns<MsgSit> = {
     const message = createBaseMsgSit();
     message.player = object.player ?? "";
     message.tableId = object.tableId ?? "0";
-    message.seat = object.seat ?? 0;
     message.buyIn = object.buyIn ?? "0";
     message.pkPlayer = object.pkPlayer ?? new Uint8Array(0);
+    message.password = object.password ?? "";
     return message;
   },
 };
 
 function createBaseMsgSitResponse(): MsgSitResponse {
-  return {};
+  return { seat: 0 };
 }
 
 export const MsgSitResponse: MessageFns<MsgSitResponse> = {
-  encode(_: MsgSitResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+  encode(message: MsgSitResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.seat !== 0) {
+      writer.uint32(8).uint32(message.seat);
+    }
     return writer;
   },
 
@@ -561,6 +586,14 @@ export const MsgSitResponse: MessageFns<MsgSitResponse> = {
     while (reader.pos < end) {
       const tag = reader.uint32();
       switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.seat = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -570,20 +603,24 @@ export const MsgSitResponse: MessageFns<MsgSitResponse> = {
     return message;
   },
 
-  fromJSON(_: any): MsgSitResponse {
-    return {};
+  fromJSON(object: any): MsgSitResponse {
+    return { seat: isSet(object.seat) ? globalThis.Number(object.seat) : 0 };
   },
 
-  toJSON(_: MsgSitResponse): unknown {
+  toJSON(message: MsgSitResponse): unknown {
     const obj: any = {};
+    if (message.seat !== 0) {
+      obj.seat = Math.round(message.seat);
+    }
     return obj;
   },
 
   create<I extends Exact<DeepPartial<MsgSitResponse>, I>>(base?: I): MsgSitResponse {
     return MsgSitResponse.fromPartial(base ?? ({} as any));
   },
-  fromPartial<I extends Exact<DeepPartial<MsgSitResponse>, I>>(_: I): MsgSitResponse {
+  fromPartial<I extends Exact<DeepPartial<MsgSitResponse>, I>>(object: I): MsgSitResponse {
     const message = createBaseMsgSitResponse();
+    message.seat = object.seat ?? 0;
     return message;
   },
 };

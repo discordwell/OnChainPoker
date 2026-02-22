@@ -149,9 +149,10 @@ export type OcpCosmosClient = {
     rakeBps?: number;
     maxPlayers?: number;
     label?: string;
+    password?: string;
     memo?: string;
   }) => Promise<DeliverTxResponse>;
-  pokerSit: (args: { player?: string; tableId: UintLike; seat: number; buyIn: UintLike; pkPlayer: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
+  pokerSit: (args: { player?: string; tableId: UintLike; buyIn: UintLike; pkPlayer: Uint8Array; password?: string; memo?: string }) => Promise<DeliverTxResponse>;
   pokerStartHand: (args: { caller?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerAct: (args: { player?: string; tableId: UintLike; action: string; amount?: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerTick: (args: { caller?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
@@ -254,6 +255,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     rakeBps?: number;
     maxPlayers?: number;
     label?: string;
+    password?: string;
     memo?: string;
   }): Promise<DeliverTxResponse> {
     const msg: MsgCreateTable = {
@@ -267,7 +269,8 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       playerBond: u64(a.playerBond, "0", "playerBond"),
       rakeBps: a.rakeBps ?? 0,
       maxPlayers: a.maxPlayers ?? 0, // 0 => module default (9)
-      label: a.label ?? ""
+      label: a.label ?? "",
+      password: a.password ?? ""
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.createTable, value: msg };
     return signAndBroadcast([eo], a.memo);
@@ -276,17 +279,17 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
   async function pokerSit(a: {
     player?: string;
     tableId: UintLike;
-    seat: number;
     buyIn: UintLike;
     pkPlayer: Uint8Array;
+    password?: string;
     memo?: string;
   }): Promise<DeliverTxResponse> {
     const msg: MsgSit = {
       player: (a.player ?? signing.address).trim(),
       tableId: toU64String(a.tableId, "tableId"),
-      seat: a.seat,
       buyIn: toU64String(a.buyIn, "buyIn"),
-      pkPlayer: a.pkPlayer
+      pkPlayer: a.pkPlayer,
+      password: a.password ?? ""
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.sit, value: msg };
     return signAndBroadcast([eo], a.memo);

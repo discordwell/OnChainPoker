@@ -19,6 +19,7 @@ type TableInfo = {
     bigBlind: string;
     minBuyIn: string;
     maxBuyIn: string;
+    passwordHash?: string;
   };
   status: "open" | "in_hand" | "closed";
   updatedAtMs: number;
@@ -108,8 +109,8 @@ type PlayerTableState = {
 };
 
 type PlayerSeatForm = {
-  seat: string;
   buyIn: string;
+  password: string;
 };
 
 type PlayerActionForm = {
@@ -388,8 +389,8 @@ function defaultSeatForm(): SeatFormState {
 
 function defaultPlayerSeatForm(): PlayerSeatForm {
   return {
-    seat: "0",
-    buyIn: ""
+    buyIn: "",
+    password: ""
   };
 }
 
@@ -1144,12 +1145,6 @@ export function App() {
         return;
       }
 
-      const seat = Number.parseInt(playerSeatForm.seat, 10);
-      if (!Number.isInteger(seat) || seat < 0 || seat > 8) {
-        setPlayerSitSubmit({ kind: "error", message: "Seat must be an integer from 0 to 8." });
-        return;
-      }
-
       const buyIn = playerSeatForm.buyIn.trim();
       if (!/^\d+$/.test(buyIn)) {
         setPlayerSitSubmit({
@@ -1172,14 +1167,15 @@ export function App() {
       setPlayerSitSubmit({ kind: "pending", message: "Submitting sit transaction..." });
 
       try {
+        const sitPassword = playerSeatForm.password.trim() || undefined;
         await client.pokerSit({
           tableId,
-          seat,
           buyIn,
-          pkPlayer
+          pkPlayer,
+          password: sitPassword
         });
-        setPlayerSitSubmit({ kind: "success", message: `Sat down at seat ${seat}.` });
-        setPlayerSeatForm((prev) => ({ ...defaultPlayerSeatForm(), seat: prev.seat }));
+        setPlayerSitSubmit({ kind: "success", message: "Seated successfully." });
+        setPlayerSeatForm(defaultPlayerSeatForm());
         await loadPlayerTable(tableId, false);
       } catch (err) {
         setPlayerSitSubmit({ kind: "error", message: errorMessage(err) });
@@ -1550,17 +1546,6 @@ export function App() {
               <h4>Seat</h4>
               <form className="seat-form" onSubmit={submitPlayerSeat}>
                 <label>
-                  Seat (0-8)
-                  <input
-                    required
-                    value={playerSeatForm.seat}
-                    onChange={(event) => onPlayerSeatInputChange("seat", event.target.value)}
-                    inputMode="numeric"
-                    disabled={playerSitSubmit.kind === "pending"}
-                  />
-                </label>
-
-                <label>
                   Buy-In
                   <input
                     required
@@ -1570,6 +1555,19 @@ export function App() {
                     disabled={playerSitSubmit.kind === "pending"}
                   />
                 </label>
+
+                {selectedTable?.params?.passwordHash && (
+                  <label>
+                    Password
+                    <input
+                      type="password"
+                      value={playerSeatForm.password}
+                      onChange={(event) => onPlayerSeatInputChange("password", event.target.value)}
+                      placeholder="Table password"
+                      disabled={playerSitSubmit.kind === "pending"}
+                    />
+                  </label>
+                )}
 
                 <button
                   type="submit"
@@ -1752,9 +1750,11 @@ export function App() {
                     <strong>{table.tableId}</strong>
                     <p>
                       blinds {table.params.smallBlind}/{table.params.bigBlind}
+                      {table.params.passwordHash ? " \u{1F512}" : ""}
                     </p>
                   </div>
                   <div className="table-meta">
+                    {table.params.passwordHash && <span className="badge status-muted">Password</span>}
                     <span className={`badge ${statusTone(table.status)}`}>{table.status}</span>
                     <small>{formatTimestamp(table.updatedAtMs)}</small>
                   </div>

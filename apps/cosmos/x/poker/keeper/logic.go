@@ -17,6 +17,49 @@ const (
 	defaultActionTimeoutSecs uint64 = 30
 )
 
+// autoAssignSeat picks the first empty seat clockwise after the current big blind.
+// On a fresh table (ButtonSeat == -1, no hand), it returns the first empty seat.
+// The placement ensures the new player will be next up for the big blind.
+func autoAssignSeat(t *types.Table) (int, error) {
+	max := int(t.Params.MaxPlayers)
+	if max == 0 {
+		max = 9
+	}
+
+	// Fresh table: assign first empty seat.
+	if t.ButtonSeat < 0 && t.Hand == nil {
+		for i := 0; i < max; i++ {
+			if t.Seats[i] == nil || t.Seats[i].Player == "" {
+				return i, nil
+			}
+		}
+		return -1, fmt.Errorf("table full")
+	}
+
+	// Determine BB position to walk clockwise from.
+	var bbSeat int
+	if t.Hand != nil {
+		bbSeat = int(t.Hand.BigBlindSeat)
+	} else {
+		// No hand active but button is set — compute would-be BB.
+		_, bb := blindSeats(t)
+		if bb >= 0 {
+			bbSeat = bb
+		} else {
+			bbSeat = int(t.ButtonSeat)
+		}
+	}
+
+	// Walk clockwise from BB+1 looking for an empty seat.
+	for step := 1; step <= max; step++ {
+		i := (bbSeat + step) % max
+		if t.Seats[i] == nil || t.Seats[i].Player == "" {
+			return i, nil
+		}
+	}
+	return -1, fmt.Errorf("table full")
+}
+
 func occupiedSeatsWithStack(t *types.Table) []int {
 	out := make([]int, 0, 9)
 	for i := 0; i < 9; i++ {

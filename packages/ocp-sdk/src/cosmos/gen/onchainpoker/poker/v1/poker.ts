@@ -146,6 +146,8 @@ export interface TableParams {
   dealerTimeoutSecs: string;
   playerBond: string;
   rakeBps: number;
+  /** SHA-256 hash; empty = no password required */
+  passwordHash: Uint8Array;
 }
 
 export interface Seat {
@@ -311,6 +313,7 @@ function createBaseTableParams(): TableParams {
     dealerTimeoutSecs: "0",
     playerBond: "0",
     rakeBps: 0,
+    passwordHash: new Uint8Array(0),
   };
 }
 
@@ -342,6 +345,9 @@ export const TableParams: MessageFns<TableParams> = {
     }
     if (message.rakeBps !== 0) {
       writer.uint32(72).uint32(message.rakeBps);
+    }
+    if (message.passwordHash.length !== 0) {
+      writer.uint32(82).bytes(message.passwordHash);
     }
     return writer;
   },
@@ -425,6 +431,14 @@ export const TableParams: MessageFns<TableParams> = {
           message.rakeBps = reader.uint32();
           continue;
         }
+        case 10: {
+          if (tag !== 82) {
+            break;
+          }
+
+          message.passwordHash = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -481,6 +495,11 @@ export const TableParams: MessageFns<TableParams> = {
         : isSet(object.rake_bps)
         ? globalThis.Number(object.rake_bps)
         : 0,
+      passwordHash: isSet(object.passwordHash)
+        ? bytesFromBase64(object.passwordHash)
+        : isSet(object.password_hash)
+        ? bytesFromBase64(object.password_hash)
+        : new Uint8Array(0),
     };
   },
 
@@ -513,6 +532,9 @@ export const TableParams: MessageFns<TableParams> = {
     if (message.rakeBps !== 0) {
       obj.rakeBps = Math.round(message.rakeBps);
     }
+    if (message.passwordHash.length !== 0) {
+      obj.passwordHash = base64FromBytes(message.passwordHash);
+    }
     return obj;
   },
 
@@ -530,6 +552,7 @@ export const TableParams: MessageFns<TableParams> = {
     message.dealerTimeoutSecs = object.dealerTimeoutSecs ?? "0";
     message.playerBond = object.playerBond ?? "0";
     message.rakeBps = object.rakeBps ?? 0;
+    message.passwordHash = object.passwordHash ?? new Uint8Array(0);
     return message;
   },
 };

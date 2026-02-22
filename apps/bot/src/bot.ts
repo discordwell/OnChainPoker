@@ -177,32 +177,27 @@ export class PokerBot {
       }
     }
 
-    // Pick seat
-    let seat = this.config.seat;
-    if (seat === null) {
-      for (let i = 0; i < seats.length; i++) {
-        if (!seats[i]?.player) {
-          seat = i;
-          break;
-        }
-      }
-    }
-    if (seat === null) throw new Error("No empty seat available");
-
     const params = table.params ?? {};
     const buyIn = this.config.buyIn ?? g(params, "minBuyIn", "min_buy_in") ?? "1000000";
 
-    log(`Sitting at seat ${seat} with buy-in ${buyIn}`);
+    log(`Sitting with buy-in ${buyIn} (seat auto-assigned)`);
 
     await this.client.pokerSit({
       tableId: this.config.tableId,
-      seat,
       buyIn,
       pkPlayer: this.pkBytes,
     });
 
-    this.mySeat = seat;
-    log(`Seated successfully at seat ${seat}`);
+    // Re-fetch to find our assigned seat.
+    const updated = await this.client.getTable(this.config.tableId);
+    const updatedSeats: any[] = updated?.seats ?? [];
+    for (let i = 0; i < updatedSeats.length; i++) {
+      if (updatedSeats[i]?.player === this.myAddress) {
+        this.mySeat = i;
+        break;
+      }
+    }
+    log(`Seated successfully at seat ${this.mySeat}`);
   }
 
   // ---------- Poll loop ----------

@@ -37,9 +37,9 @@ export type PokerCreateTableTx = {
 export type PokerSitTx = {
   player: string;
   tableId: number;
-  seat: number;
   buyIn: number;
   pkPlayer?: string;
+  password?: string;
 };
 
 export type PokerStartHandTx = {
