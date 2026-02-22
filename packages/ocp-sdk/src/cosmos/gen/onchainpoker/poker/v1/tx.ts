@@ -33,7 +33,6 @@ export interface MsgCreateTableResponse {
 export interface MsgSit {
   player: string;
   tableId: string;
-  /** field 3 removed (was seat, now auto-assigned) */
   buyIn: string;
   /** 32-byte ristretto point (required for dealer mode) */
   pkPlayer: Uint8Array;
@@ -80,6 +79,16 @@ export interface MsgLeave {
 }
 
 export interface MsgLeaveResponse {
+}
+
+export interface MsgRebuy {
+  player: string;
+  tableId: string;
+  amount: string;
+}
+
+export interface MsgRebuyResponse {
+  newStack: string;
 }
 
 function createBaseMsgCreateTable(): MsgCreateTable {
@@ -1145,6 +1154,166 @@ export const MsgLeaveResponse: MessageFns<MsgLeaveResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgLeaveResponse>, I>>(_: I): MsgLeaveResponse {
     const message = createBaseMsgLeaveResponse();
+    return message;
+  },
+};
+
+function createBaseMsgRebuy(): MsgRebuy {
+  return { player: "", tableId: "0", amount: "0" };
+}
+
+export const MsgRebuy: MessageFns<MsgRebuy> = {
+  encode(message: MsgRebuy, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.player !== "") {
+      writer.uint32(10).string(message.player);
+    }
+    if (message.tableId !== "0") {
+      writer.uint32(16).uint64(message.tableId);
+    }
+    if (message.amount !== "0") {
+      writer.uint32(24).uint64(message.amount);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgRebuy {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgRebuy();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.player = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.tableId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.amount = reader.uint64().toString();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgRebuy {
+    return {
+      player: isSet(object.player) ? globalThis.String(object.player) : "",
+      tableId: isSet(object.tableId)
+        ? globalThis.String(object.tableId)
+        : isSet(object.table_id)
+        ? globalThis.String(object.table_id)
+        : "0",
+      amount: isSet(object.amount) ? globalThis.String(object.amount) : "0",
+    };
+  },
+
+  toJSON(message: MsgRebuy): unknown {
+    const obj: any = {};
+    if (message.player !== "") {
+      obj.player = message.player;
+    }
+    if (message.tableId !== "0") {
+      obj.tableId = message.tableId;
+    }
+    if (message.amount !== "0") {
+      obj.amount = message.amount;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgRebuy>, I>>(base?: I): MsgRebuy {
+    return MsgRebuy.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgRebuy>, I>>(object: I): MsgRebuy {
+    const message = createBaseMsgRebuy();
+    message.player = object.player ?? "";
+    message.tableId = object.tableId ?? "0";
+    message.amount = object.amount ?? "0";
+    return message;
+  },
+};
+
+function createBaseMsgRebuyResponse(): MsgRebuyResponse {
+  return { newStack: "0" };
+}
+
+export const MsgRebuyResponse: MessageFns<MsgRebuyResponse> = {
+  encode(message: MsgRebuyResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.newStack !== "0") {
+      writer.uint32(8).uint64(message.newStack);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgRebuyResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgRebuyResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.newStack = reader.uint64().toString();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgRebuyResponse {
+    return {
+      newStack: isSet(object.newStack)
+        ? globalThis.String(object.newStack)
+        : isSet(object.new_stack)
+        ? globalThis.String(object.new_stack)
+        : "0",
+    };
+  },
+
+  toJSON(message: MsgRebuyResponse): unknown {
+    const obj: any = {};
+    if (message.newStack !== "0") {
+      obj.newStack = message.newStack;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgRebuyResponse>, I>>(base?: I): MsgRebuyResponse {
+    return MsgRebuyResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgRebuyResponse>, I>>(object: I): MsgRebuyResponse {
+    const message = createBaseMsgRebuyResponse();
+    message.newStack = object.newStack ?? "0";
     return message;
   },
 };

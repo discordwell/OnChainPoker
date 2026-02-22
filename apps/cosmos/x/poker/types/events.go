@@ -17,5 +17,6 @@ const (
 	EventTypeHandCompleted    = "HandCompleted"
 	EventTypeHandAborted      = "HandAborted"
 	EventTypeHoleCardRevealed = "HoleCardRevealed"
+	EventTypePlayerRebuyed    = "PlayerRebuyed"
 )
 

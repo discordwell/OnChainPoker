@@ -5,6 +5,7 @@ import {
   MsgAct,
   MsgCreateTable,
   MsgLeave,
+  MsgRebuy,
   MsgSit,
   MsgStartHand,
   MsgTick
@@ -33,7 +34,8 @@ export const OCP_TYPE_URLS = {
     startHand: "/onchainpoker.poker.v1.MsgStartHand",
     act: "/onchainpoker.poker.v1.MsgAct",
     tick: "/onchainpoker.poker.v1.MsgTick",
-    leave: "/onchainpoker.poker.v1.MsgLeave"
+    leave: "/onchainpoker.poker.v1.MsgLeave",
+    rebuy: "/onchainpoker.poker.v1.MsgRebuy"
   },
   dealer: {
     beginEpoch: "/onchainpoker.dealer.v1.MsgBeginEpoch",
@@ -67,6 +69,7 @@ export function createOcpRegistry(): Registry {
   registry.register(OCP_TYPE_URLS.poker.act, MsgAct);
   registry.register(OCP_TYPE_URLS.poker.tick, MsgTick);
   registry.register(OCP_TYPE_URLS.poker.leave, MsgLeave);
+  registry.register(OCP_TYPE_URLS.poker.rebuy, MsgRebuy);
 
   registry.register(OCP_TYPE_URLS.dealer.beginEpoch, MsgBeginEpoch);
   registry.register(OCP_TYPE_URLS.dealer.dkgCommit, MsgDkgCommit);

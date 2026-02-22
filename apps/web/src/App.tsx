@@ -4,12 +4,14 @@ import {
   connectOcpCosmosSigningClient,
   createOcpCosmosClient,
   createOcpRegistry,
+  findEventAttr,
   type OcpCosmosClient
 } from "@onchainpoker/ocp-sdk/cosmos";
 import { groupElementToBytes, mulBase, scalarFromBytesModOrder } from "@onchainpoker/ocp-crypto";
 import { PokerTable, type HandResult } from "./components/PokerTable";
 import { deriveTableProps } from "./components/useTableState";
 import { useHoleCards } from "./components/useHoleCards";
+import { encryptEntropy, decryptEntropy, isEncryptedBundle, parseBundle } from "./keyEncryption";
 
 type TableInfo = {
   tableId: string;
@@ -118,6 +120,20 @@ type PlayerActionForm = {
   amount: string;
 };
 
+type CreateTableForm = {
+  label: string;
+  smallBlind: string;
+  bigBlind: string;
+  minBuyIn: string;
+  maxBuyIn: string;
+  maxPlayers: string;
+  password: string;
+  actionTimeoutSecs: string;
+  dealerTimeoutSecs: string;
+  playerBond: string;
+  rakeBps: string;
+};
+
 type WsStatus = "connecting" | "open" | "closed" | "error";
 
 type KeplrLike = {
@@ -164,20 +180,53 @@ const DEFAULT_COSMOS_GAS_PRICE = import.meta.env.VITE_COSMOS_GAS_PRICE ?? "0uocp
 const PLAYER_SK_KEY_PREFIX = "ocp.web.skPlayer";
 const LEGACY_PK_KEY_PREFIX = "ocp.web.pkPlayer";
 const MAX_EVENTS = 200;
+const HAND_HISTORY_KEY = "ocp.web.handHistory";
 
-function getPlayerKeysForAddress(address: string): { sk: bigint; pk: Uint8Array } {
+function loadHandHistory(): Map<string, HandResult[]> {
+  try {
+    const raw = localStorage.getItem(HAND_HISTORY_KEY);
+    if (!raw) return new Map();
+    return new Map(Object.entries(JSON.parse(raw)));
+  } catch { return new Map(); }
+}
+
+function saveHandHistory(h: Map<string, HandResult[]>) {
+  try {
+    const obj: Record<string, HandResult[]> = {};
+    for (const [k, v] of h) obj[k] = v;
+    localStorage.setItem(HAND_HISTORY_KEY, JSON.stringify(obj));
+  } catch { /* localStorage full */ }
+}
+
+type KeyState = "none" | "locked" | "unlocked";
+
+function keysFromEntropy(entropy: Uint8Array): { sk: bigint; pk: Uint8Array } {
+  const scalar = scalarFromBytesModOrder(entropy);
+  const pk = groupElementToBytes(mulBase(scalar));
+  return { sk: scalar, pk };
+}
+
+/**
+ * Returns keys if plaintext, or null + keyState="locked" if encrypted.
+ * Generates new keys if nothing stored.
+ */
+function getPlayerKeysSync(address: string): { sk: bigint; pk: Uint8Array; keyState: KeyState } {
   if (typeof window === "undefined") {
     throw new Error("wallet support requires a browser context");
   }
 
   const key = `${PLAYER_SK_KEY_PREFIX}:${address}`;
   const stored = window.localStorage.getItem(key);
-  const existing = base64ToUint8(stored);
 
+  // Encrypted bundle — needs passphrase
+  if (stored && isEncryptedBundle(stored)) {
+    return { sk: 0n, pk: new Uint8Array(), keyState: "locked" };
+  }
+
+  const existing = base64ToUint8(stored);
   if (existing && existing.length === 64) {
-    const scalar = scalarFromBytesModOrder(existing);
-    const pk = groupElementToBytes(mulBase(scalar));
-    return { sk: scalar, pk };
+    const { sk, pk } = keysFromEntropy(existing);
+    return { sk, pk, keyState: "unlocked" };
   }
 
   // Migration: detect old 32-byte pubkey-only entries and regenerate
@@ -191,16 +240,46 @@ function getPlayerKeysForAddress(address: string): { sk: bigint; pk: Uint8Array 
     window.localStorage.removeItem(legacyKey);
   }
 
-  // SECURITY: Raw key entropy in localStorage is readable by any JS on this origin.
-  // A future improvement should use Web Crypto API CryptoKey (extractable: false)
-  // or passphrase-encrypt the key material at rest to mitigate XSS exfiltration.
   const entropy = new Uint8Array(64);
   window.crypto.getRandomValues(entropy);
   window.localStorage.setItem(key, uint8ToBase64(entropy));
 
-  const scalar = scalarFromBytesModOrder(entropy);
-  const pk = groupElementToBytes(mulBase(scalar));
-  return { sk: scalar, pk };
+  const { sk, pk } = keysFromEntropy(entropy);
+  return { sk, pk, keyState: "unlocked" };
+}
+
+async function unlockPlayerKeys(address: string, passphrase: string): Promise<{ sk: bigint; pk: Uint8Array }> {
+  const key = `${PLAYER_SK_KEY_PREFIX}:${address}`;
+  const stored = window.localStorage.getItem(key);
+  if (!stored || !isEncryptedBundle(stored)) {
+    throw new Error("Key is not encrypted");
+  }
+  const bundle = parseBundle(stored);
+  const entropy = await decryptEntropy(bundle, passphrase);
+  return keysFromEntropy(entropy);
+}
+
+async function protectPlayerKeys(address: string, passphrase: string): Promise<void> {
+  const key = `${PLAYER_SK_KEY_PREFIX}:${address}`;
+  const stored = window.localStorage.getItem(key);
+  if (!stored || isEncryptedBundle(stored)) {
+    throw new Error("Key is already encrypted or not found");
+  }
+  const entropy = base64ToUint8(stored);
+  if (!entropy || entropy.length !== 64) {
+    throw new Error("Invalid key material");
+  }
+  const bundle = await encryptEntropy(entropy, passphrase);
+  window.localStorage.setItem(key, JSON.stringify(bundle));
+}
+
+/** Legacy compat: sync getter for pkPlayer during sit (needs unlocked state) */
+function getPlayerKeysForAddress(address: string): { sk: bigint; pk: Uint8Array } {
+  const result = getPlayerKeysSync(address);
+  if (result.keyState === "locked") {
+    throw new Error("Keys are encrypted — unlock first");
+  }
+  return { sk: result.sk, pk: result.pk };
 }
 
 function parseTableBool(raw: unknown): boolean {
@@ -401,6 +480,22 @@ function defaultPlayerActionForm(): PlayerActionForm {
   };
 }
 
+function defaultCreateTableForm(): CreateTableForm {
+  return {
+    label: "",
+    smallBlind: "1",
+    bigBlind: "2",
+    minBuyIn: "100",
+    maxBuyIn: "1000",
+    maxPlayers: "9",
+    password: "",
+    actionTimeoutSecs: "30",
+    dealerTimeoutSecs: "120",
+    playerBond: "0",
+    rakeBps: "0",
+  };
+}
+
 export function App() {
   const [coordinatorInput, setCoordinatorInput] = useState<string>(initialCoordinatorBase);
   const [coordinatorBase, setCoordinatorBase] = useState<string>(initialCoordinatorBase);
@@ -467,12 +562,20 @@ export function App() {
     message: null
   });
 
+  const [createTableForm, setCreateTableForm] = useState<CreateTableForm>(defaultCreateTableForm);
+  const [createTableSubmit, setCreateTableSubmit] = useState<PlayerTxState>({ kind: "idle", message: null });
+  const [showCreateAdvanced, setShowCreateAdvanced] = useState(false);
+  const [rebuyAmount, setRebuyAmount] = useState("");
+  const [rebuySubmit, setRebuySubmit] = useState<PlayerTxState>({ kind: "idle", message: null });
+
   const [seatedTableIds, setSeatedTableIds] = useState<string[]>([]);
 
   const [events, setEvents] = useState<ChainEvent[]>([]);
-  const [handHistory, setHandHistory] = useState<Map<string, HandResult[]>>(new Map());
+  const [handHistory, setHandHistory] = useState<Map<string, HandResult[]>>(loadHandHistory);
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const [wsError, setWsError] = useState<string | null>(null);
+
+  useEffect(() => { saveHandHistory(handHistory); }, [handHistory]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const playerClientRef = useRef<OcpCosmosClient | null>(null);
@@ -979,14 +1082,39 @@ export function App() {
     }
   }, [events, updateHandResult]);
 
-  // Player secret key for hole card decryption
-  const playerSk = useMemo(() => {
-    if (playerWallet.status !== "connected" || !playerWallet.address) return null;
+  // Player key state for hole card decryption + encryption management
+  const [playerKeyState, setPlayerKeyState] = useState<KeyState>("none");
+  const [playerSk, setPlayerSk] = useState<bigint | null>(null);
+  const [playerPk, setPlayerPk] = useState<Uint8Array | null>(null);
+  const [keyPassphrase, setKeyPassphrase] = useState("");
+  const [keyError, setKeyError] = useState<string | null>(null);
+  const [protectPassphrase, setProtectPassphrase] = useState("");
+  const [protectConfirm, setProtectConfirm] = useState("");
+  const [protectStatus, setProtectStatus] = useState<string | null>(null);
+
+  // Initialize key state on wallet connect
+  useEffect(() => {
+    if (playerWallet.status !== "connected" || !playerWallet.address) {
+      setPlayerKeyState("none");
+      setPlayerSk(null);
+      setPlayerPk(null);
+      setKeyError(null);
+      return;
+    }
     try {
-      const { sk } = getPlayerKeysForAddress(playerWallet.address);
-      return sk;
+      const result = getPlayerKeysSync(playerWallet.address);
+      setPlayerKeyState(result.keyState);
+      if (result.keyState === "unlocked") {
+        setPlayerSk(result.sk);
+        setPlayerPk(result.pk);
+      } else {
+        setPlayerSk(null);
+        setPlayerPk(null);
+      }
     } catch {
-      return null;
+      setPlayerKeyState("none");
+      setPlayerSk(null);
+      setPlayerPk(null);
     }
   }, [playerWallet.status, playerWallet.address]);
 
@@ -1287,6 +1415,74 @@ export function App() {
     }
   }, [loadPlayerTable, playerTable.data, playerWallet.address, playerWallet.status, selectedTableId]);
 
+  const submitCreateTable = useCallback(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const client = playerClientRef.current;
+    if (!client) {
+      setCreateTableSubmit({ kind: "error", message: "Connect wallet first." });
+      return;
+    }
+
+    const f = createTableForm;
+    for (const [field, val] of Object.entries({ smallBlind: f.smallBlind, bigBlind: f.bigBlind, minBuyIn: f.minBuyIn, maxBuyIn: f.maxBuyIn })) {
+      if (!/^\d+$/.test(val.trim()) || val.trim() === "0") {
+        setCreateTableSubmit({ kind: "error", message: `${field} must be a positive integer.` });
+        return;
+      }
+    }
+
+    setCreateTableSubmit({ kind: "pending", message: "Creating table..." });
+    try {
+      const tx = await client.pokerCreateTable({
+        smallBlind: f.smallBlind.trim(),
+        bigBlind: f.bigBlind.trim(),
+        minBuyIn: f.minBuyIn.trim(),
+        maxBuyIn: f.maxBuyIn.trim(),
+        maxPlayers: parseInt(f.maxPlayers.trim(), 10) || 9,
+        label: f.label.trim(),
+        password: f.password.trim() || undefined,
+        actionTimeoutSecs: f.actionTimeoutSecs.trim() || "0",
+        dealerTimeoutSecs: f.dealerTimeoutSecs.trim() || "0",
+        playerBond: f.playerBond.trim() || "0",
+        rakeBps: parseInt(f.rakeBps.trim(), 10) || 0,
+      });
+      const newTableId = findEventAttr(tx.events, "TableCreated", "tableId");
+      setCreateTableSubmit({ kind: "success", message: `Table #${newTableId ?? "?"} created.` });
+      setCreateTableForm(defaultCreateTableForm());
+      await loadTables(false);
+      if (newTableId) setSelectedTableId(newTableId);
+    } catch (err) {
+      setCreateTableSubmit({ kind: "error", message: errorMessage(err) });
+    }
+  }, [createTableForm, loadTables]);
+
+  const submitRebuy = useCallback(async () => {
+    const tableId = selectedTableId;
+    if (!tableId) return;
+
+    const client = playerClientRef.current;
+    if (!client) {
+      setRebuySubmit({ kind: "error", message: "Connect wallet first." });
+      return;
+    }
+
+    const amount = rebuyAmount.trim();
+    if (!/^\d+$/.test(amount) || amount === "0") {
+      setRebuySubmit({ kind: "error", message: "Amount must be a positive integer." });
+      return;
+    }
+
+    setRebuySubmit({ kind: "pending", message: "Submitting rebuy..." });
+    try {
+      await client.pokerRebuy({ tableId, amount });
+      setRebuySubmit({ kind: "success", message: `Rebuyed ${amount} chips.` });
+      setRebuyAmount("");
+      await loadPlayerTable(tableId, false);
+    } catch (err) {
+      setRebuySubmit({ kind: "error", message: errorMessage(err) });
+    }
+  }, [loadPlayerTable, rebuyAmount, selectedTableId]);
+
   const submitPlayerActionDirect = useCallback(
     async (action: string, amount?: string) => {
       const table = playerTable.data;
@@ -1355,6 +1551,21 @@ export function App() {
     },
     [apiUrl, loadSeatIntents, seatForm, selectedTableId]
   );
+
+  const doUnlock = useCallback(() => {
+    setKeyError(null);
+    void (async () => {
+      try {
+        const { sk, pk } = await unlockPlayerKeys(playerWallet.address, keyPassphrase);
+        setPlayerSk(sk);
+        setPlayerPk(pk);
+        setPlayerKeyState("unlocked");
+        setKeyPassphrase("");
+      } catch {
+        setKeyError("Wrong passphrase");
+      }
+    })();
+  }, [playerWallet.address, keyPassphrase]);
 
   const onInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
@@ -1540,6 +1751,66 @@ export function App() {
               )}
 
               {playerWallet.error && <p className="error-banner">{playerWallet.error}</p>}
+
+              {playerWallet.status === "connected" && playerKeyState === "locked" && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <p className="hint">Keys are encrypted. Enter passphrase to unlock.</p>
+                  <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <input
+                      type="password"
+                      value={keyPassphrase}
+                      onChange={(e) => setKeyPassphrase(e.target.value)}
+                      placeholder="Passphrase"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          doUnlock();
+                        }
+                      }}
+                    />
+                    <button type="button" onClick={doUnlock}>Unlock</button>
+                  </div>
+                  {keyError && <p className="error-banner">{keyError}</p>}
+                </div>
+              )}
+
+              {playerWallet.status === "connected" && playerKeyState === "unlocked" && (
+                <div style={{ marginTop: "0.5rem" }}>
+                  <details>
+                    <summary style={{ cursor: "pointer" }}>Protect Keys</summary>
+                    <p className="hint">Encrypt your player keys with a passphrase. You will need it on each page load.</p>
+                    <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem" }}>
+                      <input
+                        type="password"
+                        value={protectPassphrase}
+                        onChange={(e) => setProtectPassphrase(e.target.value)}
+                        placeholder="New passphrase"
+                      />
+                      <input
+                        type="password"
+                        value={protectConfirm}
+                        onChange={(e) => setProtectConfirm(e.target.value)}
+                        placeholder="Confirm passphrase"
+                      />
+                      <button type="button" disabled={!protectPassphrase || protectPassphrase !== protectConfirm} onClick={() => {
+                        setProtectStatus(null);
+                        void (async () => {
+                          try {
+                            await protectPlayerKeys(playerWallet.address, protectPassphrase);
+                            setProtectStatus("Keys encrypted successfully.");
+                            setProtectPassphrase("");
+                            setProtectConfirm("");
+                            setPlayerKeyState("unlocked"); // remains unlocked for this session
+                          } catch (err) {
+                            setProtectStatus(errorMessage(err));
+                          }
+                        })();
+                      }}>Encrypt Keys</button>
+                    </div>
+                    {protectStatus && <p className="hint">{protectStatus}</p>}
+                  </details>
+                </div>
+              )}
             </div>
 
             <div>
@@ -1587,22 +1858,52 @@ export function App() {
 
               {playerSeat && (
                 <div style={{ marginTop: "0.5rem" }}>
-                  <button
-                    type="button"
-                    className="btn-leave"
-                    disabled={
-                      playerLeaveSubmit.kind === "pending" ||
-                      playerWallet.status !== "connected" ||
-                      !selectedTableId ||
-                      Boolean(playerTableForSelected?.hand && playerSeat.inHand)
-                    }
-                    onClick={submitPlayerLeave}
-                  >
-                    {playerLeaveSubmit.kind === "pending" ? "Leaving..." : "Leave Table"}
-                  </button>
+                  <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <button
+                      type="button"
+                      className="btn-leave"
+                      disabled={
+                        playerLeaveSubmit.kind === "pending" ||
+                        playerWallet.status !== "connected" ||
+                        !selectedTableId ||
+                        Boolean(playerTableForSelected?.hand && playerSeat.inHand)
+                      }
+                      onClick={submitPlayerLeave}
+                    >
+                      {playerLeaveSubmit.kind === "pending" ? "Leaving..." : "Leave Table"}
+                    </button>
+                  </div>
                   {playerLeaveSubmit.message && (
                     <p className={playerLeaveSubmit.kind === "error" ? "error-banner" : "hint"}>
                       {playerLeaveSubmit.message}
+                    </p>
+                  )}
+
+                  <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
+                    <input
+                      value={rebuyAmount}
+                      onChange={(e) => setRebuyAmount(e.target.value)}
+                      placeholder="Rebuy amount"
+                      inputMode="numeric"
+                      style={{ width: "120px" }}
+                      disabled={rebuySubmit.kind === "pending"}
+                    />
+                    <button
+                      type="button"
+                      disabled={
+                        rebuySubmit.kind === "pending" ||
+                        playerWallet.status !== "connected" ||
+                        !selectedTableId ||
+                        Boolean(playerTableForSelected?.hand && playerSeat.inHand)
+                      }
+                      onClick={submitRebuy}
+                    >
+                      {rebuySubmit.kind === "pending" ? "Rebuying..." : "Rebuy"}
+                    </button>
+                  </div>
+                  {rebuySubmit.message && (
+                    <p className={rebuySubmit.kind === "error" ? "error-banner" : "hint"}>
+                      {rebuySubmit.message}
                     </p>
                   )}
                 </div>
@@ -1762,6 +2063,122 @@ export function App() {
               </li>
             ))}
           </ul>
+
+          {playerWallet.status === "connected" && (
+            <div style={{ marginTop: "1rem" }}>
+              <h4>Create Table</h4>
+              <form className="seat-form" onSubmit={submitCreateTable}>
+                <label>
+                  Label
+                  <input
+                    value={createTableForm.label}
+                    onChange={(e) => setCreateTableForm((prev) => ({ ...prev, label: e.target.value }))}
+                    placeholder="My Table"
+                  />
+                </label>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                  <label>
+                    Small Blind
+                    <input
+                      required
+                      value={createTableForm.smallBlind}
+                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, smallBlind: e.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label>
+                    Big Blind
+                    <input
+                      required
+                      value={createTableForm.bigBlind}
+                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, bigBlind: e.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label>
+                    Min Buy-In
+                    <input
+                      required
+                      value={createTableForm.minBuyIn}
+                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, minBuyIn: e.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </label>
+                  <label>
+                    Max Buy-In
+                    <input
+                      required
+                      value={createTableForm.maxBuyIn}
+                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxBuyIn: e.target.value }))}
+                      inputMode="numeric"
+                    />
+                  </label>
+                </div>
+                <label>
+                  Password (optional)
+                  <input
+                    type="password"
+                    value={createTableForm.password}
+                    onChange={(e) => setCreateTableForm((prev) => ({ ...prev, password: e.target.value }))}
+                    placeholder="Leave blank for open table"
+                  />
+                </label>
+                <details open={showCreateAdvanced} onToggle={(e) => setShowCreateAdvanced((e.target as HTMLDetailsElement).open)}>
+                  <summary style={{ cursor: "pointer" }}>Advanced</summary>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    <label>
+                      Max Players
+                      <input
+                        value={createTableForm.maxPlayers}
+                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxPlayers: e.target.value }))}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <label>
+                      Action Timeout (s)
+                      <input
+                        value={createTableForm.actionTimeoutSecs}
+                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, actionTimeoutSecs: e.target.value }))}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <label>
+                      Dealer Timeout (s)
+                      <input
+                        value={createTableForm.dealerTimeoutSecs}
+                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, dealerTimeoutSecs: e.target.value }))}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <label>
+                      Player Bond
+                      <input
+                        value={createTableForm.playerBond}
+                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, playerBond: e.target.value }))}
+                        inputMode="numeric"
+                      />
+                    </label>
+                    <label>
+                      Rake BPS
+                      <input
+                        value={createTableForm.rakeBps}
+                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, rakeBps: e.target.value }))}
+                        inputMode="numeric"
+                      />
+                    </label>
+                  </div>
+                </details>
+                <button type="submit" disabled={createTableSubmit.kind === "pending" || playerWallet.status !== "connected"}>
+                  {createTableSubmit.kind === "pending" ? "Creating..." : "Create Table"}
+                </button>
+              </form>
+              {createTableSubmit.message && (
+                <p className={createTableSubmit.kind === "error" ? "error-banner" : "hint"}>
+                  {createTableSubmit.message}
+                </p>
+              )}
+            </div>
+          )}
         </section>
 
         <section className="panel">

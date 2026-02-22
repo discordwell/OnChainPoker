@@ -20,6 +20,7 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	legacy.RegisterAminoMsg(cdc, &MsgAct{}, "ocp/poker/Act")
 	legacy.RegisterAminoMsg(cdc, &MsgTick{}, "ocp/poker/Tick")
 	legacy.RegisterAminoMsg(cdc, &MsgLeave{}, "ocp/poker/Leave")
+	legacy.RegisterAminoMsg(cdc, &MsgRebuy{}, "ocp/poker/Rebuy")
 }
 
 // RegisterInterfaces registers the x/poker module's interface implementations.
@@ -31,6 +32,7 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 		&MsgAct{},
 		&MsgTick{},
 		&MsgLeave{},
+		&MsgRebuy{},
 	)
 
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)

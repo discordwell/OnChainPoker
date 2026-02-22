@@ -1095,6 +1095,221 @@ func TestCreateTableWithPassword(t *testing.T) {
 	require.Equal(t, expected[:], tbl.Params.PasswordHash)
 }
 
+// ---------------------------------------------------------------------------
+// Rebuy tests
+// ---------------------------------------------------------------------------
+
+func TestRebuy_HappyPath(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, bk := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	playerAcc := addr(0xF1)
+	player := playerAcc.String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    player,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "rebuy-happy",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: player, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	resp, err := ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: player, TableId: 1, Amount: 200,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(300), resp.NewStack)
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.Equal(t, uint64(300), tbl.Seats[0].Stack)
+
+	// Sit escrowed 100, rebuy escrowed 200
+	require.Len(t, bk.calls, 2)
+	require.Equal(t, "a2m", bk.calls[1].kind)
+	require.Equal(t, playerAcc, bk.calls[1].fromAcc)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uocp", sdkmath.NewInt(200))), bk.calls[1].coins)
+}
+
+func TestRebuy_RejectsNotSeated(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xF2).String()
+	outsider := addr(0xF3).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "rebuy-not-seated",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: outsider, TableId: 1, Amount: 100,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "not seated")
+}
+
+func TestRebuy_RejectsDuringActiveHand(t *testing.T) {
+	sdkCtx, _, ms, _, p0, _ := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	_, err := ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: p0.String(), TableId: 1, Amount: 100,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "cannot rebuy during active hand")
+}
+
+func TestRebuy_RejectsExceedMaxBuyIn(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	player := addr(0xF4).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    player,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "rebuy-exceed",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: player, TableId: 1, BuyIn: 900, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: player, TableId: 1, Amount: 200,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "exceed max buy-in")
+}
+
+func TestRebuy_RejectsZeroAmount(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	player := addr(0xF5).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    player,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "rebuy-zero",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: player, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: player, TableId: 1, Amount: 0,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "rebuy amount must be > 0")
+}
+
+func TestRebuy_AllowsBetweenHands(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	player := addr(0xF6).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    player,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "rebuy-between",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: player, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	// Manually set stack to 0 (simulating bust) with Hand nil (between hands)
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	tbl.Seats[0].Stack = 0
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	resp, err := ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: player, TableId: 1, Amount: 500,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(500), resp.NewStack)
+}
+
+func TestRebuy_OverflowProtection(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uocp"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	player := addr(0xF7).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    player,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: math.MaxUint64,
+		MaxPlayers: 9, Label: "rebuy-overflow",
+	})
+	require.NoError(t, err)
+
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: player, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+	})
+	require.NoError(t, err)
+
+	// Set stack near uint64 max
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	tbl.Seats[0].Stack = math.MaxUint64 - 1
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	_, err = ms.Rebuy(ctx, &types.MsgRebuy{
+		Player: player, TableId: 1, Amount: 2,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "overflows uint64")
+}
+
 func TestCreateTableNoPassword(t *testing.T) {
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
 	ctx := sdk.WrapSDKContext(sdkCtx)

@@ -9,6 +9,7 @@ import type {
   MsgAct,
   MsgCreateTable,
   MsgLeave,
+  MsgRebuy,
   MsgSit,
   MsgStartHand,
   MsgTick
@@ -157,6 +158,7 @@ export type OcpCosmosClient = {
   pokerAct: (args: { player?: string; tableId: UintLike; action: string; amount?: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerTick: (args: { caller?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerLeave: (args: { player?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
+  pokerRebuy: (args: { player?: string; tableId: UintLike; amount: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
 
   // --- dealer tx helpers ---
   dealerBeginEpoch: (args: {
@@ -336,6 +338,21 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       tableId: toU64String(a.tableId, "tableId")
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.leave, value: msg };
+    return signAndBroadcast([eo], a.memo);
+  }
+
+  async function pokerRebuy(a: {
+    player?: string;
+    tableId: UintLike;
+    amount: UintLike;
+    memo?: string;
+  }): Promise<DeliverTxResponse> {
+    const msg: MsgRebuy = {
+      player: (a.player ?? signing.address).trim(),
+      tableId: toU64String(a.tableId, "tableId"),
+      amount: toU64String(a.amount, "amount")
+    };
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.rebuy, value: msg };
     return signAndBroadcast([eo], a.memo);
   }
 
@@ -552,6 +569,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     pokerAct,
     pokerTick,
     pokerLeave,
+    pokerRebuy,
 
     dealerBeginEpoch,
     dealerDkgCommit,

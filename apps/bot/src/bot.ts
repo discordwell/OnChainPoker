@@ -186,6 +186,7 @@ export class PokerBot {
       tableId: this.config.tableId,
       buyIn,
       pkPlayer: this.pkBytes,
+      password: this.config.password || undefined,
     });
 
     // Re-fetch to find our assigned seat.
@@ -225,23 +226,32 @@ export class PokerBot {
 
       const hand = table.hand;
 
-      // Auto-rebuy: if no active hand and our stack is 0, leave and re-sit
+      // Auto-rebuy: if no active hand and our stack is 0, rebuy via MsgRebuy
       if (!hand && this.config.autoRebuy && !this.rebuyPending) {
         const myStack = toBigInt(seats[this.mySeat]?.stack);
         if (myStack === 0n && seats[this.mySeat]?.player === this.myAddress) {
           this.rebuyPending = true;
-          log(`Stack is 0 — rebuying after ${this.config.rebuyDelayMs}ms...`);
+          const params = table.params ?? {};
+          const buyIn = this.config.buyIn ?? g(params, "minBuyIn", "min_buy_in") ?? "1000000";
+          log(`Stack is 0 — rebuying ${buyIn} after ${this.config.rebuyDelayMs}ms...`);
           this.rebuyTimer = setTimeout(() => {
             void (async () => {
               try {
-                await this.client.pokerLeave({ tableId: this.config.tableId });
-                log("Left table for rebuy");
-                this.mySeat = -1;
-                await new Promise((r) => setTimeout(r, 1000));
-                await this.ensureSeated();
-                log("Rebuy complete — re-seated");
+                await this.client.pokerRebuy({ tableId: this.config.tableId, amount: buyIn });
+                log("Rebuy complete");
               } catch (err) {
-                logError("Rebuy failed", err);
+                // Fallback: leave and re-sit (for chains without MsgRebuy)
+                logError("pokerRebuy failed, falling back to leave-resit", err);
+                try {
+                  await this.client.pokerLeave({ tableId: this.config.tableId });
+                  log("Left table for rebuy");
+                  this.mySeat = -1;
+                  await new Promise((r) => setTimeout(r, 1000));
+                  await this.ensureSeated();
+                  log("Rebuy complete — re-seated");
+                } catch (err2) {
+                  logError("Rebuy fallback failed", err2);
+                }
               } finally {
                 this.rebuyPending = false;
               }

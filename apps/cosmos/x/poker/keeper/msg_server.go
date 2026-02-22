@@ -602,6 +602,70 @@ func (m msgServer) Leave(ctx context.Context, req *types.MsgLeave) (*types.MsgLe
 	return &types.MsgLeaveResponse{}, nil
 }
 
+func (m msgServer) Rebuy(ctx context.Context, req *types.MsgRebuy) (*types.MsgRebuyResponse, error) {
+	if req == nil {
+		return nil, types.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Player == "" {
+		return nil, types.ErrInvalidRequest.Wrap("missing player")
+	}
+	playerAddr, err := sdk.AccAddressFromBech32(req.Player)
+	if err != nil {
+		return nil, types.ErrInvalidRequest.Wrap("invalid player address")
+	}
+
+	t, err := m.GetTable(ctx, req.TableId)
+	if err != nil {
+		return nil, err
+	}
+	if t == nil {
+		return nil, types.ErrTableNotFound.Wrapf("table %d not found", req.TableId)
+	}
+
+	seat := seatOfPlayer(t, req.Player)
+	if seat < 0 || seat >= 9 || t.Seats[seat] == nil || t.Seats[seat].Player == "" {
+		return nil, types.ErrNotSeated.Wrap("player not seated at table")
+	}
+	if t.Hand != nil && seat < len(t.Hand.InHand) && t.Hand.InHand[seat] {
+		return nil, types.ErrHandInProgress.Wrap("cannot rebuy during active hand")
+	}
+	if req.Amount == 0 {
+		return nil, types.ErrInvalidRequest.Wrap("rebuy amount must be > 0")
+	}
+
+	s := t.Seats[seat]
+	newStack, err := addUint64Checked(s.Stack, req.Amount, "rebuy")
+	if err != nil {
+		return nil, types.ErrInvalidRequest.Wrap(err.Error())
+	}
+	if newStack > t.Params.MaxBuyIn {
+		return nil, types.ErrInvalidRequest.Wrapf("rebuy would exceed max buy-in: %d > %d", newStack, t.Params.MaxBuyIn)
+	}
+
+	denom := sdk.DefaultBondDenom
+	coins := sdk.NewCoins(sdk.NewCoin(denom, sdkmath.NewIntFromUint64(req.Amount)))
+	if err := m.bankKeeper.SendCoinsFromAccountToModule(ctx, playerAddr, types.ModuleName, coins); err != nil {
+		return nil, err
+	}
+
+	s.Stack = newStack
+	if err := m.SetTable(ctx, t); err != nil {
+		return nil, err
+	}
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+		types.EventTypePlayerRebuyed,
+		sdk.NewAttribute("tableId", fmt.Sprintf("%d", req.TableId)),
+		sdk.NewAttribute("seat", fmt.Sprintf("%d", seat)),
+		sdk.NewAttribute("player", req.Player),
+		sdk.NewAttribute("amount", fmt.Sprintf("%d", req.Amount)),
+		sdk.NewAttribute("newStack", fmt.Sprintf("%d", newStack)),
+	))
+
+	return &types.MsgRebuyResponse{NewStack: newStack}, nil
+}
+
 // ejectBondlessSeats removes seated players whose bond has been depleted, returning their remaining stack.
 func (m msgServer) ejectBondlessSeats(ctx context.Context, t *types.Table) error {
 	if t == nil || t.Hand != nil {

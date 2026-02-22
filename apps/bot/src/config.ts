@@ -1,8 +1,8 @@
 export interface BotConfig {
   strategy: "calling-station" | "tag" | "lag";
   tableId: string;
-  seat: number | null;
   buyIn: string | null;
+  password: string;
   mnemonic?: string;
   privkeyHex?: string;
   cosmosRpcUrl: string;
@@ -44,15 +44,13 @@ export function loadConfig(): BotConfig {
     throw new Error("Either BOT_MNEMONIC or BOT_PRIVKEY_HEX is required");
   }
 
-  const seatStr = (process.env["BOT_SEAT"] ?? "").trim();
-  const seat = seatStr ? parseInt(seatStr, 10) : null;
   const buyInStr = (process.env["BOT_BUY_IN"] ?? "").trim();
 
   return {
     strategy: envStr("BOT_STRATEGY", "calling-station") as BotConfig["strategy"],
     tableId,
-    seat: seat !== null && Number.isFinite(seat) ? seat : null,
     buyIn: buyInStr || null,
+    password: envStr("BOT_PASSWORD", ""),
     mnemonic: mnemonic || undefined,
     privkeyHex: privkeyHex || undefined,
     cosmosRpcUrl: envStr("BOT_COSMOS_RPC_URL", "http://127.0.0.1:26657"),

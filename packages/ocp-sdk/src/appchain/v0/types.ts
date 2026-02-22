@@ -67,6 +67,12 @@ export type PokerLeaveTx = {
   tableId: number;
 };
 
+export type PokerRebuyTx = {
+  player: string;
+  tableId: number;
+  amount: number;
+};
+
 // ---- Staking (v0) ----
 
 // v0: staking is a stubbed on-chain validator registry (no real consensus auth yet).
