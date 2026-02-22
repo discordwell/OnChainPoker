@@ -79,6 +79,7 @@ export class PokerBot {
   /** Cache decrypted hole cards per handId */
   private holeCardCache = new Map<string, [CardId, CardId] | null>();
   private lastHandId = "";
+  private rebuyPending = false;
 
   constructor(args: {
     client: OcpCosmosClient;
@@ -166,7 +167,7 @@ export class PokerBot {
   // ---------- Poll loop ----------
 
   private async pollOnce(): Promise<void> {
-    if (this.processing) return;
+    if (this.processing || this.rebuyPending) return;
     this.processing = true;
 
     try {
@@ -187,6 +188,32 @@ export class PokerBot {
       }
 
       const hand = table.hand;
+
+      // Auto-rebuy: if no active hand and our stack is 0, leave and re-sit
+      if (!hand && this.config.autoRebuy && !this.rebuyPending) {
+        const myStack = toBigInt(seats[this.mySeat]?.stack);
+        if (myStack === 0n && seats[this.mySeat]?.player === this.myAddress) {
+          this.rebuyPending = true;
+          log(`Stack is 0 — rebuying after ${this.config.rebuyDelayMs}ms...`);
+          setTimeout(() => {
+            void (async () => {
+              try {
+                await this.client.pokerLeave({ tableId: this.config.tableId });
+                log("Left table for rebuy");
+                this.mySeat = -1;
+                await new Promise((r) => setTimeout(r, 1000));
+                await this.ensureSeated();
+                log("Rebuy complete — re-seated");
+              } catch (err) {
+                logError("Rebuy failed", err);
+              } finally {
+                this.rebuyPending = false;
+              }
+            })();
+          }, this.config.rebuyDelayMs);
+          return;
+        }
+      }
 
       // No active hand — optionally start one
       if (!hand) {

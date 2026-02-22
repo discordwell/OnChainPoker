@@ -18,6 +18,9 @@ interface RawTableState {
     smallBlindSeat: number;
     bigBlindSeat: number;
     actionDeadline: number;
+    pot: string;
+    board: number[];
+    street: string;
   } | null;
 }
 
@@ -71,14 +74,13 @@ export function deriveTableProps(args: {
       ? seats.findIndex((s) => s.player.toLowerCase() === localAddress.toLowerCase())
       : -1;
 
-  // Extract board cards from dealer hand data
-  const board: (number | null)[] = [];
-  if (rawDealer) {
+  // Board cards come from hand.board (parsed from chain proto)
+  // Fall back to rawDealer.reveals for legacy compatibility
+  let board: (number | null)[] = [];
+  if (raw.hand?.board && raw.hand.board.length > 0) {
+    board = raw.hand.board;
+  } else if (rawDealer) {
     const reveals = Array.isArray(rawDealer.reveals) ? rawDealer.reveals : [];
-    const cursor = asNumber(rawDealer.cursor) ?? 0;
-
-    // Board positions are cursor..cursor+4 in the deck (first 5 after hole cards)
-    // Revealed cards come from the reveals array
     for (const r of reveals) {
       const pos = asNumber(r?.pos);
       const cardId = asNumber(r?.cardId ?? r?.card_id);
@@ -88,9 +90,8 @@ export function deriveTableProps(args: {
     }
   }
 
-  // Extract pot from raw hand data
-  const rawHand = raw.hand as any;
-  const pot = String(rawHand?.pot ?? rawHand?.pot_total ?? "0");
+  // Pot comes from parsed hand state (computed from totalCommit[])
+  const pot = raw.hand?.pot ?? "0";
 
   const hand = raw.hand
     ? {

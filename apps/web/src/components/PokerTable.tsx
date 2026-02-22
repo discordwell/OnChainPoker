@@ -2,6 +2,14 @@ import { useEffect, useRef, useState } from "react";
 import { CardFace } from "./CardFace";
 import "./PokerTable.css";
 
+export type HandResult = {
+  handId: string;
+  winners: Array<{ seat: number; amount: string }>;
+  board: number[];
+  pot: string;
+  timestamp: number;
+};
+
 export interface PokerTableProps {
   seats: Array<{
     seat: number;
@@ -26,6 +34,7 @@ export interface PokerTableProps {
   localHoleCards: [number, number] | null;
   onAction: (action: string, amount?: string) => void;
   actionEnabled: boolean;
+  handHistory?: HandResult[];
 }
 
 /**
@@ -52,6 +61,7 @@ function truncateAddress(addr: string): string {
 function phaseLabel(phase: string): string {
   if (!phase) return "";
   const map: Record<string, string> = {
+    // camelCase keys (from parsePlayerTable normalization)
     shuffle: "Shuffling",
     betting: "Betting",
     awaitFlop: "Dealing Flop",
@@ -59,6 +69,14 @@ function phaseLabel(phase: string): string {
     awaitRiver: "Dealing River",
     awaitShowdown: "Showdown",
     showdown: "Showdown",
+    // Proto enum string keys (from LCD REST API)
+    HAND_PHASE_SHUFFLE: "Shuffling",
+    HAND_PHASE_BETTING: "Betting",
+    HAND_PHASE_AWAIT_FLOP: "Dealing Flop",
+    HAND_PHASE_AWAIT_TURN: "Dealing Turn",
+    HAND_PHASE_AWAIT_RIVER: "Dealing River",
+    HAND_PHASE_AWAIT_SHOWDOWN: "Showdown",
+    HAND_PHASE_SHOWDOWN: "Showdown",
   };
   return map[phase] ?? phase;
 }
@@ -70,6 +88,7 @@ export function PokerTable({
   localHoleCards,
   onAction,
   actionEnabled,
+  handHistory,
 }: PokerTableProps) {
   const [betAmount, setBetAmount] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -321,6 +340,47 @@ export function PokerTable({
                 Raise
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hand History */}
+      {handHistory && handHistory.length > 0 && (
+        <div className="hand-history">
+          <h4 className="hand-history__title">Hand History</h4>
+          <div className="hand-history__list">
+            {handHistory.map((result) => (
+              <div key={result.handId} className="hand-history__entry">
+                <div className="hand-history__header">
+                  <span className="hand-history__hand-id">Hand #{result.handId}</span>
+                  <span className="hand-history__pot">Pot: {result.pot}</span>
+                </div>
+                {result.board.length > 0 && (
+                  <div className="hand-history__board">
+                    {result.board.map((cardId, i) => (
+                      <CardFace key={i} cardId={cardId} size="sm" />
+                    ))}
+                  </div>
+                )}
+                <div className="hand-history__winners">
+                  {result.winners.length > 0 ? (
+                    result.winners.map((w, i) => {
+                      const seatInfo = w.seat >= 0 ? seats[w.seat] : undefined;
+                      const label = seatInfo?.player
+                        ? truncateAddress(seatInfo.player)
+                        : `Seat ${w.seat}`;
+                      return (
+                        <span key={i} className="hand-history__winner">
+                          {label} won {w.amount}
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span className="hand-history__winner">Pot distributed</span>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       )}

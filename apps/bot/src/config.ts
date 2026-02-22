@@ -12,6 +12,8 @@ export interface BotConfig {
   pollIntervalMs: number;
   autoStartHand: boolean;
   autoSit: boolean;
+  autoRebuy: boolean;
+  rebuyDelayMs: number;
   name: string;
 }
 
@@ -60,6 +62,8 @@ export function loadConfig(): BotConfig {
     pollIntervalMs: envInt("BOT_POLL_INTERVAL_MS", 1000),
     autoStartHand: envBool("BOT_AUTO_START_HAND", true),
     autoSit: envBool("BOT_AUTO_SIT", true),
+    autoRebuy: envBool("BOT_AUTO_REBUY", true),
+    rebuyDelayMs: envInt("BOT_REBUY_DELAY_MS", 5000),
     name: envStr("BOT_NAME", "bot"),
   };
 }

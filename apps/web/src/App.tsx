@@ -7,7 +7,7 @@ import {
   type OcpCosmosClient
 } from "@onchainpoker/ocp-sdk/cosmos";
 import { groupElementToBytes, mulBase, scalarFromBytesModOrder } from "@onchainpoker/ocp-crypto";
-import { PokerTable } from "./components/PokerTable";
+import { PokerTable, type HandResult } from "./components/PokerTable";
 import { deriveTableProps } from "./components/useTableState";
 import { useHoleCards } from "./components/useHoleCards";
 
@@ -95,6 +95,9 @@ type PlayerHandState = {
   smallBlindSeat: number;
   bigBlindSeat: number;
   actionDeadline: number;
+  pot: string;
+  board: number[];
+  street: string;
 };
 
 type PlayerTableState = {
@@ -255,6 +258,21 @@ function parsePlayerTable(raw: unknown): PlayerTableState | null {
   const smallBlindSeat = Number.isFinite(Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat)) ? Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat) : -1;
   const bigBlindSeat = Number.isFinite(Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat)) ? Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat) : -1;
   const actionDeadline = Number.isFinite(Number(handRaw?.actionDeadline ?? handRaw?.deadline)) ? Number(handRaw?.actionDeadline ?? handRaw?.deadline) : 0;
+  const street = String(handRaw?.street ?? "");
+
+  // Compute pot from totalCommit array (chain doesn't have a pot field)
+  let pot = 0n;
+  const totalCommits = Array.isArray(handRaw?.totalCommit) ? handRaw.totalCommit : [];
+  for (const tc of totalCommits) {
+    const v = typeof tc === "string" ? BigInt(tc || "0") : BigInt(tc ?? 0);
+    pot += v;
+  }
+
+  // Extract board cards directly from hand.board (chain proto field)
+  const rawBoard = Array.isArray(handRaw?.board) ? handRaw.board : [];
+  const board: number[] = rawBoard
+    .map((c: unknown) => Number(c))
+    .filter((c: number) => Number.isFinite(c) && c >= 0 && c <= 51);
 
   return {
     tableId,
@@ -275,6 +293,9 @@ function parsePlayerTable(raw: unknown): PlayerTableState | null {
           smallBlindSeat,
           bigBlindSeat,
           actionDeadline,
+          pot: pot.toString(),
+          board,
+          street,
         }
       : null
   };
@@ -442,6 +463,7 @@ export function App() {
   });
 
   const [events, setEvents] = useState<ChainEvent[]>([]);
+  const [handHistory, setHandHistory] = useState<HandResult[]>([]);
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const [wsError, setWsError] = useState<string | null>(null);
 
@@ -779,6 +801,95 @@ export function App() {
     playerSeat && playerTableForSelected?.hand?.actionOn === playerSeat.seat
   );
 
+  // Track hand completion for history
+  const lastHandRef = useRef<{ handId: string; pot: string; board: number[] } | null>(null);
+
+  useEffect(() => {
+    const currentHand = playerTableForSelected?.hand;
+    const prevHand = lastHandRef.current;
+
+    if (currentHand) {
+      // Store last known hand data
+      lastHandRef.current = {
+        handId: currentHand.handId,
+        pot: currentHand.pot,
+        board: currentHand.board,
+      };
+    } else if (prevHand && prevHand.handId) {
+      // Hand just ended (transitioned from hand → no hand)
+      // Exact winners come from chain events (hand_settled/showdown);
+      // record a placeholder entry here that events can update later.
+      setHandHistory((prev) => {
+        // Avoid duplicates
+        if (prev.some((h) => h.handId === prevHand.handId)) return prev;
+        return [
+          {
+            handId: prevHand.handId,
+            winners: [],
+            board: prevHand.board,
+            pot: prevHand.pot,
+            timestamp: Date.now(),
+          },
+          ...prev,
+        ].slice(0, 10); // Keep last 10 hands
+      });
+      lastHandRef.current = null;
+    }
+  }, [playerTableForSelected]);
+
+  // Also capture hand results from chain events (more accurate winner info)
+  useEffect(() => {
+    if (events.length === 0) return;
+    const latest = events[0];
+    if (!latest || latest.tableId !== selectedTableId) return;
+
+    // Look for showdown/settle events that contain winner data
+    if (
+      latest.name === "hand_settled" ||
+      latest.name === "showdown" ||
+      latest.name === "hand_complete"
+    ) {
+      const data = latest.data as Record<string, unknown> | undefined;
+      if (!data) return;
+
+      const handId = String(latest.handId ?? data.handId ?? data.hand_id ?? "");
+      if (!handId) return;
+
+      const eventWinners: Array<{ seat: number; amount: string }> = [];
+      const payouts = Array.isArray(data.payouts) ? data.payouts : [];
+      for (const p of payouts) {
+        const pObj = p as Record<string, unknown>;
+        const seat = Number(pObj.seat ?? -1);
+        const amount = String(pObj.amount ?? pObj.payout ?? "0");
+        if (seat >= 0 && amount !== "0") {
+          eventWinners.push({ seat, amount });
+        }
+      }
+
+      if (eventWinners.length > 0) {
+        setHandHistory((prev) => {
+          const existing = prev.findIndex((h) => h.handId === handId);
+          if (existing >= 0) {
+            // Update with accurate winner info from event
+            const updated = [...prev];
+            updated[existing] = { ...updated[existing]!, winners: eventWinners };
+            return updated;
+          }
+          return [
+            {
+              handId,
+              winners: eventWinners,
+              board: [],
+              pot: String(data.pot ?? "0"),
+              timestamp: latest.timeMs,
+            },
+            ...prev,
+          ].slice(0, 10);
+        });
+      }
+    }
+  }, [events, selectedTableId]);
+
   // Player secret key for hole card decryption
   const playerSk = useMemo(() => {
     if (playerWallet.status !== "connected" || !playerWallet.address) return null;
@@ -800,7 +911,7 @@ export function App() {
     );
     if (!mySeat) return;
     const chainPk = String(
-      mySeat.pkPlayer ?? mySeat.pk_player ?? (mySeat as any).PkPlayer ?? ""
+      mySeat.pk ?? mySeat.pkPlayer ?? mySeat.pk_player ?? (mySeat as any).PkPlayer ?? ""
     );
     if (!chainPk) return;
     const { pk } = getPlayerKeysForAddress(playerWallet.address);
@@ -813,12 +924,23 @@ export function App() {
     }
   }, [playerSk, rawTable.data, playerWallet.address]);
 
-  // Determine if deck is finalized from raw chain table state
+  // Determine if deck is finalized from raw chain table state or player table
   const deckFinalized = useMemo(() => {
-    if (!rawTable.data) return false;
-    const raw = rawTable.data as any;
-    return Boolean(raw?.hand?.dealer?.finalized);
-  }, [rawTable.data]);
+    function checkDealer(dealer: any): boolean {
+      return Boolean(dealer?.deckFinalized || dealer?.deck_finalized || dealer?.finalized);
+    }
+    // Try raw table from coordinator v0 endpoint
+    if (rawTable.data) {
+      const raw = rawTable.data as any;
+      if (checkDealer(raw?.hand?.dealer)) return true;
+    }
+    // Fall back to player table (LCD endpoint uses camelCase)
+    if (playerTableForSelected?.hand) {
+      const raw = playerTableForSelected as any;
+      if (checkDealer(raw?.hand?.dealer)) return true;
+    }
+    return false;
+  }, [rawTable.data, playerTableForSelected]);
 
   // Hole card recovery
   const holeCardState = useHoleCards({
@@ -1241,7 +1363,7 @@ export function App() {
                 }
               },
             });
-            return tableProps ? <PokerTable {...tableProps} /> : null;
+            return tableProps ? <PokerTable {...tableProps} handHistory={handHistory} /> : null;
           })()}
 
           <div className="stack-two">
