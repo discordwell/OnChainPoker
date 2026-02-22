@@ -463,7 +463,7 @@ export function App() {
   });
 
   const [events, setEvents] = useState<ChainEvent[]>([]);
-  const [handHistory, setHandHistory] = useState<HandResult[]>([]);
+  const [handHistory, setHandHistory] = useState<Map<string, HandResult[]>>(new Map());
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const [wsError, setWsError] = useState<string | null>(null);
 
@@ -801,94 +801,160 @@ export function App() {
     playerSeat && playerTableForSelected?.hand?.actionOn === playerSeat.seat
   );
 
-  // Track hand completion for history
+  // Track hand completion for history (per-table)
   const lastHandRef = useRef<{ handId: string; pot: string; board: number[] } | null>(null);
+
+  // Accumulator for in-progress showdown data from chain events
+  const pendingShowdownRef = useRef<Map<string, {
+    revealedCards: Record<number, string[]>;
+    winners: Array<{ seat: number; amount: string }>;
+  }>>(new Map());
+
+  const MAX_HISTORY_PER_TABLE = 20;
+
+  const addHandResult = useCallback((tableId: string, result: HandResult) => {
+    setHandHistory((prev) => {
+      const next = new Map(prev);
+      const list = next.get(tableId) ?? [];
+      if (list.some((h) => h.handId === result.handId)) return prev;
+      next.set(tableId, [result, ...list].slice(0, MAX_HISTORY_PER_TABLE));
+      return next;
+    });
+  }, []);
+
+  const updateHandResult = useCallback((tableId: string, handId: string, update: Partial<HandResult>) => {
+    setHandHistory((prev) => {
+      const list = prev.get(tableId);
+      if (!list) return prev;
+      const idx = list.findIndex((h) => h.handId === handId);
+      if (idx < 0) return prev;
+      const next = new Map(prev);
+      const updated = [...list];
+      updated[idx] = { ...updated[idx]!, ...update };
+      next.set(tableId, updated);
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     const currentHand = playerTableForSelected?.hand;
     const prevHand = lastHandRef.current;
 
     if (currentHand) {
-      // Store last known hand data
       lastHandRef.current = {
         handId: currentHand.handId,
         pot: currentHand.pot,
         board: currentHand.board,
       };
-    } else if (prevHand && prevHand.handId) {
-      // Hand just ended (transitioned from hand → no hand)
-      // Exact winners come from chain events (hand_settled/showdown);
-      // record a placeholder entry here that events can update later.
-      setHandHistory((prev) => {
-        // Avoid duplicates
-        if (prev.some((h) => h.handId === prevHand.handId)) return prev;
-        return [
-          {
-            handId: prevHand.handId,
-            winners: [],
-            board: prevHand.board,
-            pot: prevHand.pot,
-            timestamp: Date.now(),
-          },
-          ...prev,
-        ].slice(0, 10); // Keep last 10 hands
+    } else if (prevHand && prevHand.handId && selectedTableId) {
+      addHandResult(selectedTableId, {
+        handId: prevHand.handId,
+        winners: [],
+        board: prevHand.board,
+        pot: prevHand.pot,
+        timestamp: Date.now(),
       });
       lastHandRef.current = null;
     }
-  }, [playerTableForSelected]);
+  }, [playerTableForSelected, selectedTableId, addHandResult]);
 
-  // Also capture hand results from chain events (more accurate winner info)
+  // Capture hand results from chain events (PotAwarded, HandCompleted, HoleCardRevealed)
   useEffect(() => {
     if (events.length === 0) return;
     const latest = events[0];
-    if (!latest || latest.tableId !== selectedTableId) return;
+    if (!latest || !latest.tableId) return;
 
-    // Look for showdown/settle events that contain winner data
-    if (
-      latest.name === "hand_settled" ||
-      latest.name === "showdown" ||
-      latest.name === "hand_complete"
-    ) {
-      const data = latest.data as Record<string, unknown> | undefined;
-      if (!data) return;
+    const tableId = latest.tableId;
+    const data = latest.data as Record<string, string> | undefined;
+    if (!data) return;
+    const handId = String(latest.handId ?? data.handId ?? "");
+    if (!handId) return;
 
-      const handId = String(latest.handId ?? data.handId ?? data.hand_id ?? "");
-      if (!handId) return;
+    const pendingKey = `${tableId}:${handId}`;
 
-      const eventWinners: Array<{ seat: number; amount: string }> = [];
-      const payouts = Array.isArray(data.payouts) ? data.payouts : [];
-      for (const p of payouts) {
-        const pObj = p as Record<string, unknown>;
-        const seat = Number(pObj.seat ?? -1);
-        const amount = String(pObj.amount ?? pObj.payout ?? "0");
-        if (seat >= 0 && amount !== "0") {
-          eventWinners.push({ seat, amount });
+    if (latest.name === "HoleCardRevealed") {
+      const seat = Number(data.seat ?? -1);
+      const card = data.card ?? "";
+      if (seat < 0 || !card) return;
+
+      const pending = pendingShowdownRef.current.get(pendingKey) ?? {
+        revealedCards: {},
+        winners: [],
+      };
+      const existing = pending.revealedCards[seat] ?? [];
+      if (!existing.includes(card)) {
+        pending.revealedCards[seat] = [...existing, card];
+      }
+      pendingShowdownRef.current.set(pendingKey, pending);
+
+      // Also update any existing history entry in real-time
+      updateHandResult(tableId, handId, { revealedCards: { ...pending.revealedCards } });
+    }
+
+    if (latest.name === "PotAwarded") {
+      const amount = data.amount ?? "0";
+      const winnersCSV = data.winners ?? "";
+      const winnerSeats = winnersCSV.split(",").map(Number).filter((n) => Number.isFinite(n) && n >= 0);
+
+      const pending = pendingShowdownRef.current.get(pendingKey) ?? {
+        revealedCards: {},
+        winners: [],
+      };
+      for (const seat of winnerSeats) {
+        if (!pending.winners.some((w) => w.seat === seat)) {
+          pending.winners.push({ seat, amount });
+        }
+      }
+      pendingShowdownRef.current.set(pendingKey, pending);
+    }
+
+    if (latest.name === "HandCompleted") {
+      const pending = pendingShowdownRef.current.get(pendingKey);
+      const reason = data.reason ?? "";
+
+      // For all-folded, extract winner from event attributes
+      const winners: Array<{ seat: number; amount: string }> = pending?.winners ?? [];
+      if (reason === "all-folded" && winners.length === 0) {
+        const winnerSeat = Number(data.winnerSeat ?? -1);
+        const pot = data.pot ?? "0";
+        if (winnerSeat >= 0) {
+          winners.push({ seat: winnerSeat, amount: pot });
         }
       }
 
-      if (eventWinners.length > 0) {
-        setHandHistory((prev) => {
-          const existing = prev.findIndex((h) => h.handId === handId);
-          if (existing >= 0) {
-            // Update with accurate winner info from event
-            const updated = [...prev];
-            updated[existing] = { ...updated[existing]!, winners: eventWinners };
-            return updated;
-          }
-          return [
-            {
-              handId,
-              winners: eventWinners,
-              board: [],
-              pot: String(data.pot ?? "0"),
-              timestamp: latest.timeMs,
-            },
-            ...prev,
-          ].slice(0, 10);
-        });
-      }
+      const result: HandResult = {
+        handId,
+        winners,
+        board: [],
+        pot: data.pot ?? "0",
+        timestamp: latest.timeMs,
+        revealedCards: pending?.revealedCards,
+      };
+
+      // Try to merge with existing entry (which may have board info from state tracking)
+      setHandHistory((prev) => {
+        const next = new Map(prev);
+        const list = next.get(tableId) ?? [];
+        const existingIdx = list.findIndex((h) => h.handId === handId);
+        if (existingIdx >= 0) {
+          const updated = [...list];
+          const existing = updated[existingIdx]!;
+          updated[existingIdx] = {
+            ...existing,
+            winners: result.winners.length > 0 ? result.winners : existing.winners,
+            revealedCards: result.revealedCards ?? existing.revealedCards,
+            pot: result.pot !== "0" ? result.pot : existing.pot,
+          };
+          next.set(tableId, updated);
+        } else {
+          next.set(tableId, [result, ...list].slice(0, MAX_HISTORY_PER_TABLE));
+        }
+        return next;
+      });
+
+      pendingShowdownRef.current.delete(pendingKey);
     }
-  }, [events, selectedTableId]);
+  }, [events, updateHandResult]);
 
   // Player secret key for hole card decryption
   const playerSk = useMemo(() => {
@@ -1363,7 +1429,7 @@ export function App() {
                 }
               },
             });
-            return tableProps ? <PokerTable {...tableProps} handHistory={handHistory} /> : null;
+            return tableProps ? <PokerTable {...tableProps} handHistory={handHistory.get(selectedTableId) ?? []} /> : null;
           })()}
 
           <div className="stack-two">

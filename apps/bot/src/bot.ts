@@ -73,8 +73,13 @@ export class PokerBot {
   private pkBytes: Uint8Array;
   private myAddress: string;
   private mySeat = -1;
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private rebuyTimer: ReturnType<typeof setTimeout> | null = null;
   private processing = false;
+  private stopped = false;
+  private consecutiveFailures = 0;
+
+  static readonly MAX_BACKOFF_MS = 60_000;
 
   /** Cache decrypted hole cards per handId */
   private holeCardCache = new Map<string, [CardId, CardId] | null>();
@@ -100,23 +105,59 @@ export class PokerBot {
   async start(): Promise<void> {
     log(`Starting ${this.config.name} (${this.strategy.name}) on table ${this.config.tableId}`);
     log(`Address: ${this.myAddress}`);
+    this.stopped = false;
+    this.consecutiveFailures = 0;
 
     if (this.config.autoSit) {
       await this.ensureSeated();
     }
 
-    this.timer = setInterval(
-      () => void this.pollOnce().catch((err) => logError("poll error", err)),
-      this.config.pollIntervalMs
-    );
+    this.scheduleNext(this.config.pollIntervalMs);
   }
 
   async stop(): Promise<void> {
+    this.stopped = true;
     if (this.timer) {
-      clearInterval(this.timer);
+      clearTimeout(this.timer);
       this.timer = null;
     }
+    if (this.rebuyTimer) {
+      clearTimeout(this.rebuyTimer);
+      this.rebuyTimer = null;
+    }
     log("Stopped");
+  }
+
+  private scheduleNext(delayMs: number): void {
+    if (this.stopped) return;
+    this.timer = setTimeout(() => {
+      void this.pollLoop();
+    }, delayMs);
+  }
+
+  private nextDelay(): number {
+    if (this.consecutiveFailures === 0) return this.config.pollIntervalMs;
+    const backoff = this.config.pollIntervalMs * Math.pow(2, this.consecutiveFailures);
+    return Math.min(backoff, PokerBot.MAX_BACKOFF_MS);
+  }
+
+  private async pollLoop(): Promise<void> {
+    if (this.stopped) return;
+    try {
+      await this.pollOnce();
+      if (this.consecutiveFailures > 0) {
+        log(`RECOVERED after ${this.consecutiveFailures} failures`);
+      }
+      this.consecutiveFailures = 0;
+    } catch (err) {
+      this.consecutiveFailures++;
+      const delay = this.nextDelay();
+      logError(`poll error (failure #${this.consecutiveFailures}, next in ${delay}ms)`, err);
+      if (this.consecutiveFailures >= 3) {
+        log(`DEGRADED — ${this.consecutiveFailures} consecutive failures, backoff ${delay}ms`);
+      }
+    }
+    this.scheduleNext(this.nextDelay());
   }
 
   // ---------- Seating ----------
@@ -195,7 +236,7 @@ export class PokerBot {
         if (myStack === 0n && seats[this.mySeat]?.player === this.myAddress) {
           this.rebuyPending = true;
           log(`Stack is 0 — rebuying after ${this.config.rebuyDelayMs}ms...`);
-          setTimeout(() => {
+          this.rebuyTimer = setTimeout(() => {
             void (async () => {
               try {
                 await this.client.pokerLeave({ tableId: this.config.tableId });

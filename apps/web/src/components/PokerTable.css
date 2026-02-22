@@ -575,6 +575,19 @@
   margin-bottom: 6px;
 }
 
+.hand-history__revealed {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-bottom: 4px;
+}
+
+.hand-history__reveal {
+  font-size: 0.66rem;
+  color: #c8b4e0;
+  font-family: "IBM Plex Mono", monospace;
+}
+
 .hand-history__winners {
   display: flex;
   flex-direction: column;

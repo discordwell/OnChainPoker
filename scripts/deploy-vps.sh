@@ -88,6 +88,9 @@ if [ "$SKIP_BUILD" = false ]; then
   echo ">> Building dealer-daemon..."
   pnpm -C apps/dealer-daemon build
 
+  echo ">> Building bot..."
+  pnpm -C apps/bot build
+
   echo ">> Cross-compiling ocpd (linux/amd64)..."
   OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
   (cd "$PROJECT_ROOT/apps/cosmos" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$OCPD_BIN" ./cmd/ocpd)
@@ -107,7 +110,7 @@ echo ""
 echo ">> Syncing artifacts to $VPS_SSH:$VPS_OCP_DIR ..."
 
 # Ensure remote directories exist
-ssh "$VPS_SSH" "mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,config,bin,chain,packages/ocp-crypto,packages/ocp-shuffle,packages/ocp-sdk}"
+ssh "$VPS_SSH" "mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,bot,config,bin,chain,packages/ocp-crypto,packages/ocp-shuffle,packages/ocp-sdk,packages/holdem-eval}"
 
 # Web (static)
 rsync -az --delete \
@@ -130,6 +133,14 @@ rsync -az \
   "$PROJECT_ROOT/apps/dealer-daemon/package.json" \
   "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/"
 
+# Bot (node)
+rsync -az --delete \
+  "$PROJECT_ROOT/apps/bot/dist/" \
+  "$VPS_SSH:$VPS_OCP_DIR/bot/dist/"
+rsync -az \
+  "$PROJECT_ROOT/apps/bot/package.json" \
+  "$VPS_SSH:$VPS_OCP_DIR/bot/"
+
 # Chain binary (linux/amd64)
 OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
 if [[ -f "$OCPD_BIN" ]]; then
@@ -145,7 +156,7 @@ rsync -az \
   "$VPS_SSH:$VPS_OCP_DIR/chain/"
 
 # Shared packages (for node_modules resolution)
-for pkg in ocp-crypto ocp-shuffle ocp-sdk; do
+for pkg in ocp-crypto ocp-shuffle ocp-sdk holdem-eval; do
   rsync -az --delete \
     "$PROJECT_ROOT/packages/$pkg/dist/" \
     "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/dist/"
@@ -158,6 +169,7 @@ done
 rsync -az \
   "$PROJECT_ROOT/deploy/ocp-coordinator.service" \
   "$PROJECT_ROOT/deploy/ocp-dealer-daemon@.service" \
+  "$PROJECT_ROOT/deploy/ocp-bot@.service" \
   "$PROJECT_ROOT/deploy/ocp-chain-node@.service" \
   "$VPS_SSH:/etc/systemd/system/"
 
@@ -165,6 +177,7 @@ rsync -az \
 rsync -az \
   "$PROJECT_ROOT/deploy/coordinator.env.example" \
   "$PROJECT_ROOT/deploy/dealer.env.example" \
+  "$PROJECT_ROOT/deploy/bot.env.example" \
   "$VPS_SSH:$VPS_OCP_DIR/config/"
 
 # Install dependencies remotely
@@ -194,12 +207,19 @@ patchDeps('dealer-daemon/package.json', {
   '@onchainpoker/ocp-sdk': 'file:../packages/ocp-sdk',
   '@onchainpoker/ocp-shuffle': 'file:../packages/ocp-shuffle',
 });
+
+patchDeps('bot/package.json', {
+  '@onchainpoker/ocp-crypto': 'file:../packages/ocp-crypto',
+  '@onchainpoker/ocp-sdk': 'file:../packages/ocp-sdk',
+  '@onchainpoker/holdem-eval': 'file:../packages/holdem-eval',
+});
 NODE"
 ssh "$VPS_SSH" "cd $VPS_OCP_DIR/packages/ocp-crypto && npm install --omit=dev --no-fund --no-audit"
 ssh "$VPS_SSH" "cd $VPS_OCP_DIR/packages/ocp-sdk && npm install --omit=dev --no-fund --no-audit"
 ssh "$VPS_SSH" "cd $VPS_OCP_DIR/packages/ocp-shuffle && npm install --omit=dev --no-fund --no-audit"
 ssh "$VPS_SSH" "cd $VPS_OCP_DIR/coordinator && npm install --omit=dev --no-fund --no-audit"
 ssh "$VPS_SSH" "cd $VPS_OCP_DIR/dealer-daemon && npm install --omit=dev --no-fund --no-audit"
+ssh "$VPS_SSH" "cd $VPS_OCP_DIR/bot && npm install --omit=dev --no-fund --no-audit"
 
 # Required runtime env files (fail-fast if absent).
 echo ">> Validating required runtime env files..."
@@ -240,3 +260,9 @@ echo ""
 echo "Runtime config templates copied to:"
 echo "  $VPS_OCP_DIR/config/coordinator.env.example"
 echo "  $VPS_OCP_DIR/config/dealer.env.example"
+echo "  $VPS_OCP_DIR/config/bot.env.example"
+echo ""
+echo "Bot instances (optional):"
+echo "  cp $VPS_OCP_DIR/config/bot.env.example $VPS_OCP_DIR/config/bot-0.env"
+echo "  # Edit bot-0.env with mnemonic, table, strategy"
+echo "  systemctl enable --now ocp-bot@0"

@@ -17,6 +17,7 @@ import { loadConfig } from "./config.js";
 import { PokerBot } from "./bot.js";
 import { CallingStation } from "./strategies/callingStation.js";
 import { TagStrategy } from "./strategies/tag.js";
+import { LagStrategy } from "./strategies/lag.js";
 import { log, logError } from "./log.js";
 import type { Strategy } from "./strategy.js";
 
@@ -34,6 +35,8 @@ function createStrategy(name: string): Strategy {
   switch (name) {
     case "tag":
       return new TagStrategy();
+    case "lag":
+      return new LagStrategy();
     case "calling-station":
     default:
       return new CallingStation();

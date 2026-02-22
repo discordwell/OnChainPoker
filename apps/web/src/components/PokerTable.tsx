@@ -8,6 +8,7 @@ export type HandResult = {
   board: number[];
   pot: string;
   timestamp: number;
+  revealedCards?: Record<number, string[]>;
 };
 
 export interface PokerTableProps {
@@ -360,6 +361,22 @@ export function PokerTable({
                     {result.board.map((cardId, i) => (
                       <CardFace key={i} cardId={cardId} size="sm" />
                     ))}
+                  </div>
+                )}
+                {result.revealedCards && Object.keys(result.revealedCards).length > 0 && (
+                  <div className="hand-history__revealed">
+                    {Object.entries(result.revealedCards).map(([seatStr, cards]) => {
+                      const seatNum = Number(seatStr);
+                      const seatInfo = seatNum >= 0 && seatNum < seats.length ? seats[seatNum] : undefined;
+                      const label = seatInfo?.player
+                        ? truncateAddress(seatInfo.player)
+                        : `Seat ${seatNum}`;
+                      return (
+                        <span key={seatStr} className="hand-history__reveal">
+                          {label}: {cards.join(" ")}
+                        </span>
+                      );
+                    })}
                   </div>
                 )}
                 <div className="hand-history__winners">

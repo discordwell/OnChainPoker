@@ -1,0 +1,18 @@
+[Unit]
+Description=OCP Poker Bot (instance %i)
+After=network-online.target ocp-chain-node@0.service ocp-coordinator.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ocp
+WorkingDirectory=/opt/ocp/bot
+ExecStart=/usr/bin/node /opt/ocp/bot/dist/index.js
+Restart=on-failure
+RestartSec=10
+
+Environment=NODE_ENV=production
+EnvironmentFile=/opt/ocp/config/bot-%i.env
+
+[Install]
+WantedBy=multi-user.target

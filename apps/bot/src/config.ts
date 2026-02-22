@@ -1,5 +1,5 @@
 export interface BotConfig {
-  strategy: "calling-station" | "tag";
+  strategy: "calling-station" | "tag" | "lag";
   tableId: string;
   seat: number | null;
   buyIn: string | null;
