@@ -15,6 +15,7 @@ import { encryptEntropy, decryptEntropy, isEncryptedBundle, parseBundle } from "
 
 type TableInfo = {
   tableId: string;
+  label?: string;
   params: {
     maxPlayers: number;
     smallBlind: string;
@@ -132,6 +133,13 @@ type CreateTableForm = {
   dealerTimeoutSecs: string;
   playerBond: string;
   rakeBps: string;
+};
+
+type LobbyFilter = {
+  search: string;
+  status: "all" | "open" | "in_hand";
+  password: "all" | "open" | "protected";
+  sort: "id-asc" | "id-desc" | "blinds-asc" | "blinds-desc";
 };
 
 type WsStatus = "connecting" | "open" | "closed" | "error";
@@ -567,6 +575,9 @@ export function App() {
   const [showCreateAdvanced, setShowCreateAdvanced] = useState(false);
   const [rebuyAmount, setRebuyAmount] = useState("");
   const [rebuySubmit, setRebuySubmit] = useState<PlayerTxState>({ kind: "idle", message: null });
+  const [lobbyFilter, setLobbyFilter] = useState<LobbyFilter>({
+    search: "", status: "all", password: "all", sort: "id-asc",
+  });
 
   const [seatedTableIds, setSeatedTableIds] = useState<string[]>([]);
 
@@ -895,6 +906,43 @@ export function App() {
   }, [selectedTableId]);
 
   const tableList = tables.data ?? [];
+  const filteredTableList = useMemo(() => {
+    let list = [...tableList];
+
+    // Search filter (by ID or label)
+    const q = lobbyFilter.search.trim().toLowerCase();
+    if (q) {
+      list = list.filter(
+        (t) => t.tableId.toLowerCase().includes(q) || (t.label ?? "").toLowerCase().includes(q)
+      );
+    }
+
+    // Status filter
+    if (lobbyFilter.status !== "all") {
+      list = list.filter((t) => t.status === lobbyFilter.status);
+    }
+
+    // Password filter
+    if (lobbyFilter.password === "open") {
+      list = list.filter((t) => !t.params.passwordHash);
+    } else if (lobbyFilter.password === "protected") {
+      list = list.filter((t) => !!t.params.passwordHash);
+    }
+
+    // Sort
+    list.sort((a, b) => {
+      switch (lobbyFilter.sort) {
+        case "id-asc": return Number(a.tableId) - Number(b.tableId);
+        case "id-desc": return Number(b.tableId) - Number(a.tableId);
+        case "blinds-asc": return Number(a.params.bigBlind) - Number(b.params.bigBlind);
+        case "blinds-desc": return Number(b.params.bigBlind) - Number(a.params.bigBlind);
+        default: return 0;
+      }
+    });
+
+    return list;
+  }, [tableList, lobbyFilter]);
+
   const selectedTable = useMemo(
     () => tableList.find((table) => table.tableId === selectedTableId) ?? null,
     [tableList, selectedTableId]
@@ -1091,6 +1139,52 @@ export function App() {
   const [protectPassphrase, setProtectPassphrase] = useState("");
   const [protectConfirm, setProtectConfirm] = useState("");
   const [protectStatus, setProtectStatus] = useState<string | null>(null);
+
+  const KEY_LOCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
+  const keyLockTimerRef = useRef<number | null>(null);
+  const isInHandRef = useRef(false);
+
+  // Keep isInHandRef in sync with game state
+  useEffect(() => {
+    isInHandRef.current = Boolean(playerSeat?.inHand && playerTableForSelected?.hand);
+  }, [playerSeat?.inHand, playerTableForSelected?.hand]);
+
+  const resetKeyLockTimer = useCallback(() => {
+    if (keyLockTimerRef.current != null) window.clearTimeout(keyLockTimerRef.current);
+    // Only set timer if keys are encrypted on disk but unlocked in memory
+    if (playerKeyState !== "unlocked" || !playerWallet.address) return;
+    const stored = window.localStorage.getItem(`${PLAYER_SK_KEY_PREFIX}:${playerWallet.address}`);
+    if (!stored || !isEncryptedBundle(stored)) return;
+    keyLockTimerRef.current = window.setTimeout(() => {
+      // Suppress auto-lock while player is in an active hand
+      if (isInHandRef.current) {
+        keyLockTimerRef.current = null;
+        resetKeyLockTimer(); // reschedule
+        return;
+      }
+      setPlayerSk(null);
+      setPlayerPk(null);
+      setPlayerKeyState("locked");
+      keyLockTimerRef.current = null;
+      console.log("[OCP] Keys auto-locked after inactivity");
+    }, KEY_LOCK_TIMEOUT_MS);
+  }, [playerKeyState, playerWallet.address]);
+
+  // Reset lock timer on user activity
+  useEffect(() => {
+    if (playerKeyState !== "unlocked") return;
+    window.addEventListener("click", resetKeyLockTimer);
+    window.addEventListener("keydown", resetKeyLockTimer);
+    resetKeyLockTimer(); // start initial timer
+    return () => {
+      window.removeEventListener("click", resetKeyLockTimer);
+      window.removeEventListener("keydown", resetKeyLockTimer);
+      if (keyLockTimerRef.current != null) {
+        window.clearTimeout(keyLockTimerRef.current);
+        keyLockTimerRef.current = null;
+      }
+    };
+  }, [playerKeyState, resetKeyLockTimer]);
 
   // Initialize key state on wallet connect
   useEffect(() => {
@@ -2035,12 +2129,50 @@ export function App() {
           {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
           {tables.error && <p className="error-banner">{tables.error}</p>}
 
+          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.5rem" }}>
+            <input
+              value={lobbyFilter.search}
+              onChange={(e) => setLobbyFilter((prev) => ({ ...prev, search: e.target.value }))}
+              placeholder="Search by ID or label"
+              style={{ flex: "1 1 140px", minWidth: "120px" }}
+            />
+            <select
+              value={lobbyFilter.status}
+              onChange={(e) => setLobbyFilter((prev) => ({ ...prev, status: e.target.value as LobbyFilter["status"] }))}
+            >
+              <option value="all">All status</option>
+              <option value="open">Open</option>
+              <option value="in_hand">In hand</option>
+            </select>
+            <select
+              value={lobbyFilter.password}
+              onChange={(e) => setLobbyFilter((prev) => ({ ...prev, password: e.target.value as LobbyFilter["password"] }))}
+            >
+              <option value="all">Any access</option>
+              <option value="open">No password</option>
+              <option value="protected">Password</option>
+            </select>
+            <select
+              value={lobbyFilter.sort}
+              onChange={(e) => setLobbyFilter((prev) => ({ ...prev, sort: e.target.value as LobbyFilter["sort"] }))}
+            >
+              <option value="id-asc">ID asc</option>
+              <option value="id-desc">ID desc</option>
+              <option value="blinds-asc">Blinds asc</option>
+              <option value="blinds-desc">Blinds desc</option>
+            </select>
+          </div>
+
           {!tables.loading && tableList.length === 0 && (
             <p className="placeholder">No tables reported by coordinator.</p>
           )}
 
+          {!tables.loading && tableList.length > 0 && filteredTableList.length === 0 && (
+            <p className="placeholder">No tables match filters ({tableList.length} total).</p>
+          )}
+
           <ul className="table-list">
-            {tableList.map((table) => (
+            {filteredTableList.map((table) => (
               <li key={table.tableId}>
                 <button
                   type="button"
@@ -2048,7 +2180,7 @@ export function App() {
                   onClick={() => setSelectedTableId(table.tableId)}
                 >
                   <div>
-                    <strong>{table.tableId}</strong>
+                    <strong>#{table.tableId}{table.label ? ` ${table.label}` : ""}</strong>
                     <p>
                       blinds {table.params.smallBlind}/{table.params.bigBlind}
                       {table.params.passwordHash ? " \u{1F512}" : ""}

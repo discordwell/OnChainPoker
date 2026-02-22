@@ -562,7 +562,7 @@ func (m msgServer) Leave(ctx context.Context, req *types.MsgLeave) (*types.MsgLe
 	if seat < 0 || seat >= 9 || t.Seats[seat] == nil || t.Seats[seat].Player == "" {
 		return nil, types.ErrNotSeated.Wrap("player not seated at table")
 	}
-	if t.Hand != nil && len(t.Hand.InHand) == 9 && t.Hand.InHand[seat] {
+	if t.Hand != nil && seat < len(t.Hand.InHand) && t.Hand.InHand[seat] {
 		return nil, types.ErrInvalidRequest.Wrap("cannot leave during active hand")
 	}
 
