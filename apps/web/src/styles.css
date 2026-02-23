@@ -506,3 +506,195 @@ pre {
     grid-template-columns: 1fr;
   }
 }
+
+/* ═══════════════════════════════════════════════════════
+   CHAT PANEL
+   ═══════════════════════════════════════════════════════ */
+
+.chat-panel {
+  margin-top: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-solid);
+  padding: 0.6rem;
+}
+
+.chat-panel__title {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.4rem;
+}
+
+.chat-messages {
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 0.4rem;
+  scrollbar-width: thin;
+}
+
+.chat-empty {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-style: italic;
+}
+
+.chat-msg {
+  display: flex;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.chat-msg__sender {
+  font-weight: 600;
+  color: var(--accent);
+  flex-shrink: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.66rem;
+}
+
+.chat-msg__text {
+  color: var(--ink);
+  word-break: break-word;
+}
+
+.chat-input-row {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.chat-panel .chat-input {
+  flex: 1;
+  font-size: 0.78rem;
+  padding: 0.4rem 0.5rem;
+  border-radius: 8px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   PLAYER NOTES
+   ═══════════════════════════════════════════════════════ */
+
+.player-note {
+  width: 100%;
+  margin-top: 0.3rem;
+  padding: 0.3rem 0.4rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-solid);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.68rem;
+  color: var(--ink);
+  resize: vertical;
+  min-height: 1.8rem;
+}
+
+.player-note:focus {
+  border-color: var(--ring);
+  outline: none;
+  box-shadow: 0 0 0 2px rgba(240, 191, 79, 0.2);
+}
+
+.player-note::placeholder {
+  color: var(--muted);
+  opacity: 0.6;
+}
+
+/* ═══════════════════════════════════════════════════════
+   CREATE TABLE FORM (Polish)
+   ═══════════════════════════════════════════════════════ */
+
+.create-table-form {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.create-table-form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.74rem;
+  color: var(--muted);
+}
+
+.create-table-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.create-table-advanced {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.create-table-success {
+  border: 1px solid rgba(14, 122, 93, 0.25);
+  border-radius: 10px;
+  background: rgba(216, 242, 231, 0.8);
+  color: var(--accent);
+  font-size: 0.8rem;
+  padding: 0.52rem 0.62rem;
+  font-weight: 600;
+}
+
+/* ═══════════════════════════════════════════════════════
+   REBUY ROW (Polish)
+   ═══════════════════════════════════════════════════════ */
+
+.rebuy-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin-top: 0.5rem;
+}
+
+.rebuy-row input {
+  width: 120px;
+}
+
+.rebuy-hint {
+  font-size: 0.66rem;
+  color: var(--muted);
+  font-style: italic;
+}
+
+/* ═══════════════════════════════════════════════════════
+   LOBBY FILTERS (Polish)
+   ═══════════════════════════════════════════════════════ */
+
+.lobby-filters {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.lobby-filters input {
+  flex: 1 1 140px;
+  min-width: 120px;
+}
+
+.lobby-filters select {
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--ink);
+  padding: 0.5rem 0.6rem;
+  font-size: 0.78rem;
+  font-family: "IBM Plex Mono", monospace;
+  cursor: pointer;
+}
+
+.lobby-filters select:focus {
+  border-color: var(--ring);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(240, 191, 79, 0.25);
+}

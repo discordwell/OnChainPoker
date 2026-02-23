@@ -1,8 +1,11 @@
-import type { ArtifactRecord, SeatIntent, TableInfo } from "./types.js";
+import type { ArtifactRecord, ChatMessage, SeatIntent, TableInfo } from "./types.js";
+
+const CHAT_RING_SIZE = 50;
 
 export class CoordinatorStore {
   private readonly tablesById = new Map<string, TableInfo>();
   private readonly seatIntentsByTable = new Map<string, Map<string, SeatIntent>>();
+  private readonly chatByTable = new Map<string, ChatMessage[]>();
 
   private readonly artifactsById = new Map<string, ArtifactRecord>();
   private artifactsTotalBytes = 0;
@@ -13,6 +16,17 @@ export class CoordinatorStore {
       artifactCacheMaxBytes: number;
     }
   ) {}
+
+  addChatMessage(tableId: string, msg: ChatMessage): void {
+    const ring = this.chatByTable.get(tableId) ?? [];
+    ring.push(msg);
+    if (ring.length > CHAT_RING_SIZE) ring.splice(0, ring.length - CHAT_RING_SIZE);
+    this.chatByTable.set(tableId, ring);
+  }
+
+  getChatHistory(tableId: string): ChatMessage[] {
+    return this.chatByTable.get(tableId) ?? [];
+  }
 
   upsertTable(table: TableInfo): void {
     this.tablesById.set(table.tableId, table);

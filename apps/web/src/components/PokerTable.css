@@ -601,6 +601,58 @@
   font-family: "IBM Plex Mono", monospace;
 }
 
+.hand-history__street {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(240, 191, 79, 0.15);
+  color: #f0bf4f;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  vertical-align: middle;
+}
+
+.hand-history__reason {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(128, 212, 168, 0.12);
+  color: #80d4a8;
+  font-size: 0.58rem;
+  font-weight: 600;
+  text-transform: lowercase;
+  vertical-align: middle;
+}
+
+.hand-history__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.hand-history__relative {
+  font-size: 0.6rem;
+  color: rgba(255, 255, 255, 0.3);
+  font-style: italic;
+}
+
+.hand-history__card-label {
+  font-size: 0.62rem;
+  font-family: "IBM Plex Mono", monospace;
+  color: #c8b4e0;
+  margin: 0 1px;
+}
+
+.hand-history__reveal {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
 /* ═══════════════════════════════════════════════════════
    RESPONSIVE
    ═══════════════════════════════════════════════════════ */

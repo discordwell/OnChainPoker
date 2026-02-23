@@ -36,6 +36,7 @@ export function createCoordinatorServer(opts: {
       chain,
       ws: {
         broadcastChainEvent: (ev: ChainEvent) => wsHub?.broadcastChainEvent(ev),
+        broadcastToTopic: (topic: string, msg: unknown) => wsHub?.broadcastToTopic(topic, msg),
         broadcast: (msg: unknown) => wsHub?.broadcast(msg),
         close: async () => wsHub?.close()
       }

@@ -189,6 +189,28 @@ const PLAYER_SK_KEY_PREFIX = "ocp.web.skPlayer";
 const LEGACY_PK_KEY_PREFIX = "ocp.web.pkPlayer";
 const MAX_EVENTS = 200;
 const HAND_HISTORY_KEY = "ocp.web.handHistory";
+const PLAYER_NOTES_KEY = "ocp.web.playerNotes";
+const MAX_CHAT_MESSAGES = 50;
+
+type ChatMsg = {
+  sender: string;
+  text: string;
+  timeMs: number;
+};
+
+function loadPlayerNotes(): Record<string, string> {
+  try {
+    const raw = localStorage.getItem(PLAYER_NOTES_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw);
+  } catch { return {}; }
+}
+
+function savePlayerNotes(notes: Record<string, string>) {
+  try {
+    localStorage.setItem(PLAYER_NOTES_KEY, JSON.stringify(notes));
+  } catch { /* localStorage full */ }
+}
 
 function loadHandHistory(): Map<string, HandResult[]> {
   try {
@@ -586,7 +608,13 @@ export function App() {
   const [wsStatus, setWsStatus] = useState<WsStatus>("connecting");
   const [wsError, setWsError] = useState<string | null>(null);
 
+  const [chatMessages, setChatMessages] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const [playerNotes, setPlayerNotes] = useState<Record<string, string>>(loadPlayerNotes);
+
   useEffect(() => { saveHandHistory(handHistory); }, [handHistory]);
+  useEffect(() => { savePlayerNotes(playerNotes); }, [playerNotes]);
 
   const wsRef = useRef<WebSocket | null>(null);
   const playerClientRef = useRef<OcpCosmosClient | null>(null);
@@ -838,6 +866,26 @@ export function App() {
           return;
         }
 
+        if (msg.type === "table_chat") {
+          const chatMsg: ChatMsg = {
+            sender: String(msg.sender ?? ""),
+            text: String(msg.text ?? ""),
+            timeMs: Number(msg.timeMs ?? Date.now()),
+          };
+          setChatMessages((prev) => [...prev, chatMsg].slice(-MAX_CHAT_MESSAGES));
+          return;
+        }
+
+        if (msg.type === "chat_history") {
+          const messages = Array.isArray(msg.messages) ? msg.messages : [];
+          setChatMessages(messages.map((m: any) => ({
+            sender: String(m.sender ?? ""),
+            text: String(m.text ?? ""),
+            timeMs: Number(m.timeMs ?? 0),
+          })));
+          return;
+        }
+
         if (msg.type === "seat_intent") {
           const data = msg.intent as SeatIntent | undefined;
           if (data?.tableId && data.tableId === selectedTableRef.current) {
@@ -902,6 +950,9 @@ export function App() {
     if (selectedTableId && selectedTableId !== previous) {
       ws.send(JSON.stringify({ type: "subscribe", topic: "table", tableId: selectedTableId }));
       subscribedTableRef.current = selectedTableId;
+      setChatMessages([]);
+      // Request chat history for the new table
+      ws.send(JSON.stringify({ type: "chat_history", tableId: selectedTableId }));
     }
   }, [selectedTableId]);
 
@@ -1096,6 +1147,7 @@ export function App() {
         }
       }
 
+      const street = data.street ?? "";
       const result: HandResult = {
         handId,
         winners,
@@ -1103,6 +1155,8 @@ export function App() {
         pot: data.pot ?? "0",
         timestamp: latest.timeMs,
         revealedCards: pending?.revealedCards,
+        street: street || undefined,
+        reason: reason || undefined,
       };
 
       // Try to merge with existing entry (which may have board info from state tracking)
@@ -1118,6 +1172,8 @@ export function App() {
             winners: result.winners.length > 0 ? result.winners : existing.winners,
             revealedCards: result.revealedCards ?? existing.revealedCards,
             pot: result.pot !== "0" ? result.pot : existing.pot,
+            street: result.street ?? existing.street,
+            reason: result.reason ?? existing.reason,
           };
           next.set(tableId, updated);
         } else {
@@ -1143,6 +1199,7 @@ export function App() {
   const KEY_LOCK_TIMEOUT_MS = 15 * 60 * 1000; // 15 minutes
   const keyLockTimerRef = useRef<number | null>(null);
   const isInHandRef = useRef(false);
+  const isKeyEncryptedRef = useRef(false);
 
   // Keep isInHandRef in sync with game state
   useEffect(() => {
@@ -1153,8 +1210,7 @@ export function App() {
     if (keyLockTimerRef.current != null) window.clearTimeout(keyLockTimerRef.current);
     // Only set timer if keys are encrypted on disk but unlocked in memory
     if (playerKeyState !== "unlocked" || !playerWallet.address) return;
-    const stored = window.localStorage.getItem(`${PLAYER_SK_KEY_PREFIX}:${playerWallet.address}`);
-    if (!stored || !isEncryptedBundle(stored)) return;
+    if (!isKeyEncryptedRef.current) return;
     keyLockTimerRef.current = window.setTimeout(() => {
       // Suppress auto-lock while player is in an active hand
       if (isInHandRef.current) {
@@ -1193,10 +1249,13 @@ export function App() {
       setPlayerSk(null);
       setPlayerPk(null);
       setKeyError(null);
+      isKeyEncryptedRef.current = false;
       return;
     }
     try {
       const result = getPlayerKeysSync(playerWallet.address);
+      const stored = window.localStorage.getItem(`${PLAYER_SK_KEY_PREFIX}:${playerWallet.address}`);
+      isKeyEncryptedRef.current = Boolean(stored && isEncryptedBundle(stored));
       setPlayerKeyState(result.keyState);
       if (result.keyState === "unlocked") {
         setPlayerSk(result.sk);
@@ -1661,6 +1720,21 @@ export function App() {
     })();
   }, [playerWallet.address, keyPassphrase]);
 
+  const sendChat = useCallback(() => {
+    const text = chatInput.trim();
+    if (!text || !selectedTableId) return;
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    const sender = playerWallet.status === "connected" ? playerWallet.address : "anon";
+    ws.send(JSON.stringify({ type: "table_chat", tableId: selectedTableId, text, sender }));
+    setChatInput("");
+  }, [chatInput, selectedTableId, playerWallet.status, playerWallet.address]);
+
+  // Auto-scroll chat
+  useEffect(() => {
+    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [chatMessages]);
+
   const onInputKeyDown = useCallback(
     (event: KeyboardEvent<HTMLInputElement>) => {
       if (event.key === "Enter") {
@@ -1818,6 +1892,36 @@ export function App() {
             return tableProps ? <PokerTable {...tableProps} handHistory={handHistory.get(selectedTableId) ?? []} /> : null;
           })()}
 
+          {/* Chat Panel */}
+          {selectedTableId && (
+            <div className="chat-panel">
+              <h4 className="chat-panel__title">Table Chat</h4>
+              <div className="chat-messages">
+                {chatMessages.length === 0 && (
+                  <p className="chat-empty">No messages yet</p>
+                )}
+                {chatMessages.map((m, i) => (
+                  <div key={i} className="chat-msg">
+                    <span className="chat-msg__sender">{m.sender.slice(0, 8)}...</span>
+                    <span className="chat-msg__text">{m.text}</span>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
+              </div>
+              <div className="chat-input-row">
+                <input
+                  className="chat-input"
+                  value={chatInput}
+                  onChange={(e) => setChatInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendChat(); } }}
+                  placeholder="Type a message..."
+                  maxLength={200}
+                />
+                <button type="button" onClick={sendChat} disabled={!chatInput.trim()}>Send</button>
+              </div>
+            </div>
+          )}
+
           <div className="stack-two">
             <div>
               <h4>Wallet Session</h4>
@@ -1891,6 +1995,7 @@ export function App() {
                         void (async () => {
                           try {
                             await protectPlayerKeys(playerWallet.address, protectPassphrase);
+                            isKeyEncryptedRef.current = true;
                             setProtectStatus("Keys encrypted successfully.");
                             setProtectPassphrase("");
                             setProtectConfirm("");
@@ -1973,13 +2078,12 @@ export function App() {
                     </p>
                   )}
 
-                  <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
+                  <div className="rebuy-row">
                     <input
                       value={rebuyAmount}
                       onChange={(e) => setRebuyAmount(e.target.value)}
                       placeholder="Rebuy amount"
                       inputMode="numeric"
-                      style={{ width: "120px" }}
                       disabled={rebuySubmit.kind === "pending"}
                     />
                     <button
@@ -1994,6 +2098,9 @@ export function App() {
                     >
                       {rebuySubmit.kind === "pending" ? "Rebuying..." : "Rebuy"}
                     </button>
+                    {Boolean(playerTableForSelected?.hand && playerSeat.inHand) && (
+                      <span className="rebuy-hint">Available between hands</span>
+                    )}
                   </div>
                   {rebuySubmit.message && (
                     <p className={rebuySubmit.kind === "error" ? "error-banner" : "hint"}>
@@ -2110,6 +2217,15 @@ export function App() {
                         inHand: {seat.inHand ? "yes" : "no"} | folded:{" "}
                         {seat.folded ? "yes" : "no"} | all-in: {seat.allIn ? "yes" : "no"}
                       </small>
+                      {seat.player && (
+                        <textarea
+                          className="player-note"
+                          placeholder="Private note..."
+                          value={playerNotes[seat.player] ?? ""}
+                          onChange={(e) => setPlayerNotes((prev) => ({ ...prev, [seat.player]: e.target.value }))}
+                          rows={1}
+                        />
+                      )}
                     </article>
                   ))}
                 </div>
@@ -2129,12 +2245,11 @@ export function App() {
           {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
           {tables.error && <p className="error-banner">{tables.error}</p>}
 
-          <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap", alignItems: "center", marginBottom: "0.5rem" }}>
+          <div className="lobby-filters">
             <input
               value={lobbyFilter.search}
               onChange={(e) => setLobbyFilter((prev) => ({ ...prev, search: e.target.value }))}
               placeholder="Search by ID or label"
-              style={{ flex: "1 1 140px", minWidth: "120px" }}
             />
             <select
               value={lobbyFilter.status}
@@ -2199,7 +2314,7 @@ export function App() {
           {playerWallet.status === "connected" && (
             <div style={{ marginTop: "1rem" }}>
               <h4>Create Table</h4>
-              <form className="seat-form" onSubmit={submitCreateTable}>
+              <form className="create-table-form" onSubmit={submitCreateTable}>
                 <label>
                   Label
                   <input
@@ -2208,7 +2323,7 @@ export function App() {
                     placeholder="My Table"
                   />
                 </label>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem" }}>
+                <div className="create-table-grid">
                   <label>
                     Small Blind
                     <input
@@ -2257,7 +2372,7 @@ export function App() {
                 </label>
                 <details open={showCreateAdvanced} onToggle={(e) => setShowCreateAdvanced((e.target as HTMLDetailsElement).open)}>
                   <summary style={{ cursor: "pointer" }}>Advanced</summary>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.5rem", marginTop: "0.25rem" }}>
+                  <div className="create-table-advanced">
                     <label>
                       Max Players
                       <input
@@ -2305,7 +2420,7 @@ export function App() {
                 </button>
               </form>
               {createTableSubmit.message && (
-                <p className={createTableSubmit.kind === "error" ? "error-banner" : "hint"}>
+                <p className={createTableSubmit.kind === "success" ? "create-table-success" : createTableSubmit.kind === "error" ? "error-banner" : "hint"}>
                   {createTableSubmit.message}
                 </p>
               )}

@@ -5,6 +5,7 @@ import type { CoordinatorStore } from "./store.js";
 
 type ClientState = {
   subs: Set<string>;
+  lastChatMs?: number;
 };
 
 function safeJsonParse(raw: string): unknown {
@@ -22,6 +23,7 @@ function sendJson(ws: WebSocket, msg: unknown): void {
 
 export type WsHub = {
   broadcastChainEvent: (ev: ChainEvent) => void;
+  broadcastToTopic: (topic: string, msg: unknown) => void;
   broadcast: (msg: unknown) => void;
   close: () => Promise<void>;
 };
@@ -93,12 +95,53 @@ export function createWsHub(opts: {
         sendJson(ws, { type: "error", error: "invalid unsubscribe message" });
         return;
       }
+
+      if (anyMsg.type === "table_chat") {
+        const tableId = typeof anyMsg.tableId === "string" ? anyMsg.tableId : "";
+        const text = typeof anyMsg.text === "string" ? anyMsg.text.slice(0, 200) : "";
+        const sender = typeof anyMsg.sender === "string" ? anyMsg.sender : "";
+        if (!tableId || !text || !sender) {
+          sendJson(ws, { type: "error", error: "table_chat requires tableId, text, sender" });
+          return;
+        }
+        if (!state.subs.has(`table:${tableId}`)) {
+          sendJson(ws, { type: "error", error: "not subscribed to table" });
+          return;
+        }
+        const now = Date.now();
+        if (state.lastChatMs && now - state.lastChatMs < 1000) {
+          sendJson(ws, { type: "error", error: "chat rate limited (1 msg/sec)" });
+          return;
+        }
+        state.lastChatMs = now;
+        const chatMsg = { sender, text, timeMs: now };
+        opts.store.addChatMessage(tableId, chatMsg);
+        broadcastToTopic(`table:${tableId}`, { type: "table_chat", tableId, ...chatMsg });
+        return;
+      }
+
+      if (anyMsg.type === "chat_history") {
+        const tableId = typeof anyMsg.tableId === "string" ? anyMsg.tableId : "";
+        if (!tableId) {
+          sendJson(ws, { type: "error", error: "chat_history requires tableId" });
+          return;
+        }
+        sendJson(ws, { type: "chat_history", tableId, messages: opts.store.getChatHistory(tableId) });
+        return;
+      }
     });
 
     ws.on("close", () => {
       clients.delete(ws);
     });
   });
+
+  function broadcastToTopic(topic: string, msg: unknown): void {
+    for (const [ws, state] of clients.entries()) {
+      if (ws.readyState !== WebSocket.OPEN) continue;
+      if (state.subs.has(topic)) sendJson(ws, msg);
+    }
+  }
 
   function broadcast(msg: unknown): void {
     for (const ws of wss.clients) sendJson(ws, msg);
@@ -133,5 +176,5 @@ export function createWsHub(opts: {
     await new Promise<void>((resolve) => wss.close(() => resolve()));
   }
 
-  return { broadcastChainEvent, broadcast, close };
+  return { broadcastChainEvent, broadcastToTopic, broadcast, close };
 }

@@ -8,6 +8,17 @@ export function cardLabel(id: number): string {
   return `${RANKS[id % 13]}${SUIT_GLYPHS[Math.floor(id / 13)]}`;
 }
 
+/** Reverse lookup from label string (e.g. "A♠") to numeric card ID (0-51). */
+export function cardIdFromLabel(label: string): number | null {
+  if (!label || label.length < 2) return null;
+  const suitChar = label[label.length - 1]!;
+  const rankStr = label.slice(0, -1);
+  const suitIdx = SUIT_GLYPHS.indexOf(suitChar as typeof SUIT_GLYPHS[number]);
+  const rankIdx = RANKS.indexOf(rankStr as typeof RANKS[number]);
+  if (suitIdx < 0 || rankIdx < 0) return null;
+  return suitIdx * 13 + rankIdx;
+}
+
 export function CardFace({
   cardId,
   size = "md",

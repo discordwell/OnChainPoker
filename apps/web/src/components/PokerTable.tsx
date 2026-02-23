@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { CardFace } from "./CardFace";
+import { CardFace, cardIdFromLabel } from "./CardFace";
 import "./PokerTable.css";
 
 export type HandResult = {
@@ -9,6 +9,8 @@ export type HandResult = {
   pot: string;
   timestamp: number;
   revealedCards?: Record<number, string[]>;
+  street?: string;
+  reason?: string;
 };
 
 export interface PokerTableProps {
@@ -350,11 +352,18 @@ export function PokerTable({
         <div className="hand-history">
           <h4 className="hand-history__title">Hand History</h4>
           <div className="hand-history__list">
-            {handHistory.map((result) => (
+            {handHistory.map((result, idx) => (
               <div key={result.handId} className="hand-history__entry">
                 <div className="hand-history__header">
-                  <span className="hand-history__hand-id">Hand #{result.handId}</span>
-                  <span className="hand-history__pot">Pot: {result.pot}</span>
+                  <span className="hand-history__hand-id">
+                    Hand #{result.handId}
+                    {result.street && <span className="hand-history__street">{result.street}</span>}
+                    {result.reason && <span className="hand-history__reason">{result.reason}</span>}
+                  </span>
+                  <span className="hand-history__meta">
+                    <span className="hand-history__relative">{idx === 0 ? "Last hand" : `${idx} hand${idx > 1 ? "s" : ""} ago`}</span>
+                    <span className="hand-history__pot">Pot: {result.pot}</span>
+                  </span>
                 </div>
                 {result.board.length > 0 && (
                   <div className="hand-history__board">
@@ -373,7 +382,13 @@ export function PokerTable({
                         : `Seat ${seatNum}`;
                       return (
                         <span key={seatStr} className="hand-history__reveal">
-                          {label}: {cards.join(" ")}
+                          {label}:{" "}
+                          {cards.map((c, ci) => {
+                            const cid = cardIdFromLabel(c);
+                            return cid != null
+                              ? <CardFace key={ci} cardId={cid} size="sm" />
+                              : <span key={ci} className="hand-history__card-label">{c}</span>;
+                          })}
                         </span>
                       );
                     })}

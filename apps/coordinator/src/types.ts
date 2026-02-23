@@ -4,12 +4,20 @@ export type TableParams = {
   bigBlind: string;
   minBuyIn: string;
   maxBuyIn: string;
+  passwordHash?: string;
+};
+
+export type ChatMessage = {
+  sender: string;
+  text: string;
+  timeMs: number;
 };
 
 export type TableStatus = "open" | "in_hand" | "closed";
 
 export type TableInfo = {
   tableId: string;
+  label?: string;
   params: TableParams;
   status: TableStatus;
   updatedAtMs: number;
