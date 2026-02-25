@@ -1,28 +1,5 @@
 import type { PokerTableProps } from "./PokerTable";
-
-interface RawTableState {
-  seats: Array<{
-    seat: number;
-    player: string;
-    stack: string;
-    bond: string;
-    inHand: boolean;
-    folded: boolean;
-    allIn: boolean;
-  }>;
-  hand: {
-    handId: string;
-    phase: string;
-    actionOn: number;
-    buttonSeat: number;
-    smallBlindSeat: number;
-    bigBlindSeat: number;
-    actionDeadline: number;
-    pot: string;
-    board: number[];
-    street: string;
-  } | null;
-}
+import type { PlayerTableState } from "../lib/parsePlayerTable";
 
 function asNumber(v: unknown): number | undefined {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
@@ -37,7 +14,7 @@ function asNumber(v: unknown): number | undefined {
  * Derives PokerTable display state from raw chain table + dealer hand data.
  */
 export function deriveTableProps(args: {
-  raw: RawTableState | null;
+  raw: PlayerTableState | null;
   rawDealer: any | null;
   localAddress: string | null;
   localHoleCards: [number, number] | null;

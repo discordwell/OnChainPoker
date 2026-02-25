@@ -1,0 +1,126 @@
+/* ─── Chain Verification Badge ─── */
+
+.chain-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+  font-family: "IBM Plex Mono", monospace;
+  transition: background 0.15s;
+}
+
+.chain-badge--verified {
+  color: var(--accent, #0e7a5d);
+  background: var(--accent-soft, #d8f2e7);
+}
+
+.chain-badge--pending {
+  color: var(--muted, #4e5f59);
+  background: var(--line, #d8d6c9);
+}
+
+.chain-badge--mismatch {
+  color: #fff;
+  background: var(--danger, #a32a2a);
+}
+
+.chain-badge--error {
+  color: var(--warn, #8f4b13);
+  background: #fef3cd;
+}
+
+.chain-badge__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chain-badge--verified .chain-badge__dot { background: var(--accent, #0e7a5d); }
+.chain-badge--pending .chain-badge__dot { background: var(--muted, #4e5f59); animation: badge-pulse 1.2s infinite; }
+.chain-badge--mismatch .chain-badge__dot { background: #fff; }
+.chain-badge--error .chain-badge__dot { background: var(--warn, #8f4b13); }
+
+@keyframes badge-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+/* ─── Dropdown ─── */
+
+.chain-badge__dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 280px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-solid, #fff9ed);
+  border: 1px solid var(--line, #d8d6c9);
+  box-shadow: var(--shadow, 0 20px 45px rgba(31, 41, 55, 0.12));
+  font-size: 0.7rem;
+  color: var(--ink, #1a2a26);
+}
+
+.chain-badge__dropdown h5 {
+  margin: 0 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.chain-badge__mismatch-list {
+  list-style: none;
+  margin: 0 0 8px;
+  padding: 0;
+}
+
+.chain-badge__mismatch-list li {
+  padding: 3px 0;
+  border-bottom: 1px solid var(--line, #d8d6c9);
+  line-height: 1.4;
+}
+
+.chain-badge__mismatch-list li:last-child {
+  border-bottom: none;
+}
+
+.chain-badge__field-path {
+  font-weight: 600;
+  display: block;
+}
+
+.chain-badge__field-vals {
+  display: flex;
+  gap: 8px;
+  color: var(--muted, #4e5f59);
+}
+
+.chain-badge__verify-btn {
+  display: inline-block;
+  padding: 3px 10px;
+  border: 1px solid var(--accent, #0e7a5d);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent, #0e7a5d);
+  font-size: 0.68rem;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+}
+
+.chain-badge__verify-btn:hover {
+  background: var(--accent-soft, #d8f2e7);
+}
+
+.chain-badge__timestamp {
+  color: var(--muted, #4e5f59);
+  margin-top: 6px;
+  font-size: 0.65rem;
+}
