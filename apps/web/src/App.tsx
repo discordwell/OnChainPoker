@@ -920,7 +920,7 @@ export function App() {
 
   const { metrics: cometMetrics, recordCoordinatorEvent } = useCometBftEvents({
     rpcUrl: DEFAULT_COSMOS_RPC_URL,
-    enabled: true,
+    enabled: Boolean(selectedTableId),
     selectedTableId,
     onChainEvent: handleCometEvent,
   });

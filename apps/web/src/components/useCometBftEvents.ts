@@ -252,12 +252,12 @@ export function useCometBftEvents({
               }
             }, MISS_TIMEOUT_MS);
             missTimersRef.current.set(fp, missTimer);
-          }
 
-          setMetrics((prev) => ({
-            ...prev,
-            eventsReceived: prev.eventsReceived + 1,
-          }));
+            setMetrics((prev) => ({
+              ...prev,
+              eventsReceived: prev.eventsReceived + 1,
+            }));
+          }
         }
       };
 
@@ -284,6 +284,7 @@ export function useCometBftEvents({
     connect();
 
     return () => {
+      setStatus("disconnected");
       stopped = true;
       if (reconnectTimer != null) {
         window.clearTimeout(reconnectTimer);
@@ -302,7 +303,6 @@ export function useCometBftEvents({
         }
         ws = null;
       }
-      setStatus("disconnected");
     };
   }, [enabled, rpcUrl, pruneDedup]);
 
