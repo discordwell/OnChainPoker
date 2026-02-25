@@ -171,6 +171,11 @@ for pkg in ocp-crypto ocp-shuffle ocp-sdk holdem-eval; do
     "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/"
 done
 
+# Nginx config snippet (included from main discordwell.com server block)
+rsync -az --rsync-path="sudo rsync" \
+  "$PROJECT_ROOT/deploy/nginx-ocp.conf" \
+  "$VPS_SSH:$VPS_OCP_DIR/config/"
+
 # Systemd units
 rsync -az --rsync-path="sudo rsync" \
   "$PROJECT_ROOT/deploy/ocp-coordinator.service" \
@@ -256,9 +261,14 @@ else
   echo "   Chain not initialized yet — run production-genesis.sh on VPS first"
 fi
 
+# Reload nginx to pick up any config changes (lcd proxy, etc.)
+echo ">> Reloading nginx..."
+ssh "$VPS_SSH" "sudo nginx -t && sudo systemctl reload nginx"
+
 echo ""
 echo "=== Deploy complete ==="
 echo "Web:     https://discordwell.com/ocp"
+echo "LCD:     https://discordwell.com/ocp/lcd/cosmos/base/tendermint/v1beta1/node_info"
 echo "API:     https://discordwell.com/ocp/api/health"
 echo ""
 echo "Chain initialization (first deploy only):"
