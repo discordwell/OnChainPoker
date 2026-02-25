@@ -1,7 +1,14 @@
 import { useState } from "react";
 import type { ChainVerificationResult } from "./useChainVerification";
-import type { CometBftMetrics } from "./useCometBftEvents";
+import type { CometBftMetrics, CometBftStatus } from "./useCometBftEvents";
 import "./ChainVerificationBadge.css";
+
+const cometStatusLabels: Record<CometBftStatus, string> = {
+  connected: "Connected",
+  connecting: "Connecting\u2026",
+  error: "Error",
+  disconnected: "Disconnected",
+};
 
 type Props = ChainVerificationResult & {
   cometMetrics?: CometBftMetrics;
@@ -76,8 +83,8 @@ export function ChainVerificationBadge({
             <div className="chain-badge__comet-section">
               <h5>Direct Chain Link</h5>
               <div className="chain-badge__comet-row">
-                <span className={`chain-badge__comet-dot chain-badge__comet-dot--${cometMetrics.status}`} />
-                <span>{cometMetrics.status === "connected" ? "Connected" : cometMetrics.status === "connecting" ? "Connecting\u2026" : cometMetrics.status === "error" ? "Error" : "Disconnected"}</span>
+                <span className={`chain-badge__dot chain-badge__dot--sm chain-badge__dot--${cometMetrics.status}`} />
+                <span>{cometStatusLabels[cometMetrics.status]}</span>
               </div>
               {cometMetrics.eventsReceived > 0 && (
                 <div className="chain-badge__comet-row">

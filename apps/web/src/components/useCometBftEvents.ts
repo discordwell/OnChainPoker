@@ -20,11 +20,16 @@ type DedupEntry = {
   coordMs: number | null;
 };
 
-function fingerprint(ev: ChainEvent): string {
-  return `${ev.name}|${ev.tableId ?? ""}|${ev.handId ?? ""}|${JSON.stringify(ev.data ?? {})}`;
+/** Content fingerprint for dedup — keys sorted for order-independence. */
+export function fingerprint(ev: ChainEvent): string {
+  const d = ev.data ?? {};
+  const sorted = typeof d === "object" && d !== null
+    ? JSON.stringify(d, Object.keys(d as Record<string, unknown>).sort())
+    : JSON.stringify(d);
+  return `${ev.name}|${ev.tableId ?? ""}|${ev.handId ?? ""}|${sorted}`;
 }
 
-function computeMedian(values: number[]): number | null {
+export function computeMedian(values: number[]): number | null {
   if (values.length === 0) return null;
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
@@ -34,7 +39,6 @@ function computeMedian(values: number[]): number | null {
 }
 
 const DEDUP_MAX = 500;
-const DEDUP_TTL_MS = 30_000;
 const MISS_TIMEOUT_MS = 5_000;
 const DELAY_WINDOW = 20;
 const MAX_BACKOFF_MS = 30_000;
@@ -70,14 +74,12 @@ export function useCometBftEvents({
   const selectedTableIdRef = useRef(selectedTableId);
   selectedTableIdRef.current = selectedTableId;
 
-  // Prune old dedup entries
+  // Evict oldest dedup entries when over capacity (Map iterates in insertion order)
   const pruneDedup = useCallback(() => {
-    const now = Date.now();
     const map = dedupMapRef.current;
-    if (map.size <= DEDUP_MAX) return;
-    for (const [key, entry] of map) {
-      const ts = entry.cometMs ?? entry.coordMs ?? 0;
-      if (now - ts > DEDUP_TTL_MS) map.delete(key);
+    while (map.size > DEDUP_MAX) {
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest); else break;
     }
   }, []);
 

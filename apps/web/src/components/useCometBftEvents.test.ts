@@ -1,140 +1,9 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-
-// We test the dedup logic and fingerprinting directly since the hook relies on
-// browser WebSocket which is complex to mock in a unit test. The core parsing
-// logic is covered by cometEventParser.test.ts.
-//
-// This file tests the recordCoordinatorEvent dedup behavior via the hook's
-// exported interface using a minimal mock.
-
+import { describe, expect, it } from "vitest";
 import type { ChainEvent } from "../lib/cometEventParser";
+import { fingerprint, computeMedian } from "./useCometBftEvents";
 
-// Minimal mock WebSocket that never connects (simulates CometBFT unreachable)
-class MockWebSocket {
-  static CONNECTING = 0;
-  static OPEN = 1;
-  static CLOSING = 2;
-  static CLOSED = 3;
-
-  readyState = MockWebSocket.CONNECTING;
-  onopen: (() => void) | null = null;
-  onclose: (() => void) | null = null;
-  onerror: ((e: any) => void) | null = null;
-  onmessage: ((e: any) => void) | null = null;
-
-  constructor(_url: string) {
-    // Simulate immediate connection failure
-    setTimeout(() => {
-      this.readyState = MockWebSocket.CLOSED;
-      this.onerror?.({});
-      this.onclose?.();
-    }, 0);
-  }
-
-  send(_data: string) {}
-  close() {
-    this.readyState = MockWebSocket.CLOSED;
-  }
-}
-
-// Store original and provide mock
-let originalWebSocket: typeof globalThis.WebSocket;
-
-beforeEach(() => {
-  originalWebSocket = globalThis.WebSocket;
-  (globalThis as any).WebSocket = MockWebSocket as any;
-  vi.useFakeTimers();
-});
-
-afterEach(() => {
-  (globalThis as any).WebSocket = originalWebSocket;
-  vi.useRealTimers();
-});
-
-// Dynamic import to pick up the mocked WebSocket
-async function importHook() {
-  // Clear module cache to pick up fresh mock
-  const mod = await import("./useCometBftEvents");
-  return mod;
-}
-
-describe("useCometBftEvents — dedup logic", () => {
-  it("recordCoordinatorEvent returns true when coordinator is first", async () => {
-    const { useCometBftEvents } = await importHook();
-
-    // Use a simple inline test of the dedup logic by calling the hook
-    // We can't easily use renderHook without React test utils, so test
-    // the fingerprint + dedup map concept directly.
-
-    // Simulate the dedup logic inline (matching the hook's implementation)
-    const dedupMap = new Map<string, { cometMs: number | null; coordMs: number | null }>();
-
-    function fingerprint(ev: ChainEvent): string {
-      return `${ev.name}|${ev.tableId ?? ""}|${ev.handId ?? ""}|${JSON.stringify(ev.data ?? {})}`;
-    }
-
-    const event: ChainEvent = {
-      name: "poker.seat_taken",
-      tableId: "1",
-      handId: undefined,
-      eventIndex: 1,
-      timeMs: Date.now(),
-      data: { tableId: "1", seat: "3" },
-    };
-
-    const fp = fingerprint(event);
-
-    // Coordinator arrives first
-    const existing = dedupMap.get(fp);
-    expect(existing).toBeUndefined();
-    dedupMap.set(fp, { cometMs: null, coordMs: Date.now() });
-
-    // CometBFT arrives second — should find existing entry
-    const entry = dedupMap.get(fp);
-    expect(entry).toBeDefined();
-    expect(entry!.coordMs).not.toBeNull();
-    expect(entry!.cometMs).toBeNull();
-  });
-
-  it("dedup detects duplicate when CometBFT arrives first", () => {
-    const dedupMap = new Map<string, { cometMs: number | null; coordMs: number | null }>();
-
-    function fingerprint(ev: ChainEvent): string {
-      return `${ev.name}|${ev.tableId ?? ""}|${ev.handId ?? ""}|${JSON.stringify(ev.data ?? {})}`;
-    }
-
-    const event: ChainEvent = {
-      name: "poker.action",
-      tableId: "2",
-      handId: "10",
-      eventIndex: 5,
-      timeMs: 1000,
-      data: { tableId: "2", handId: "10", action: "call" },
-    };
-
-    const fp = fingerprint(event);
-
-    // CometBFT arrives first
-    dedupMap.set(fp, { cometMs: 1000, coordMs: null });
-
-    // Coordinator arrives second — find existing, CometBFT already handled it
-    const existing = dedupMap.get(fp);
-    expect(existing).toBeDefined();
-    expect(existing!.cometMs).toBe(1000);
-
-    // Update with coordinator timing
-    existing!.coordMs = 1200;
-
-    // Delay measurement
-    const delay = existing!.coordMs - existing!.cometMs!;
-    expect(delay).toBe(200);
-  });
-
-  it("fingerprints are unique per event content", () => {
-    function fingerprint(ev: ChainEvent): string {
-      return `${ev.name}|${ev.tableId ?? ""}|${ev.handId ?? ""}|${JSON.stringify(ev.data ?? {})}`;
-    }
-
+describe("fingerprint", () => {
+  it("produces unique fingerprints per event content", () => {
     const ev1: ChainEvent = {
       name: "poker.action",
       tableId: "1",
@@ -165,30 +34,113 @@ describe("useCometBftEvents — dedup logic", () => {
     expect(fingerprint(ev1)).not.toBe(fingerprint(ev2)); // different data
     expect(fingerprint(ev1)).not.toBe(fingerprint(ev3)); // different tableId
   });
+
+  it("is order-independent for data keys", () => {
+    const ev1: ChainEvent = {
+      name: "poker.seat_taken",
+      tableId: "1",
+      eventIndex: 1,
+      timeMs: 1000,
+      data: { tableId: "1", seat: "3" },
+    };
+
+    const ev2: ChainEvent = {
+      name: "poker.seat_taken",
+      tableId: "1",
+      eventIndex: 1,
+      timeMs: 1000,
+      data: { seat: "3", tableId: "1" },
+    };
+
+    expect(fingerprint(ev1)).toBe(fingerprint(ev2));
+  });
+
+  it("handles missing optional fields", () => {
+    const ev: ChainEvent = {
+      name: "poker.action",
+      eventIndex: 1,
+      timeMs: 1000,
+    };
+
+    expect(fingerprint(ev)).toBe("poker.action|||{}");
+  });
 });
 
-describe("useCometBftEvents — delay metrics", () => {
-  it("computes median delay from timing differences", () => {
-    // Test the median computation logic
-    function computeMedian(values: number[]): number | null {
-      if (values.length === 0) return null;
-      const sorted = [...values].sort((a, b) => a - b);
-      const mid = Math.floor(sorted.length / 2);
-      return sorted.length % 2 === 0
-        ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
-        : sorted[mid];
-    }
-
+describe("computeMedian", () => {
+  it("returns null for empty array", () => {
     expect(computeMedian([])).toBeNull();
+  });
+
+  it("returns the single value", () => {
     expect(computeMedian([100])).toBe(100);
+  });
+
+  it("averages two values", () => {
     expect(computeMedian([100, 200])).toBe(150);
+  });
+
+  it("finds middle of odd-length array", () => {
     expect(computeMedian([50, 100, 200])).toBe(100);
+  });
+
+  it("averages middle pair of even-length array", () => {
     expect(computeMedian([10, 20, 30, 40])).toBe(25);
   });
 });
 
-describe("useCometBftEvents — reconnect backoff", () => {
-  it("backoff doubles up to 30s cap", () => {
+describe("dedup logic", () => {
+  it("coordinator-first path: dedup map detects CometBFT duplicate", () => {
+    const dedupMap = new Map<string, { cometMs: number | null; coordMs: number | null }>();
+
+    const event: ChainEvent = {
+      name: "poker.seat_taken",
+      tableId: "1",
+      eventIndex: 1,
+      timeMs: 1000,
+      data: { tableId: "1", seat: "3" },
+    };
+
+    const fp = fingerprint(event);
+
+    // Coordinator arrives first
+    expect(dedupMap.get(fp)).toBeUndefined();
+    dedupMap.set(fp, { cometMs: null, coordMs: 1000 });
+
+    // CometBFT arrives second — finds existing entry
+    const entry = dedupMap.get(fp);
+    expect(entry).toBeDefined();
+    expect(entry!.coordMs).toBe(1000);
+    expect(entry!.cometMs).toBeNull();
+  });
+
+  it("CometBFT-first path: delay measurement is positive", () => {
+    const dedupMap = new Map<string, { cometMs: number | null; coordMs: number | null }>();
+
+    const event: ChainEvent = {
+      name: "poker.action",
+      tableId: "2",
+      handId: "10",
+      eventIndex: 5,
+      timeMs: 1000,
+      data: { tableId: "2", handId: "10", action: "call" },
+    };
+
+    const fp = fingerprint(event);
+
+    // CometBFT first
+    dedupMap.set(fp, { cometMs: 1000, coordMs: null });
+
+    // Coordinator second
+    const existing = dedupMap.get(fp)!;
+    existing.coordMs = 1200;
+
+    const delay = existing.coordMs - existing.cometMs!;
+    expect(delay).toBe(200);
+  });
+});
+
+describe("reconnect backoff", () => {
+  it("doubles up to 30s cap", () => {
     let backoffMs = 1000;
     const MAX_BACKOFF_MS = 30_000;
     const steps: number[] = [];
