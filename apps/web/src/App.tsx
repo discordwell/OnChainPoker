@@ -16,7 +16,7 @@ import { parsePlayerTable, type PlayerTableState } from "./lib/parsePlayerTable"
 import { useChainVerification } from "./components/useChainVerification";
 import { ChainVerificationBadge } from "./components/ChainVerificationBadge";
 import { useCometBftEvents } from "./components/useCometBftEvents";
-import type { ChainEvent as CometChainEvent } from "./lib/cometEventParser";
+import type { ChainEvent } from "./lib/cometEventParser";
 
 type TableInfo = {
   tableId: string;
@@ -43,15 +43,6 @@ type SeatIntent = {
   bond?: string;
   createdAtMs: number;
   expiresAtMs: number;
-};
-
-type ChainEvent = {
-  name: string;
-  tableId?: string;
-  handId?: string;
-  eventIndex: number;
-  timeMs: number;
-  data?: unknown;
 };
 
 type HealthResponse = {
@@ -500,8 +491,7 @@ export function App() {
   const refreshTimerRef = useRef<number | null>(null);
   const subscribedTableRef = useRef<string | null>(null);
   const selectedTableRef = useRef<string>("");
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ChainEvent types differ slightly between App and cometEventParser
-  const recordCoordinatorEventRef = useRef<(event: any) => boolean>(() => true);
+  const recordCoordinatorEventRef = useRef<(event: ChainEvent) => boolean>(() => true);
 
   const apiUrl = useCallback(
     (path: string) => `${coordinatorBase}${path.startsWith("/") ? path : `/${path}`}`,
@@ -904,7 +894,7 @@ export function App() {
 
   // CometBFT direct WebSocket — supplementary event source for timing verification
   const handleCometEvent = useCallback(
-    (ev: CometChainEvent) => {
+    (ev: ChainEvent) => {
       // Mirror coordinator's refresh logic (without setEvents to avoid duplicate log entries)
       scheduleTableRefresh();
       if (ev.tableId && ev.tableId === selectedTableRef.current) {

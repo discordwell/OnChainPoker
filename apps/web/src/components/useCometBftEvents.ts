@@ -222,18 +222,11 @@ export function useCometBftEvents({
           const existing = map.get(fp);
 
           if (existing) {
-            // Coordinator already delivered — record timing, skip
+            // Coordinator already delivered — record timing, skip.
+            // Don't record delay here: coordinator was faster, so there's
+            // no "coordinator lag" to measure. Only the recordCoordinatorEvent
+            // path (CometBFT first, coordinator second) produces meaningful delay.
             existing.cometMs = nowMs;
-            if (existing.coordMs != null) {
-              const delay = existing.coordMs - nowMs;
-              const w = delayWindowRef.current;
-              w.push(delay);
-              if (w.length > DELAY_WINDOW) w.shift();
-              setMetrics((prev) => ({
-                ...prev,
-                medianDelayMs: computeMedian(w),
-              }));
-            }
           } else {
             // CometBFT is first — call onChainEvent for data refresh
             map.set(fp, { cometMs: nowMs, coordMs: null });

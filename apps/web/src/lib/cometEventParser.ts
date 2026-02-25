@@ -10,7 +10,7 @@ export type ChainEvent = {
   handId?: string;
   eventIndex: number;
   timeMs: number;
-  data?: Record<string, string>;
+  data?: unknown;
 };
 
 type CometTxEventAttr = { key: string; value: string };
