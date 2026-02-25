@@ -124,3 +124,49 @@
   margin-top: 6px;
   font-size: 0.65rem;
 }
+
+/* ─── CometBFT Direct Link Section ─── */
+
+.chain-badge__comet-section {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line, #d8d6c9);
+}
+
+.chain-badge__comet-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 2px 0;
+  font-size: 0.67rem;
+}
+
+.chain-badge__comet-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chain-badge__comet-dot--connected {
+  background: var(--accent, #0e7a5d);
+}
+
+.chain-badge__comet-dot--connecting {
+  background: var(--muted, #4e5f59);
+  animation: badge-pulse 1.2s infinite;
+}
+
+.chain-badge__comet-dot--disconnected {
+  background: var(--muted, #4e5f59);
+}
+
+.chain-badge__comet-dot--error {
+  background: var(--danger, #a32a2a);
+}
+
+.chain-badge__comet-warn {
+  color: var(--danger, #a32a2a);
+  font-weight: 600;
+}

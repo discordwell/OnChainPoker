@@ -1,18 +1,27 @@
 import { useState } from "react";
 import type { ChainVerificationResult } from "./useChainVerification";
+import type { CometBftMetrics } from "./useCometBftEvents";
 import "./ChainVerificationBadge.css";
+
+type Props = ChainVerificationResult & {
+  cometMetrics?: CometBftMetrics;
+};
 
 export function ChainVerificationBadge({
   status,
   mismatches,
   lastVerifiedAt,
   verify,
-}: ChainVerificationResult) {
+  cometMetrics,
+}: Props) {
   const [open, setOpen] = useState(false);
 
   if (status === "idle") return null;
 
+  const cometConnected = cometMetrics?.status === "connected";
+
   const label =
+    status === "verified" && cometConnected ? "Chain Verified (Live)" :
     status === "verified" ? "Chain Verified" :
     status === "pending" ? "Verifying\u2026" :
     status === "mismatch" ? "Chain Mismatch!" :
@@ -61,6 +70,34 @@ export function ChainVerificationBadge({
             <p className="chain-badge__timestamp">
               Last verified: {new Date(lastVerifiedAt).toLocaleTimeString()}
             </p>
+          )}
+
+          {cometMetrics && (
+            <div className="chain-badge__comet-section">
+              <h5>Direct Chain Link</h5>
+              <div className="chain-badge__comet-row">
+                <span className={`chain-badge__comet-dot chain-badge__comet-dot--${cometMetrics.status}`} />
+                <span>{cometMetrics.status === "connected" ? "Connected" : cometMetrics.status === "connecting" ? "Connecting\u2026" : cometMetrics.status === "error" ? "Error" : "Disconnected"}</span>
+              </div>
+              {cometMetrics.eventsReceived > 0 && (
+                <div className="chain-badge__comet-row">
+                  <span>Events received:</span>
+                  <span>{cometMetrics.eventsReceived}</span>
+                </div>
+              )}
+              {cometMetrics.medianDelayMs != null && (
+                <div className="chain-badge__comet-row">
+                  <span>Coordinator delay:</span>
+                  <span>+{cometMetrics.medianDelayMs}ms</span>
+                </div>
+              )}
+              {cometMetrics.coordinatorMisses > 0 && (
+                <div className="chain-badge__comet-row chain-badge__comet-warn">
+                  <span>Coordinator misses:</span>
+                  <span>{cometMetrics.coordinatorMisses}</span>
+                </div>
+              )}
+            </div>
           )}
         </span>
       )}

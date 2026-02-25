@@ -15,6 +15,8 @@ import { encryptEntropy, decryptEntropy, isEncryptedBundle, parseBundle } from "
 import { parsePlayerTable, type PlayerTableState } from "./lib/parsePlayerTable";
 import { useChainVerification } from "./components/useChainVerification";
 import { ChainVerificationBadge } from "./components/ChainVerificationBadge";
+import { useCometBftEvents } from "./components/useCometBftEvents";
+import type { ChainEvent as CometChainEvent } from "./lib/cometEventParser";
 
 type TableInfo = {
   tableId: string;
@@ -498,6 +500,8 @@ export function App() {
   const refreshTimerRef = useRef<number | null>(null);
   const subscribedTableRef = useRef<string | null>(null);
   const selectedTableRef = useRef<string>("");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- ChainEvent types differ slightly between App and cometEventParser
+  const recordCoordinatorEventRef = useRef<(event: any) => boolean>(() => true);
 
   const apiUrl = useCallback(
     (path: string) => `${coordinatorBase}${path.startsWith("/") ? path : `/${path}`}`,
@@ -728,14 +732,20 @@ export function App() {
           const chainEvent = msg.event as ChainEvent | undefined;
           if (!chainEvent || typeof chainEvent.name !== "string") return;
 
+          // Always add to event log
           setEvents((prev) => [chainEvent, ...prev].slice(0, MAX_EVENTS));
-          scheduleTableRefresh();
 
-          if (chainEvent.tableId && chainEvent.tableId === selectedTableRef.current) {
-            void loadSeatIntents(chainEvent.tableId, false);
-            void loadDealerViews(chainEvent.tableId);
-            if (playerClientRef.current) {
-              void loadPlayerTable(chainEvent.tableId, false);
+          // Dedup: if CometBFT already triggered refresh, skip coordinator's refresh
+          const coordFirst = recordCoordinatorEventRef.current(chainEvent);
+          if (coordFirst) {
+            scheduleTableRefresh();
+
+            if (chainEvent.tableId && chainEvent.tableId === selectedTableRef.current) {
+              void loadSeatIntents(chainEvent.tableId, false);
+              void loadDealerViews(chainEvent.tableId);
+              if (playerClientRef.current) {
+                void loadPlayerTable(chainEvent.tableId, false);
+              }
             }
           }
 
@@ -891,6 +901,30 @@ export function App() {
     playerTable: playerTable.data,
     enabled: playerWallet.status === "connected",
   });
+
+  // CometBFT direct WebSocket — supplementary event source for timing verification
+  const handleCometEvent = useCallback(
+    (ev: CometChainEvent) => {
+      // Mirror coordinator's refresh logic (without setEvents to avoid duplicate log entries)
+      scheduleTableRefresh();
+      if (ev.tableId && ev.tableId === selectedTableRef.current) {
+        void loadSeatIntents(ev.tableId, false);
+        void loadDealerViews(ev.tableId);
+        if (playerClientRef.current) {
+          void loadPlayerTable(ev.tableId, false);
+        }
+      }
+    },
+    [scheduleTableRefresh, loadSeatIntents, loadDealerViews, loadPlayerTable],
+  );
+
+  const { metrics: cometMetrics, recordCoordinatorEvent } = useCometBftEvents({
+    rpcUrl: DEFAULT_COSMOS_RPC_URL,
+    enabled: true,
+    selectedTableId,
+    onChainEvent: handleCometEvent,
+  });
+  recordCoordinatorEventRef.current = recordCoordinatorEvent;
 
   // Sync seatedTableIds from observed player table state
   useEffect(() => {
@@ -1755,7 +1789,7 @@ export function App() {
           {!selectedTable && <p className="placeholder">Select a table to join as a player.</p>}
 
           {/* Chain verification badge */}
-          {selectedTableId && <ChainVerificationBadge {...chainVerification} />}
+          {selectedTableId && <ChainVerificationBadge {...chainVerification} cometMetrics={cometMetrics} />}
 
           {/* Visual poker table */}
           {playerTableForSelected && (() => {
