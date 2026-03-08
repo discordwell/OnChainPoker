@@ -19,12 +19,12 @@ class StubChainAdapter implements ChainAdapter {
 const defaultFaucetConfig: FaucetConfig = {
   enabled: false,
   mnemonic: null,
-  amount: "10000000",
-  denom: "uchips",
+  amount: "5000000",
+  denom: "utchips",
   cooldownMs: 3_600_000,
   ipCooldownMs: 600_000,
   bech32Prefix: "ocp",
-  gasPrice: "0uchips",
+  gasPrice: "0utchips",
   rpcUrl: "http://127.0.0.1:26657",
   lcdUrl: "http://127.0.0.1:1317",
 };
@@ -82,8 +82,8 @@ class MockFaucetService {
     return {
       enabled: true,
       address: "ocp1faucetaddr",
-      amount: "10000000",
-      denom: "uchips",
+      amount: "5000000",
+      denom: "utchips",
       cooldownSecs: 3600,
     };
   }
@@ -98,8 +98,8 @@ class MockFaucetService {
     this.dripCount++;
     return {
       txHash: `HASH${this.dripCount}`,
-      amount: "10000000",
-      denom: "uchips",
+      amount: "5000000",
+      denom: "utchips",
     };
   }
 
@@ -141,7 +141,7 @@ test("GET /v1/faucet/status returns enabled with faucet service", async () => {
     const data = await res.json();
     assert.equal(data.enabled, true);
     assert.equal(data.address, "ocp1faucetaddr");
-    assert.equal(data.amount, "10000000");
+    assert.equal(data.amount, "5000000");
   });
 });
 
@@ -164,7 +164,7 @@ test("POST /v1/faucet drips tokens", async () => {
     assert.equal(res.status, 200);
     const data = await res.json();
     assert.equal(data.txHash, "HASH1");
-    assert.equal(data.amount, "10000000");
+    assert.equal(data.amount, "5000000");
     assert.equal(faucet.getDripCount(), 1);
   });
 });
@@ -240,7 +240,7 @@ test("loadConfig parses faucet env vars", () => {
   });
   assert.equal(cfg.faucet.enabled, true);
   assert.equal(cfg.faucet.mnemonic, "test mnemonic words");
-  assert.equal(cfg.faucet.amount, "5000000");
+  assert.equal(cfg.faucet.amount, "5000000"); // env overrides default
   assert.equal(cfg.faucet.cooldownMs, 1_800_000);
   assert.equal(cfg.faucet.ipCooldownMs, 300_000);
 });

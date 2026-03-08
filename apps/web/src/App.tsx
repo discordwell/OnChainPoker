@@ -1280,8 +1280,9 @@ export function App() {
         setFaucetStatus({ kind: "error", message: msg });
         return;
       }
+      const displayDenom = data.denom?.startsWith("ut") ? "TCHIPS" : "CHIPS";
       const chips = (Number(data.amount) / 1_000_000).toFixed(0);
-      setFaucetStatus({ kind: "success", message: `Received ${chips} CHIPS (tx: ${data.txHash?.slice(0, 12)}...)` });
+      setFaucetStatus({ kind: "success", message: `Received ${chips} ${displayDenom} (tx: ${data.txHash?.slice(0, 12)}...)` });
       setTimeout(() => setFaucetStatus({ kind: "idle", message: null }), 8000);
     } catch (err: any) {
       setFaucetStatus({ kind: "error", message: err?.message ?? "network error" });
@@ -1878,7 +1879,7 @@ export function App() {
                       disabled={faucetStatus.kind === "pending"}
                       style={{ marginRight: "0.5rem" }}
                     >
-                      {faucetStatus.kind === "pending" ? "Requesting..." : "Get Testnet CHIPS"}
+                      {faucetStatus.kind === "pending" ? "Requesting..." : "Get Free TCHIPS"}
                     </button>
                     {faucetStatus.message && (
                       <p className={faucetStatus.kind === "error" ? "error-banner" : "hint"}>

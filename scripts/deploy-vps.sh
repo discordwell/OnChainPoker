@@ -100,8 +100,8 @@ if [ "$SKIP_BUILD" = false ]; then
   VITE_COORDINATOR_HTTP_URL=/ocp/api \
   VITE_COSMOS_RPC_URL=/ocp/rpc \
   VITE_COSMOS_LCD_URL=/ocp/lcd \
-  VITE_COSMOS_CHAIN_ID=onchainpoker-1 \
-  VITE_COSMOS_GAS_PRICE=0uchips \
+  VITE_COSMOS_CHAIN_ID=onchainpoker-testnet-1 \
+  VITE_COSMOS_GAS_PRICE=0utchips \
   pnpm -C apps/web build
 
   echo ">> Building coordinator..."

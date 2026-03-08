@@ -19,12 +19,12 @@ set -euo pipefail
 
 # ── Constants ──
 
-CHAIN_ID="onchainpoker-1"
-DENOM="uchips"
+CHAIN_ID="onchainpoker-testnet-1"
+DENOM="utchips"
 
-# Token allocation (in uchips = 10^-6 CHIPS)
+# Token allocation (in utchips = 10^-6 TCHIPS)
 #
-# | Purpose              | CHIPS       | uchips               |
+# | Purpose              | TCHIPS      | utchips              |
 # |----------------------|-------------|----------------------|
 # | Validator            | 10,000      | 10,000,000,000       |
 # | Faucet               | 100,000,000 | 100,000,000,000,000  |
@@ -167,27 +167,27 @@ path = sys.argv[1]
 with open(path, "r") as f:
     g = json.load(f)
 
-# Bank denom metadata
+# Bank denom metadata — testnet uses TCHIPS to distinguish from mainnet CHIPS
 g["app_state"]["bank"]["denom_metadata"] = [
     {
-        "description": "The native staking and gas token of the OnChainPoker network.",
+        "description": "The testnet token of the OnChainPoker network.",
         "denom_units": [
-            {"denom": "uchips", "exponent": 0, "aliases": ["microchips"]},
-            {"denom": "mchips", "exponent": 3, "aliases": ["millichips"]},
-            {"denom": "chips",  "exponent": 6, "aliases": []},
+            {"denom": "utchips", "exponent": 0, "aliases": ["microtchips"]},
+            {"denom": "mtchips", "exponent": 3, "aliases": ["millitchips"]},
+            {"denom": "tchips",  "exponent": 6, "aliases": []},
         ],
-        "base": "uchips",
-        "display": "chips",
-        "name": "OnChainPoker",
-        "symbol": "CHIPS",
+        "base": "utchips",
+        "display": "tchips",
+        "name": "OnChainPoker Testnet",
+        "symbol": "TCHIPS",
     }
 ]
 
 # Staking bond_denom
-g["app_state"]["staking"]["params"]["bond_denom"] = "uchips"
+g["app_state"]["staking"]["params"]["bond_denom"] = "utchips"
 
 # Pre-seeded poker table (id=1):
-# 5k/10k blinds (in uchips), 500k-5M buy-in, 30s timeouts
+# 5k/10k blinds (in utchips), 500k-5M buy-in, 30s timeouts
 g["app_state"]["poker"] = {
     "next_table_id": 2,
     "tables": [
@@ -284,11 +284,11 @@ log "  Home:           $OCPD_HOME"
 log "  Genesis SHA256: $GENESIS_HASH"
 log ""
 log "  Accounts:"
-log "    validator: $VALIDATOR_ADDR (${VALIDATOR_UCHIPS} uchips)"
-log "    faucet:    $FAUCET_ADDR (${FAUCET_UCHIPS} uchips)"
-log "    bot-0:     $BOT0_ADDR (${BOT_UCHIPS} uchips)"
-log "    bot-1:     $BOT1_ADDR (${BOT_UCHIPS} uchips)"
-log "    bot-2:     $BOT2_ADDR (${BOT_UCHIPS} uchips)"
+log "    validator: $VALIDATOR_ADDR (${VALIDATOR_UCHIPS} ${DENOM})"
+log "    faucet:    $FAUCET_ADDR (${FAUCET_UCHIPS} ${DENOM})"
+log "    bot-0:     $BOT0_ADDR (${BOT_UCHIPS} ${DENOM})"
+log "    bot-1:     $BOT1_ADDR (${BOT_UCHIPS} ${DENOM})"
+log "    bot-2:     $BOT2_ADDR (${BOT_UCHIPS} ${DENOM})"
 log ""
 log "  Pre-seeded table: id=1 (5k/10k blinds, 500k-5M buy-in)"
 log ""
