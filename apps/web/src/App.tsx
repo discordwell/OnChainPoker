@@ -1689,6 +1689,16 @@ export function App() {
     return () => { cancelled = true; window.clearInterval(timer); };
   }, [playerWallet.status, playerWallet.address]);
 
+  // Close sidebar on Escape
+  useEffect(() => {
+    if (!sidebarOpen) return;
+    const handler = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") setSidebarOpen(false);
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [sidebarOpen]);
+
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1761,11 +1771,9 @@ export function App() {
     ) : null
   );
 
-  // Determine onboarding step
+  // Determine onboarding step: show when not connected or not seated
   const showOnboarding = viewMode === "game" && (
-    playerWallet.status !== "connected" ||
-    (!playerSeat && !selectedTableId) ||
-    (!playerSeat && !!selectedTableId)
+    playerWallet.status !== "connected" || !playerSeat
   );
 
   if (viewMode === "game") {
@@ -1871,6 +1879,12 @@ export function App() {
 
         {/* ─── Game Stage ─── */}
         <main className="game-stage">
+          {playerTable.loading && playerWallet.status === "connected" && !playerTableForSelected && (
+            <p className="placeholder" style={{ position: "absolute", top: "1rem" }}>Loading table...</p>
+          )}
+          {playerTable.error && playerWallet.status === "connected" && (
+            <p className="error-banner" style={{ position: "absolute", top: "1rem", maxWidth: 400 }}>{playerTable.error}</p>
+          )}
           {renderPokerTable()}
 
           {/* Onboarding overlay */}
@@ -1894,7 +1908,7 @@ export function App() {
                 ) : !selectedTableId ? (
                   <>
                     <h2>Choose a Table</h2>
-                    <p>Select a table to join, or open the sidebar to create one.</p>
+                    <p>Select a table to join, or switch to admin view to create one.</p>
                     {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
                     <ul className="table-list">
                       {filteredTableList.slice(0, 8).map((table) => (

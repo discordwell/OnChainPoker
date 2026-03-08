@@ -878,6 +878,7 @@ pre {
   border-left: 1px solid var(--line);
   transform: translateX(100%);
   transition: transform 0.25s ease;
+  will-change: transform;
   overflow-y: auto;
   padding: 1rem;
   display: flex;
@@ -921,6 +922,7 @@ pre {
   backdrop-filter: blur(8px);
   max-height: 200px;
   padding: 0.5rem 1rem;
+  flex-shrink: 0;
 }
 
 .game-footer .chat-panel {
