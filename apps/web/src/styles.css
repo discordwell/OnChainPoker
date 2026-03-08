@@ -1003,6 +1003,35 @@ pre {
   box-shadow: 0 8px 24px rgba(14, 122, 93, 0.3);
 }
 
+/* ─── Spectator Banner ─── */
+
+.spectator-banner {
+  position: absolute;
+  bottom: 1rem;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 55;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(18, 22, 28, 0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  font-size: 0.82rem;
+  color: var(--muted);
+  max-width: calc(100% - 2rem);
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.spectator-banner span {
+  font-weight: 600;
+  color: var(--ink);
+}
+
 /* ─── Balance Fetch ─── */
 
 .balance-display {

@@ -14,7 +14,7 @@ RestartSec=5
 Environment=NODE_ENV=production
 Environment=COORDINATOR_HOST=127.0.0.1
 Environment=COORDINATOR_PORT=8788
-Environment=COORDINATOR_CHAIN_ADAPTER=cosmos
+Environment=COORDINATOR_CHAIN_ADAPTER=comet
 Environment=COORDINATOR_COSMOS_RPC_URL=http://127.0.0.1:26657
 Environment=COORDINATOR_COSMOS_LCD_URL=http://127.0.0.1:1317
 Environment=COORDINATOR_DEV_ROUTES=false

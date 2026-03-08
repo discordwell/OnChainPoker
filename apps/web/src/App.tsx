@@ -113,6 +113,7 @@ type WsStatus = "connecting" | "open" | "closed" | "error";
 
 type KeplrLike = {
   enable: (chainId: string) => Promise<void>;
+  experimentalSuggestChain?: (chainInfo: unknown) => Promise<void>;
   getOfflineSignerAuto?: (chainId: string) => Promise<unknown> | unknown;
   getOfflineSigner?: (chainId: string) => Promise<unknown> | unknown;
   getKey: (chainId: string) => Promise<{ bech32Address: string }>;
@@ -411,7 +412,10 @@ export function App() {
     error: null
   });
 
-  const [selectedTableId, setSelectedTableId] = useState<string>("");
+  const [selectedTableId, setSelectedTableId] = useState<string>(() => {
+    const urlTable = new URLSearchParams(window.location.search).get("table");
+    return urlTable ?? "";
+  });
   const [seatIntents, setSeatIntents] = useState<QueryState<SeatIntent[]>>({
     loading: false,
     data: null,
@@ -486,6 +490,7 @@ export function App() {
 
   const [viewMode, setViewMode] = useState<"game" | "admin">("game");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [showCreateTableModal, setShowCreateTableModal] = useState(false);
   const [playerBalance, setPlayerBalance] = useState<string | null>(null);
 
   useEffect(() => { saveHandHistory(handHistory); }, [handHistory]);
@@ -641,6 +646,14 @@ export function App() {
 
   useEffect(() => {
     selectedTableRef.current = selectedTableId;
+    // Sync URL with selected table
+    const url = new URL(window.location.href);
+    if (selectedTableId) {
+      url.searchParams.set("table", selectedTableId);
+    } else {
+      url.searchParams.delete("table");
+    }
+    window.history.replaceState(null, "", url.toString());
   }, [selectedTableId]);
 
   useEffect(() => {
@@ -884,6 +897,13 @@ export function App() {
     () => (playerTable.data?.tableId === selectedTableId ? playerTable.data : null),
     [playerTable.data, selectedTableId]
   );
+  // Spectator table state: parse coordinator raw data when player client isn't available
+  const spectatorTable = useMemo(() => {
+    if (playerTableForSelected) return null;
+    if (!rawTable.data) return null;
+    return parsePlayerTable(rawTable.data);
+  }, [rawTable.data, playerTableForSelected]);
+
   const playerSeat = useMemo(
     () => playerTableForSelected?.seats.find((seat) => seat.player === playerWallet.address) ?? null,
     [playerTableForSelected, playerWallet.address]
@@ -1306,6 +1326,35 @@ export function App() {
         );
       }
 
+      // Suggest the custom OCP chain to Keplr (required for non-default Cosmos chains)
+      try {
+        await keplr.experimentalSuggestChain?.({
+          chainId: DEFAULT_COSMOS_CHAIN_ID,
+          chainName: "OnChainPoker Testnet",
+          rpc: DEFAULT_COSMOS_RPC_URL,
+          rest: DEFAULT_COSMOS_LCD_URL,
+          bip44: { coinType: 118 },
+          bech32Config: {
+            bech32PrefixAccAddr: "ocp",
+            bech32PrefixAccPub: "ocppub",
+            bech32PrefixValAddr: "ocpvaloper",
+            bech32PrefixValPub: "ocpvaloperpub",
+            bech32PrefixConsAddr: "ocpvalcons",
+            bech32PrefixConsPub: "ocpvalconspub",
+          },
+          currencies: [{ coinDenom: "CHIPS", coinMinimalDenom: "uchips", coinDecimals: 6 }],
+          feeCurrencies: [{
+            coinDenom: "CHIPS",
+            coinMinimalDenom: "uchips",
+            coinDecimals: 6,
+            gasPriceStep: { low: 0, average: 0, high: 0 },
+          }],
+          stakeCurrency: { coinDenom: "CHIPS", coinMinimalDenom: "uchips", coinDecimals: 6 },
+        });
+      } catch (e) {
+        console.warn("[OCP] experimentalSuggestChain failed:", e);
+      }
+
       await keplr.enable(DEFAULT_COSMOS_CHAIN_ID);
 
       const getSigner = keplr.getOfflineSignerAuto ?? keplr.getOfflineSigner;
@@ -1539,6 +1588,7 @@ export function App() {
       const newTableId = findEventAttr(tx.events, "TableCreated", "tableId");
       setCreateTableSubmit({ kind: "success", message: `Table #${newTableId ?? "?"} created.` });
       setCreateTableForm(defaultCreateTableForm());
+      setShowCreateTableModal(false);
       await loadTables(false);
       if (newTableId) setSelectedTableId(newTableId);
     } catch (err) {
@@ -1719,16 +1769,18 @@ export function App() {
     ? (Number(playerBalance) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })
     : null;
 
-  // Shared poker table render
+  // Shared poker table render — works for both connected players and spectators
   const renderPokerTable = () => {
-    if (!playerTableForSelected) return null;
+    const tableData = playerTableForSelected ?? spectatorTable;
+    if (!tableData) return null;
+    const isSpectator = !playerTableForSelected;
     const tableProps = deriveTableProps({
-      raw: playerTableForSelected,
+      raw: tableData,
       rawDealer: null,
-      localAddress: playerWallet.status === "connected" ? playerWallet.address : null,
-      localHoleCards: holeCardState.cards,
-      actionEnabled: playerActionEnabled,
-      onAction: (action: string, amount?: string) => {
+      localAddress: isSpectator ? null : (playerWallet.status === "connected" ? playerWallet.address : null),
+      localHoleCards: isSpectator ? null : holeCardState.cards,
+      actionEnabled: isSpectator ? false : playerActionEnabled,
+      onAction: isSpectator ? () => {} : (action: string, amount?: string) => {
         onPlayerActionInputChange("action", action as PlayerActionForm["action"]);
         if (amount) onPlayerActionInputChange("amount", amount);
         if (action === "fold" || action === "check" || action === "call") {
@@ -1771,8 +1823,66 @@ export function App() {
     ) : null
   );
 
-  // Determine onboarding step: show when not connected or not seated
-  const showOnboarding = viewMode === "game" && (
+  // Shared create table form render
+  const renderCreateTableForm = () => (
+    <form className="create-table-form" onSubmit={(e) => {
+      void submitCreateTable(e);
+    }}>
+      <label>
+        Label
+        <input
+          value={createTableForm.label}
+          onChange={(e) => setCreateTableForm((prev) => ({ ...prev, label: e.target.value }))}
+          placeholder="My Table"
+        />
+      </label>
+      <div className="create-table-grid">
+        <label>
+          Small Blind
+          <input required value={createTableForm.smallBlind} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, smallBlind: e.target.value }))} inputMode="numeric" />
+        </label>
+        <label>
+          Big Blind
+          <input required value={createTableForm.bigBlind} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, bigBlind: e.target.value }))} inputMode="numeric" />
+        </label>
+        <label>
+          Min Buy-In
+          <input required value={createTableForm.minBuyIn} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, minBuyIn: e.target.value }))} inputMode="numeric" />
+        </label>
+        <label>
+          Max Buy-In
+          <input required value={createTableForm.maxBuyIn} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxBuyIn: e.target.value }))} inputMode="numeric" />
+        </label>
+      </div>
+      <label>
+        Password (optional)
+        <input type="password" value={createTableForm.password} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, password: e.target.value }))} placeholder="Leave blank for open table" />
+      </label>
+      <details open={showCreateAdvanced} onToggle={(e) => setShowCreateAdvanced((e.target as HTMLDetailsElement).open)}>
+        <summary style={{ cursor: "pointer" }}>Advanced</summary>
+        <div className="create-table-advanced">
+          <label>Max Players<input value={createTableForm.maxPlayers} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxPlayers: e.target.value }))} inputMode="numeric" /></label>
+          <label>Action Timeout (s)<input value={createTableForm.actionTimeoutSecs} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, actionTimeoutSecs: e.target.value }))} inputMode="numeric" /></label>
+          <label>Dealer Timeout (s)<input value={createTableForm.dealerTimeoutSecs} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, dealerTimeoutSecs: e.target.value }))} inputMode="numeric" /></label>
+          <label>Player Bond<input value={createTableForm.playerBond} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, playerBond: e.target.value }))} inputMode="numeric" /></label>
+          <label>Rake BPS<input value={createTableForm.rakeBps} onChange={(e) => setCreateTableForm((prev) => ({ ...prev, rakeBps: e.target.value }))} inputMode="numeric" /></label>
+        </div>
+      </details>
+      <button type="submit" disabled={createTableSubmit.kind === "pending" || playerWallet.status !== "connected"}>
+        {createTableSubmit.kind === "pending" ? "Creating..." : "Create Table"}
+      </button>
+      {createTableSubmit.message && (
+        <p className={createTableSubmit.kind === "success" ? "create-table-success" : createTableSubmit.kind === "error" ? "error-banner" : "hint"}>
+          {createTableSubmit.message}
+        </p>
+      )}
+    </form>
+  );
+
+  // Lobby overlay: only when no table selected (allows browsing without wallet)
+  const showLobby = viewMode === "game" && !selectedTableId;
+  // Spectator/sit banner: table selected but not yet playing
+  const showActionBanner = viewMode === "game" && !!selectedTableId && (
     playerWallet.status !== "connected" || !playerSeat
   );
 
@@ -1809,6 +1919,17 @@ export function App() {
                 <strong>Table #{selectedTable.tableId}</strong>
                 <span>{selectedTable.params.smallBlind}/{selectedTable.params.bigBlind}</span>
                 <span className={`badge ${statusTone(selectedTable.status)}`}>{selectedTable.status}</span>
+                <button
+                  type="button"
+                  className="topbar-btn topbar-btn--icon"
+                  title="Copy table link"
+                  onClick={() => {
+                    const url = `${window.location.origin}${window.location.pathname}?table=${selectedTable.tableId}`;
+                    void navigator.clipboard.writeText(url);
+                  }}
+                >
+                  {"\uD83D\uDD17"}
+                </button>
               </>
             ) : (
               <span>No table selected</span>
@@ -1887,42 +2008,40 @@ export function App() {
           )}
           {renderPokerTable()}
 
-          {/* Onboarding overlay */}
-          {showOnboarding && !playerSeat && (
+          {/* Lobby overlay — browse tables without wallet */}
+          {showLobby && (
             <div className="onboard-overlay">
               <div className="onboard-card">
-                {playerWallet.status !== "connected" ? (
+                <h2>OnChainPoker</h2>
+                <p>Provably fair poker on the Cosmos blockchain.</p>
+                {playerWallet.status !== "connected" && (
+                  <button
+                    className="onboard-btn"
+                    type="button"
+                    onClick={connectWallet}
+                    disabled={playerWallet.status === "connecting"}
+                  >
+                    {playerWallet.status === "connecting" ? "Connecting..." : "Connect Wallet"}
+                  </button>
+                )}
+                {playerWallet.error && <p className="error-banner">{playerWallet.error}</p>}
+                {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
+                {filteredTableList.length > 0 && (
                   <>
-                    <h2>Welcome to OnChainPoker</h2>
-                    <p>Provably fair poker on the Cosmos blockchain. Connect your wallet to start playing.</p>
-                    <button
-                      className="onboard-btn"
-                      type="button"
-                      onClick={connectWallet}
-                      disabled={playerWallet.status === "connecting"}
-                    >
-                      {playerWallet.status === "connecting" ? "Connecting..." : "Connect Wallet"}
-                    </button>
-                    {playerWallet.error && <p className="error-banner">{playerWallet.error}</p>}
-                  </>
-                ) : !selectedTableId ? (
-                  <>
-                    <h2>Choose a Table</h2>
-                    <p>Select a table to join, or switch to admin view to create one.</p>
-                    {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
+                    <p className="hint" style={{ marginTop: "0.5rem" }}>
+                      {playerWallet.status === "connected" ? "Select a table to join" : "Select a table to watch"}
+                    </p>
                     <ul className="table-list">
                       {filteredTableList.slice(0, 8).map((table) => (
                         <li key={table.tableId}>
                           <button
                             type="button"
-                            className={`table-row ${table.tableId === selectedTableId ? "active" : ""}`}
+                            className="table-row"
                             onClick={() => setSelectedTableId(table.tableId)}
                           >
                             <div>
                               <strong>#{table.tableId}{table.label ? ` ${table.label}` : ""}</strong>
-                              <p>
-                                blinds {table.params.smallBlind}/{table.params.bigBlind}
-                              </p>
+                              <p>blinds {table.params.smallBlind}/{table.params.bigBlind}</p>
                             </div>
                             <div className="table-meta">
                               <span className={`badge ${statusTone(table.status)}`}>{table.status}</span>
@@ -1932,59 +2051,74 @@ export function App() {
                       ))}
                     </ul>
                   </>
-                ) : (
-                  <>
-                    <h2>Take a Seat</h2>
-                    <p>Table #{selectedTableId} &mdash; {selectedTable?.params.smallBlind}/{selectedTable?.params.bigBlind} blinds</p>
-                    <form className="seat-form" onSubmit={submitPlayerSeat}>
-                      <label>
-                        Buy-In (chips)
-                        <input
-                          required
-                          value={playerSeatForm.buyIn}
-                          onChange={(event) => onPlayerSeatInputChange("buyIn", event.target.value)}
-                          placeholder={selectedTable?.params.minBuyIn ?? "1000000"}
-                          disabled={playerSitSubmit.kind === "pending"}
-                        />
-                      </label>
-                      {selectedTable?.params?.passwordHash && (
-                        <label>
-                          Password
-                          <input
-                            type="password"
-                            value={playerSeatForm.password}
-                            onChange={(event) => onPlayerSeatInputChange("password", event.target.value)}
-                            placeholder="Table password"
-                            disabled={playerSitSubmit.kind === "pending"}
-                          />
-                        </label>
-                      )}
-                      <button
-                        type="submit"
-                        className="onboard-btn"
-                        disabled={playerSitSubmit.kind === "pending" || playerWallet.status !== "connected"}
-                      >
-                        {playerSitSubmit.kind === "pending" ? "Sitting..." : "Sit Down"}
-                      </button>
-                    </form>
-                    {playerSitSubmit.message && (
-                      <p className={playerSitSubmit.kind === "error" ? "error-banner" : "hint"}>
-                        {playerSitSubmit.message}
-                      </p>
-                    )}
-                    <button
-                      type="button"
-                      className="topbar-btn"
-                      onClick={() => setSelectedTableId("")}
-                    >
-                      Back to table list
-                    </button>
-                  </>
+                )}
+                {filteredTableList.length === 0 && !tables.loading && (
+                  <p className="placeholder">No tables yet.</p>
+                )}
+                {playerWallet.status === "connected" && (
+                  <button
+                    type="button"
+                    className="topbar-btn"
+                    style={{ marginTop: "0.5rem" }}
+                    onClick={() => setShowCreateTableModal(true)}
+                  >
+                    + Create Table
+                  </button>
                 )}
               </div>
             </div>
           )}
+
+          {/* Action banner — shown when watching a table but not yet playing */}
+          {showActionBanner && (
+            <div className="spectator-banner">
+              {playerWallet.status !== "connected" ? (
+                <>
+                  <span>Watching Table #{selectedTableId}</span>
+                  <button
+                    type="button"
+                    className="topbar-btn topbar-btn--accent"
+                    onClick={connectWallet}
+                    disabled={playerWallet.status === "connecting"}
+                  >
+                    {playerWallet.status === "connecting" ? "Connecting..." : "Connect to Play"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span>Table #{selectedTableId}</span>
+                  <button
+                    type="button"
+                    className="topbar-btn topbar-btn--accent"
+                    onClick={() => setSidebarOpen(true)}
+                  >
+                    Take a Seat
+                  </button>
+                </>
+              )}
+              <button
+                type="button"
+                className="topbar-btn"
+                onClick={() => setSelectedTableId("")}
+              >
+                Lobby
+              </button>
+            </div>
+          )}
         </main>
+
+        {/* ─── Create Table Modal ─── */}
+        {showCreateTableModal && (
+          <div className="onboard-overlay" style={{ position: "fixed", inset: 0 }} onClick={(e) => { if (e.target === e.currentTarget) setShowCreateTableModal(false); }}>
+            <div className="onboard-card">
+              <h2>Create Table</h2>
+              {renderCreateTableForm()}
+              <button type="button" className="topbar-btn" style={{ marginTop: "0.5rem" }} onClick={() => setShowCreateTableModal(false)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* ─── Sidebar ─── */}
         {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
@@ -2693,116 +2827,7 @@ export function App() {
           {playerWallet.status === "connected" && (
             <div style={{ marginTop: "1rem" }}>
               <h4>Create Table</h4>
-              <form className="create-table-form" onSubmit={submitCreateTable}>
-                <label>
-                  Label
-                  <input
-                    value={createTableForm.label}
-                    onChange={(e) => setCreateTableForm((prev) => ({ ...prev, label: e.target.value }))}
-                    placeholder="My Table"
-                  />
-                </label>
-                <div className="create-table-grid">
-                  <label>
-                    Small Blind
-                    <input
-                      required
-                      value={createTableForm.smallBlind}
-                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, smallBlind: e.target.value }))}
-                      inputMode="numeric"
-                    />
-                  </label>
-                  <label>
-                    Big Blind
-                    <input
-                      required
-                      value={createTableForm.bigBlind}
-                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, bigBlind: e.target.value }))}
-                      inputMode="numeric"
-                    />
-                  </label>
-                  <label>
-                    Min Buy-In
-                    <input
-                      required
-                      value={createTableForm.minBuyIn}
-                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, minBuyIn: e.target.value }))}
-                      inputMode="numeric"
-                    />
-                  </label>
-                  <label>
-                    Max Buy-In
-                    <input
-                      required
-                      value={createTableForm.maxBuyIn}
-                      onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxBuyIn: e.target.value }))}
-                      inputMode="numeric"
-                    />
-                  </label>
-                </div>
-                <label>
-                  Password (optional)
-                  <input
-                    type="password"
-                    value={createTableForm.password}
-                    onChange={(e) => setCreateTableForm((prev) => ({ ...prev, password: e.target.value }))}
-                    placeholder="Leave blank for open table"
-                  />
-                </label>
-                <details open={showCreateAdvanced} onToggle={(e) => setShowCreateAdvanced((e.target as HTMLDetailsElement).open)}>
-                  <summary style={{ cursor: "pointer" }}>Advanced</summary>
-                  <div className="create-table-advanced">
-                    <label>
-                      Max Players
-                      <input
-                        value={createTableForm.maxPlayers}
-                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, maxPlayers: e.target.value }))}
-                        inputMode="numeric"
-                      />
-                    </label>
-                    <label>
-                      Action Timeout (s)
-                      <input
-                        value={createTableForm.actionTimeoutSecs}
-                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, actionTimeoutSecs: e.target.value }))}
-                        inputMode="numeric"
-                      />
-                    </label>
-                    <label>
-                      Dealer Timeout (s)
-                      <input
-                        value={createTableForm.dealerTimeoutSecs}
-                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, dealerTimeoutSecs: e.target.value }))}
-                        inputMode="numeric"
-                      />
-                    </label>
-                    <label>
-                      Player Bond
-                      <input
-                        value={createTableForm.playerBond}
-                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, playerBond: e.target.value }))}
-                        inputMode="numeric"
-                      />
-                    </label>
-                    <label>
-                      Rake BPS
-                      <input
-                        value={createTableForm.rakeBps}
-                        onChange={(e) => setCreateTableForm((prev) => ({ ...prev, rakeBps: e.target.value }))}
-                        inputMode="numeric"
-                      />
-                    </label>
-                  </div>
-                </details>
-                <button type="submit" disabled={createTableSubmit.kind === "pending" || playerWallet.status !== "connected"}>
-                  {createTableSubmit.kind === "pending" ? "Creating..." : "Create Table"}
-                </button>
-              </form>
-              {createTableSubmit.message && (
-                <p className={createTableSubmit.kind === "success" ? "create-table-success" : createTableSubmit.kind === "error" ? "error-banner" : "hint"}>
-                  {createTableSubmit.message}
-                </p>
-              )}
+              {renderCreateTableForm()}
             </div>
           )}
         </section>

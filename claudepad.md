@@ -2,6 +2,15 @@
 
 ## Session Summaries
 
+### 2026-03-08T~UTC — Make OCP Playable (6-Step User Journey Fix)
+Audited and fixed the full user journey from visit → spectate → connect → play:
+- **Keplr chain suggestion**: Added `experimentalSuggestChain()` before `keplr.enable()` in `connectWallet()` with full OCP chain config (bech32 prefixes, currencies, gas price steps). Extended `KeplrLike` type. Wrapped in try/catch for wallet compat.
+- **Coordinator adapter fix**: Changed `COORDINATOR_CHAIN_ADAPTER=cosmos` → `comet` in `deploy/ocp-coordinator.service`. The `cosmos` adapter blocked v0 ABCI table queries; `comet` adapter works.
+- **Spectator mode**: Added `spectatorTable` memo parsing `rawTable.data` via `parsePlayerTable()` for wallet-free table viewing. Modified `renderPokerTable()` to fall back to spectator data. Replaced blocking onboarding overlay with lobby overlay (no table selected) + floating spectator banner (table selected). Users can browse and watch tables without connecting.
+- **URL table sharing**: `selectedTableId` initialized from `?table=X` URL param. Effect syncs URL on table selection via `replaceState`. Added copy-link button (chain icon) in topbar center. `loadTables` validates URL-specified table against known tables.
+- **Game mode table creation**: Extracted `renderCreateTableForm()` helper (shared between game modal and admin view). Added `showCreateTableModal` state, "+ Create Table" button in lobby, modal with click-outside dismiss. Auto-closes on success.
+- **CSS**: Added `.spectator-banner` (absolute bottom-center, glass panel, flexbox with action buttons).
+
 ### 2026-03-08T~UTC — Game Room Redesign (Dark Casino Luxury)
 Full UI redesign from developer "Control Room" dashboard to immersive dark casino poker room:
 - **Dark theme**: Replaced all CSS variables (--bg-a, --bg-b, --panel, --ink, --line, etc.) with dark palette. Updated body gradients, input/select/pre backgrounds, error banners, badges, table rows for dark mode.
