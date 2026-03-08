@@ -154,7 +154,7 @@ func TestCreateTable_RejectsNonZeroRake(t *testing.T) {
 
 func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, bk := newKeeper(t, time.Unix(100, 0).UTC())
@@ -193,7 +193,7 @@ func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 	require.Equal(t, "a2m", bk.calls[0].kind)
 	require.Equal(t, playerAcc, bk.calls[0].fromAcc)
 	require.Equal(t, types.ModuleName, bk.calls[0].toModule)
-	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uocp", sdkmath.NewInt(107))), bk.calls[0].coins)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uchips", sdkmath.NewInt(107))), bk.calls[0].coins)
 
 	tbl, err := k.GetTable(ctx, 1)
 	require.NoError(t, err)
@@ -212,7 +212,7 @@ func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 	require.Equal(t, "m2a", bk.calls[1].kind)
 	require.Equal(t, types.ModuleName, bk.calls[1].fromModule)
 	require.Equal(t, playerAcc, bk.calls[1].toAcc)
-	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uocp", sdkmath.NewInt(107))), bk.calls[1].coins)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uchips", sdkmath.NewInt(107))), bk.calls[1].coins)
 
 	tbl2, err := k.GetTable(ctx, 1)
 	require.NoError(t, err)
@@ -224,7 +224,7 @@ func TestSitLeave_EscrowAndReturnCoins(t *testing.T) {
 
 func TestTick_SlashesBondAndMovesCoinsToFeeCollector(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	now := time.Unix(100, 0).UTC()
@@ -288,7 +288,7 @@ func TestTick_SlashesBondAndMovesCoinsToFeeCollector(t *testing.T) {
 	require.Equal(t, "m2m", bk.calls[0].kind)
 	require.Equal(t, types.ModuleName, bk.calls[0].fromModule)
 	require.Equal(t, authtypes.FeeCollectorName, bk.calls[0].toModule)
-	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uocp", sdkmath.NewInt(5))), bk.calls[0].coins)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uchips", sdkmath.NewInt(5))), bk.calls[0].coins)
 
 	tbl2, err := k.GetTable(ctx, 1)
 	require.NoError(t, err)
@@ -776,7 +776,7 @@ func TestAllInCall(t *testing.T) {
 
 func TestStartHandRejectsOnePlayer(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -807,7 +807,7 @@ func TestStartHandRejectsOnePlayer(t *testing.T) {
 
 func TestSitAutoAssignDifferentPlayers(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -850,7 +850,7 @@ func TestSitAutoAssignDifferentPlayers(t *testing.T) {
 
 func TestSitRejectsSamePlayerTwice(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -882,7 +882,7 @@ func TestSitRejectsSamePlayerTwice(t *testing.T) {
 
 func TestSitPasswordRequired(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -928,7 +928,7 @@ func TestSitPasswordRequired(t *testing.T) {
 
 func TestSitAutoAssignSeat(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -962,7 +962,7 @@ func TestSitAutoAssignSeat(t *testing.T) {
 
 func TestAutoAssignSeatFullTable(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -995,7 +995,7 @@ func TestAutoAssignSeatFullTable(t *testing.T) {
 
 func TestAutoAssignSeatEmptyTable(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -1101,7 +1101,7 @@ func TestCreateTableWithPassword(t *testing.T) {
 
 func TestRebuy_HappyPath(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, bk := newKeeper(t, time.Unix(100, 0).UTC())
@@ -1138,7 +1138,7 @@ func TestRebuy_HappyPath(t *testing.T) {
 	require.Len(t, bk.calls, 2)
 	require.Equal(t, "a2m", bk.calls[1].kind)
 	require.Equal(t, playerAcc, bk.calls[1].fromAcc)
-	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uocp", sdkmath.NewInt(200))), bk.calls[1].coins)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uchips", sdkmath.NewInt(200))), bk.calls[1].coins)
 }
 
 func TestRebuy_RejectsNotSeated(t *testing.T) {
@@ -1176,7 +1176,7 @@ func TestRebuy_RejectsDuringActiveHand(t *testing.T) {
 
 func TestRebuy_RejectsExceedMaxBuyIn(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -1207,7 +1207,7 @@ func TestRebuy_RejectsExceedMaxBuyIn(t *testing.T) {
 
 func TestRebuy_RejectsZeroAmount(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -1238,7 +1238,7 @@ func TestRebuy_RejectsZeroAmount(t *testing.T) {
 
 func TestRebuy_AllowsBetweenHands(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
@@ -1275,7 +1275,7 @@ func TestRebuy_AllowsBetweenHands(t *testing.T) {
 
 func TestRebuy_OverflowProtection(t *testing.T) {
 	oldDenom := sdk.DefaultBondDenom
-	sdk.DefaultBondDenom = "uocp"
+	sdk.DefaultBondDenom = "uchips"
 	defer func() { sdk.DefaultBondDenom = oldDenom }()
 
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())

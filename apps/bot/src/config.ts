@@ -56,7 +56,7 @@ export function loadConfig(): BotConfig {
     cosmosRpcUrl: envStr("BOT_COSMOS_RPC_URL", "http://127.0.0.1:26657"),
     cosmosLcdUrl: envStr("BOT_COSMOS_LCD_URL", "http://127.0.0.1:1317"),
     bech32Prefix: envStr("BOT_BECH32_PREFIX", "ocp"),
-    gasPrice: envStr("BOT_GAS_PRICE", "0uocp"),
+    gasPrice: envStr("BOT_GAS_PRICE", "0uchips"),
     pollIntervalMs: envInt("BOT_POLL_INTERVAL_MS", 1000),
     autoStartHand: envBool("BOT_AUTO_START_HAND", true),
     autoSit: envBool("BOT_AUTO_SIT", true),

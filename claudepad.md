@@ -2,6 +2,14 @@
 
 ## Session Summaries
 
+### 2026-03-08T~UTC — Stale RPC Connection Fix + Chain Reinit
+Fixed the final blocker preventing hands from completing on the public testnet:
+- **Socket hang up fix**: CosmJS `SigningStargateClient` keeps persistent HTTP connections to CometBFT RPC. During ~20s shuffle proof computation, the connection goes stale (server closes idle keep-alive). Added reconnect-on-socket-error logic in `signAndBroadcastAuto()` — detects socket/ECONNRESET errors on `simulate()`, `signAndBroadcastSync()`, and `signAndBroadcast()`, then reconnects and retries once. Changed `client` to `let` with `get client()` accessor on the returned object.
+- **Dealer timeout too short**: Genesis had `dealer_timeout_secs: 30` but shuffle takes ~20s compute + network time. Increased to 120s. Required chain reinit.
+- **GoLevelDB empty-value DB wrapper**: Created `dbfix.go` wrapping the database at the `DB` layer (not just query layer). `Get()` falls back to iterator seek when nil. `Has()` uses same fallback. Wired in `NewOcpApp` before `app.Load()`.
+- **Deploy script**: Changed from hardcoded 3 dealers to dynamic detection of `dealer-*.env` files.
+- **Result**: Full hands play autonomously — shuffle proofs submit reliably, hands complete end-to-end, bots playing continuously.
+
 ### 2026-03-07T~UTC — Public Testnet: Faucet + Bot Deploy Infrastructure
 Implemented public testnet infrastructure for anyone to play poker at discordwell.com/ocp:
 - **Faucet service**: New `FaucetService` class in coordinator with `GET /v1/faucet/status` and `POST /v1/faucet` endpoints. Address/IP rate limiting with configurable cooldowns, bech32 prefix validation, signing mutex, bounded cooldown maps. 7 new tests (18 total).

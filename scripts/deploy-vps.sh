@@ -101,7 +101,7 @@ if [ "$SKIP_BUILD" = false ]; then
   VITE_COSMOS_RPC_URL=/ocp/rpc \
   VITE_COSMOS_LCD_URL=/ocp/lcd \
   VITE_COSMOS_CHAIN_ID=onchainpoker-testnet-1 \
-  VITE_COSMOS_GAS_PRICE=0utchips \
+  VITE_COSMOS_GAS_PRICE=0uchips \
   pnpm -C apps/web build
 
   echo ">> Building coordinator..."
@@ -272,18 +272,27 @@ NODE"
   echo ">> [$TARGET] Validating required runtime env files..."
   require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/coordinator.env"
   require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-0.env"
-  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-1.env"
-  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-2.env"
 
   # Reload and restart services
   echo ">> [$TARGET] Restarting services..."
   ssh "$VPS_SSH" "sudo systemctl daemon-reload"
-  ssh "$VPS_SSH" "sudo systemctl restart ocp-coordinator ocp-dealer-daemon@0 ocp-dealer-daemon@1 ocp-dealer-daemon@2"
+
+  # Restart coordinator
+  ssh "$VPS_SSH" "sudo systemctl restart ocp-coordinator"
   ensure_service_active "$VPS_SSH" "ocp-coordinator"
-  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@0"
-  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@1"
-  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@2"
   wait_remote_http "$VPS_SSH" "coordinator health" "http://127.0.0.1:8788/health" 45
+
+  # Restart dealer daemons (detect dealer-*.env in config dir)
+  DEALER_INSTANCES="$(ssh "$VPS_SSH" "ls $VPS_OCP_DIR/config/dealer-*.env 2>/dev/null | sed 's|.*/dealer-||;s|\.env$||' || true")"
+  if [[ -n "$DEALER_INSTANCES" ]]; then
+    for DEALER_ID in $DEALER_INSTANCES; do
+      echo "   Restarting ocp-dealer-daemon@$DEALER_ID..."
+      ssh "$VPS_SSH" "sudo systemctl restart ocp-dealer-daemon@$DEALER_ID"
+      ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@$DEALER_ID"
+    done
+  else
+    echo "   No dealer env files found — skipping dealer restart"
+  fi
 
   # Restart any bot instances (detect bot-*.env in config dir)
   BOT_INSTANCES="$(ssh "$VPS_SSH" "ls $VPS_OCP_DIR/config/bot-*.env 2>/dev/null | sed 's|.*/bot-||;s|\.env$||' || true")"

@@ -309,31 +309,27 @@ export class DealerDaemon {
         await this.client.dealerInitHand({ tableId, handId, epochId }).catch((err) =>
           logError(`initHand for table ${tableId} hand ${handId} failed`, err)
         );
-        return; // re-process on next poll
+      } else {
+        // Try to shuffle (handleShuffle reads authoritative shuffleStep from DealerHand)
+        await handleShuffle({
+          client: this.client,
+          config: this.config,
+          tableId,
+          handId,
+          epochMembers,
+        }).catch((err) => logError("shuffle error", err));
+
+        // Always attempt finalization — maybeFinalizeDeck checks readiness internally
+        await maybeFinalizeDeck({
+          client: this.client,
+          config: this.config,
+          tableId,
+          handId,
+        }).catch(() => {});
       }
-
-      // Try to shuffle (handleShuffle reads authoritative shuffleStep from DealerHand)
-      await handleShuffle({
-        client: this.client,
-        config: this.config,
-        tableId,
-        handId,
-        epochMembers,
-      }).catch((err) => logError("shuffle error", err));
-
-      // Always attempt finalization — maybeFinalizeDeck checks readiness internally
-      await maybeFinalizeDeck({
-        client: this.client,
-        config: this.config,
-        tableId,
-        handId,
-      }).catch(() => {});
-      return;
-    }
-
-    // After deck finalization, submit enc shares for hole cards
-    // Phase may still be SHUFFLE (poker module transitions after enc shares) or BETTING
-    if (deckFinalized && (phase === "shuffle" || phase === "betting")) {
+    } else if (deckFinalized && (phase === "shuffle" || phase === "betting")) {
+      // After deck finalization, submit enc shares for hole cards
+      // Phase may still be SHUFFLE (poker module transitions after enc shares) or BETTING
       await handleEncShares({
         client: this.client,
         config: this.config,
@@ -342,16 +338,13 @@ export class DealerDaemon {
         handId,
         epochId,
       }).catch((err) => logError("enc shares error", err));
-      return;
-    }
-
-    // Reveal phases
-    if (
+    } else if (
       phase === "awaitFlop" ||
       phase === "awaitTurn" ||
       phase === "awaitRiver" ||
       phase === "awaitShowdown"
     ) {
+      // Reveal phases
       const pos = expectedRevealPos(table);
       if (pos != null) {
         await handlePubShare({

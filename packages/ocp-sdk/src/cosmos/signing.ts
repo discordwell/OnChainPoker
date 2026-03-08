@@ -117,6 +117,16 @@ async function waitForDeliverTxViaLcd(lcdUrl: string, txHash: string): Promise<D
   throw new Error(`timed out waiting for tx ${hash} via LCD${lastError ? ` (${lastError})` : ""}`);
 }
 
+function isSocketError(err: unknown): boolean {
+  const msg = String((err as Error)?.message ?? err).toLowerCase();
+  return msg.includes("socket hang up") ||
+    msg.includes("econnreset") ||
+    msg.includes("econnrefused") ||
+    msg.includes("epipe") ||
+    msg.includes("connection closed") ||
+    msg.includes("fetch failed");
+}
+
 export async function connectOcpCosmosSigningClient(args: {
   rpcUrl: string;
   signer: OfflineSigner;
@@ -134,26 +144,63 @@ export async function connectOcpCosmosSigningClient(args: {
   if (!address) throw new Error("empty signer address");
 
   const gasPrice = GasPrice.fromString(args.gasPrice);
-  const client = await SigningStargateClient.connectWithSigner(args.rpcUrl, args.signer, {
+  const connectOpts: SigningStargateClientOptions = {
     gasPrice,
     registry: args.registry,
     ...(args.stargate ?? {})
-  });
+  };
+
+  let client = await SigningStargateClient.connectWithSigner(args.rpcUrl, args.signer, connectOpts);
 
   const gasMultiplier = args.gasMultiplier ?? 1.3;
 
+  async function reconnect(): Promise<void> {
+    try { client.disconnect(); } catch { /* ignore */ }
+    client = await SigningStargateClient.connectWithSigner(args.rpcUrl, args.signer, connectOpts);
+  }
+
+  // Note: on socket-error retry, the original tx may already be in the mempool.
+  // Cosmos SDK account sequence numbers prevent double-execution, so retrying is
+  // safe (the retry will fail with sequence mismatch if the original succeeded).
+  // Callers should tolerate transient errors and re-check on-chain state.
   async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = ""): Promise<DeliverTxResponse> {
-    const gasUsed = await client.simulate(address, msgs, memo);
+    let gasUsed: number;
+    try {
+      gasUsed = await client.simulate(address, msgs, memo);
+    } catch (err) {
+      if (!isSocketError(err)) throw err;
+      // Stale RPC connection (e.g. after long shuffle computation) — reconnect and retry
+      await reconnect();
+      gasUsed = await client.simulate(address, msgs, memo);
+    }
+
     const gasLimit = Math.max(200_000, Math.ceil(gasUsed * gasMultiplier));
     const fee = calculateFee(gasLimit, gasPrice);
 
     if (args.lcdUrl) {
-      const txHash = await client.signAndBroadcastSync(address, msgs, fee, memo);
+      let txHash: string;
+      try {
+        txHash = await client.signAndBroadcastSync(address, msgs, fee, memo);
+      } catch (err) {
+        if (!isSocketError(err)) throw err;
+        await reconnect();
+        txHash = await client.signAndBroadcastSync(address, msgs, fee, memo);
+      }
       return waitForDeliverTxViaLcd(args.lcdUrl, txHash);
     }
 
-    return client.signAndBroadcast(address, msgs, fee, memo);
+    try {
+      return await client.signAndBroadcast(address, msgs, fee, memo);
+    } catch (err) {
+      if (!isSocketError(err)) throw err;
+      await reconnect();
+      return client.signAndBroadcast(address, msgs, fee, memo);
+    }
   }
 
-  return { address, client, signAndBroadcastAuto };
+  return {
+    address,
+    get client() { return client; },
+    signAndBroadcastAuto,
+  };
 }

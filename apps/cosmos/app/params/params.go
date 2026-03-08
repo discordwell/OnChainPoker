@@ -11,11 +11,11 @@ const (
 	Bech32Prefix = "ocp"
 
 	// BaseDenom is the on-chain base denomination (the smallest unit).
-	// Example: 1 ocp == 1_000_000 uocp (if you choose 6 decimals in metadata).
-	BaseDenom = "uocp"
+	// Example: 1 chips == 1_000_000 uchips (if you choose 6 decimals in metadata).
+	BaseDenom = "uchips"
 
 	// DisplayDenom is the optional human/display denomination.
-	DisplayDenom = "ocp"
+	DisplayDenom = "chips"
 
 	// DefaultChainID is a suggested chain-id for local dev/testnets.
 	// `ocpd init --chain-id <...>` can override this.

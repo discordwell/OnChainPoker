@@ -3,13 +3,13 @@
 ## Defaults
 
 - Bech32 prefix: `ocp`
-- Base denom: `uocp`
+- Base denom: `uchips` (display denom `chips`)
 - Home dir: `~/.ocpd`
 
 These are defined in:
 - `apps/cosmos/app/params/params.go`
 - `apps/cosmos/cmd/ocpd/cmd/root.go` (sets `sdk.DefaultBondDenom` and Bech32 prefixes)
-- `apps/cosmos/cmd/ocpd/cmd/commands.go` (defaults `app.toml` `minimum-gas-prices` to `0uocp`)
+- `apps/cosmos/cmd/ocpd/cmd/commands.go` (defaults `app.toml` `minimum-gas-prices` to `0uchips`)
 
 ## Legacy Amino Msg Names (Ledger Constraint)
 

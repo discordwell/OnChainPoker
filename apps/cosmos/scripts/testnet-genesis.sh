@@ -20,11 +20,12 @@ set -euo pipefail
 # ── Constants ──
 
 CHAIN_ID="onchainpoker-testnet-1"
-DENOM="utchips"
+DENOM="uchips"
 
-# Token allocation (in utchips = 10^-6 TCHIPS)
+# Token allocation (in uchips = 10^-6 CHIPS)
+# Note: same denom as mainnet — chain ID distinguishes testnet tokens.
 #
-# | Purpose              | TCHIPS      | utchips              |
+# | Purpose              | CHIPS       | uchips               |
 # |----------------------|-------------|----------------------|
 # | Validator            | 10,000      | 10,000,000,000       |
 # | Faucet               | 100,000,000 | 100,000,000,000,000  |
@@ -167,27 +168,27 @@ path = sys.argv[1]
 with open(path, "r") as f:
     g = json.load(f)
 
-# Bank denom metadata — testnet uses TCHIPS to distinguish from mainnet CHIPS
+# Bank denom metadata
 g["app_state"]["bank"]["denom_metadata"] = [
     {
-        "description": "The testnet token of the OnChainPoker network.",
+        "description": "The native staking and gas token of the OnChainPoker network.",
         "denom_units": [
-            {"denom": "utchips", "exponent": 0, "aliases": ["microtchips"]},
-            {"denom": "mtchips", "exponent": 3, "aliases": ["millitchips"]},
-            {"denom": "tchips",  "exponent": 6, "aliases": []},
+            {"denom": "uchips", "exponent": 0, "aliases": ["microchips"]},
+            {"denom": "mchips", "exponent": 3, "aliases": ["millichips"]},
+            {"denom": "chips",  "exponent": 6, "aliases": []},
         ],
-        "base": "utchips",
-        "display": "tchips",
-        "name": "OnChainPoker Testnet",
-        "symbol": "TCHIPS",
+        "base": "uchips",
+        "display": "chips",
+        "name": "OnChainPoker",
+        "symbol": "CHIPS",
     }
 ]
 
 # Staking bond_denom
-g["app_state"]["staking"]["params"]["bond_denom"] = "utchips"
+g["app_state"]["staking"]["params"]["bond_denom"] = "uchips"
 
 # Pre-seeded poker table (id=1):
-# 5k/10k blinds (in utchips), 500k-5M buy-in, 30s timeouts
+# 5k/10k blinds (in uchips), 500k-5M buy-in, 30s timeouts
 g["app_state"]["poker"] = {
     "next_table_id": 2,
     "tables": [
@@ -202,7 +203,7 @@ g["app_state"]["poker"] = {
                 "min_buy_in": 500000,
                 "max_buy_in": 5000000,
                 "action_timeout_secs": 30,
-                "dealer_timeout_secs": 30,
+                "dealer_timeout_secs": 120,
             },
             "seats": [],
             "next_hand_id": 1,

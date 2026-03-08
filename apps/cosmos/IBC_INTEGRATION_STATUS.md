@@ -77,14 +77,14 @@ File: `apps/cosmos/app/querywrap.go`
 - Chain ID: `onchainpoker-1`
 - Real keyring (not `test`)
 - Token allocation:
-  | Purpose | OCP | uocp |
+  | Purpose | CHIPS | uchips |
   |---------|-----|------|
   | Pool seeding (Osmosis) | 3,865,470,565 | 3,865,470,565,000,000 |
   | Validator self-delegation | 10,000,000 | 10,000,000,000,000 |
   | Operations reserve | 419,496,730 | 419,496,730,000,000 |
   | **Total** | **4,294,967,295** | **4,294,967,295,000,000** |
-- Bank denom metadata (name: "OnChainPoker", symbol: "OCP", base: "uocp", display: "ocp", exponent: 6)
-- `timeout_commit = "6s"`, `minimum-gas-prices = "0.025uocp"`
+- Bank denom metadata (name: "OnChainPoker", symbol: "CHIPS", base: "uchips", display: "chips", exponent: 6)
+- `timeout_commit = "6s"`, `minimum-gas-prices = "0.025uchips"`
 - IBC genesis auto-included from module registration
 - Modeled on existing `apps/cosmos/scripts/localnet.sh`
 
@@ -100,11 +100,11 @@ File: `apps/cosmos/app/querywrap.go`
 - Create Hermes config template: `deploy/hermes-config.toml`
 - Create IBC connection + transfer channel between `onchainpoker-1` ↔ `osmosis-1`
 - Create systemd service: `deploy/ocp-relayer.service`
-- IBC transfer OCP to Osmosis: `ocpd tx ibc-transfer transfer transfer channel-0 <osmo-addr> 3000000000000000uocp --from operator`
+- IBC transfer CHIPS to Osmosis: `ocpd tx ibc-transfer transfer transfer channel-0 <osmo-addr> 3000000000000000uchips --from operator`
 
 ### Phase 5: Osmosis pool
-- Create OCP/ATOM 50/50 balancer pool with `osmosisd tx gamm create-pool`
-- Initial OCP/ATOM ratio determines starting price (business decision)
+- Create CHIPS/ATOM 50/50 balancer pool with `osmosisd tx gamm create-pool`
+- Initial CHIPS/ATOM ratio determines starting price (business decision)
 - Optional: PR to `cosmos/chain-registry` + `osmosis-labs/assetlists`
 
 ### Phase 6: Update LAUNCH_MANIFEST.md

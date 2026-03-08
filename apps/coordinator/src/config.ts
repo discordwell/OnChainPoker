@@ -99,11 +99,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
   const faucetEnabled = parseBoolEnv(env.FAUCET_ENABLED) ?? false;
   const faucetMnemonic = (env.FAUCET_MNEMONIC ?? "").trim() || null;
   const faucetAmount = (env.FAUCET_AMOUNT ?? "").trim() || "5000000";
-  const faucetDenom = (env.FAUCET_DENOM ?? "").trim() || "utchips";
+  const faucetDenom = (env.FAUCET_DENOM ?? "").trim() || "uchips";
   const faucetCooldownSecs = parseIntEnv(env.FAUCET_COOLDOWN_SECS) ?? 3600;
   const faucetIpCooldownSecs = parseIntEnv(env.FAUCET_IP_COOLDOWN_SECS) ?? 600;
   const faucetBech32Prefix = (env.FAUCET_BECH32_PREFIX ?? "").trim() || "ocp";
-  const faucetGasPrice = (env.FAUCET_GAS_PRICE ?? "").trim() || "0utchips";
+  const faucetGasPrice = (env.FAUCET_GAS_PRICE ?? "").trim() || "0uchips";
   const faucetRpcUrl = (env.FAUCET_RPC_URL ?? env.COORDINATOR_COSMOS_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
   const faucetLcdUrl = (env.FAUCET_LCD_URL ?? env.COORDINATOR_COSMOS_LCD_URL ?? "").trim() || "http://127.0.0.1:1317";
 

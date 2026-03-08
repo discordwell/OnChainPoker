@@ -13,7 +13,7 @@ Code:
 
 Defaults (current):
 - Bech32 prefix: `ocp`
-- Base denom: `uocp` (display denom `ocp`)
+- Base denom: `uchips` (display denom `chips`)
 - Home: `~/.ocpd`
 - CLI env prefix: `OCPD` (e.g. `OCPD_HOME`)
 
@@ -62,7 +62,7 @@ Status (2026-02-10): Implemented `x/poker` + `x/dealer` (msgs/keeper/KV/events),
 
 ### Bank Escrow / Denom
 - `x/poker` escrows real `x/bank` coins into the `poker` module account on `Sit`, and returns coins on `Leave` / bond-ejection.
-- Escrow denom uses `sdk.DefaultBondDenom` (Agent 1 sets this to `uocp`, display denom `ocp`).
+- Escrow denom uses `sdk.DefaultBondDenom` (Agent 1 sets this to `uchips`, display denom `chips`).
 - Player bond slashes (from poker action timeouts) are transferred from the `poker` module account to `auth`’s `fee_collector` module account to keep the escrow accounting consistent.
 
 ### Dealer Metadata Stored In Poker State (Avoid Cyclic Dependencies)

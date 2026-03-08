@@ -43,7 +43,7 @@ import {
 const RPC = (process.env.COSMOS_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
 const LCD = (process.env.COSMOS_LCD_URL ?? "").trim() || "http://127.0.0.1:1317";
 const PREFIX = (process.env.COSMOS_PREFIX ?? "").trim() || "ocp";
-const GAS_PRICE = (process.env.COSMOS_GAS_PRICE ?? "").trim() || "0uocp";
+const GAS_PRICE = (process.env.COSMOS_GAS_PRICE ?? "").trim() || "0uchips";
 
 const NUM_PLAYERS = Number(process.env.COSMOS_PLAYERS ?? "2");
 const COMMITTEE_SIZE = Number(process.env.COSMOS_COMMITTEE_SIZE ?? "3");

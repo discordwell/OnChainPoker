@@ -57,7 +57,7 @@ OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd"
 OCP_HOME="$LOG_DIR/chain-home"
 CHAIN_ID="ocp-integration-1"
 MONIKER="validator"
-DENOM="uocp"
+DENOM="uchips"
 
 log "Initializing chain at $OCP_HOME..."
 "$OCPD_BIN" init "$MONIKER" --chain-id "$CHAIN_ID" --home "$OCP_HOME" >/dev/null 2>&1

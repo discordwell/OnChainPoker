@@ -46,7 +46,7 @@ const wallet = await walletFromMnemonic({ mnemonic: process.env.MNEMONIC, prefix
 const { address, signAndBroadcastAuto } = await connectOcpCosmosSigningClient({
   rpcUrl: "http://127.0.0.1:26657",
   signer: wallet,
-  gasPrice: "0uocp"
+  gasPrice: "0uchips"
 });
 
 console.log({ address });

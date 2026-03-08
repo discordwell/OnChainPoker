@@ -24,8 +24,8 @@ OCPD_HOME="$ROOT/apps/cosmos/.ocpd"
 
 OCP_CHAIN_ID="ocp-local-1"
 OSMO_CHAIN_ID="osmo-test-5"
-DENOM="uocp"
-TRANSFER_AMOUNT="${IBC_TRANSFER_AMOUNT:-1000000}" # 1 OCP
+DENOM="uchips"
+TRANSFER_AMOUNT="${IBC_TRANSFER_AMOUNT:-1000000}" # 1 CHIPS
 OCP_CHANNEL=""  # populated by create_channel
 
 # ── Helpers ──────────────────────────────────────────────────────────

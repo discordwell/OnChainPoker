@@ -26,22 +26,22 @@ set -euo pipefail
 
 CHAIN_ID="onchainpoker-1"
 
-# Token allocation (in uocp = 10^-6 OCP).
-# Total supply = 4,294,967,295 OCP = uint32 max (fits in a single cosmos Int).
+# Token allocation (in uchips = 10^-6 CHIPS).
+# Total supply = 4,294,967,295 CHIPS = uint32 max (fits in a single cosmos Int).
 #
-# | Purpose                    | OCP           | uocp                    |
+# | Purpose                    | CHIPS         | uchips                  |
 # |----------------------------|---------------|-------------------------|
 # | Pool seeding (Osmosis)     | 3,865,470,565 | 3,865,470,565,000,000   |
 # | Validator self-delegation  | 10,000,000    | 10,000,000,000,000      |
 # | Operations reserve         | 419,496,730   | 419,496,730,000,000     |
 # | Total                      | 4,294,967,295 | 4,294,967,295,000,000   |
 
-POOL_UOCP="3865470565000000"
-VALIDATOR_STAKE_UOCP="10000000000000"
-OPS_RESERVE_UOCP="419496730000000"
-TOTAL_UOCP="4294967295000000"
+POOL_UCHIPS="3865470565000000"
+VALIDATOR_STAKE_UCHIPS="10000000000000"
+OPS_RESERVE_UCHIPS="419496730000000"
+TOTAL_UCHIPS="4294967295000000"
 
-DENOM="uocp"
+DENOM="uchips"
 
 MIN_GAS_PRICES="0.025${DENOM}"
 TIMEOUT_COMMIT="6s"
@@ -179,14 +179,14 @@ log "  operator:    $OPERATOR_ADDR"
 
 # ── Fund genesis accounts ──
 
-log "funding validator account: ${VALIDATOR_STAKE_UOCP}${DENOM} (self-delegation)"
-genesis_cmd add-genesis-account "$VALIDATOR_ADDR" "${VALIDATOR_STAKE_UOCP}${DENOM}" --home "$OCPD_HOME"
+log "funding validator account: ${VALIDATOR_STAKE_UCHIPS}${DENOM} (self-delegation)"
+genesis_cmd add-genesis-account "$VALIDATOR_ADDR" "${VALIDATOR_STAKE_UCHIPS}${DENOM}" --home "$OCPD_HOME"
 
-log "funding pool-seeder account: ${POOL_UOCP}${DENOM} (Osmosis pool)"
-genesis_cmd add-genesis-account "$POOL_SEEDER_ADDR" "${POOL_UOCP}${DENOM}" --home "$OCPD_HOME"
+log "funding pool-seeder account: ${POOL_UCHIPS}${DENOM} (Osmosis pool)"
+genesis_cmd add-genesis-account "$POOL_SEEDER_ADDR" "${POOL_UCHIPS}${DENOM}" --home "$OCPD_HOME"
 
-log "funding operator account: ${OPS_RESERVE_UOCP}${DENOM} (operations reserve)"
-genesis_cmd add-genesis-account "$OPERATOR_ADDR" "${OPS_RESERVE_UOCP}${DENOM}" --home "$OCPD_HOME"
+log "funding operator account: ${OPS_RESERVE_UCHIPS}${DENOM} (operations reserve)"
+genesis_cmd add-genesis-account "$OPERATOR_ADDR" "${OPS_RESERVE_UCHIPS}${DENOM}" --home "$OCPD_HOME"
 
 # ── Patch genesis JSON ──
 
@@ -205,19 +205,19 @@ g["app_state"]["bank"]["denom_metadata"] = [
     {
         "description": "The native staking and gas token of the OnChainPoker network.",
         "denom_units": [
-            {"denom": "uocp", "exponent": 0, "aliases": ["microocp"]},
-            {"denom": "mocp", "exponent": 3, "aliases": ["milliocp"]},
-            {"denom": "ocp",  "exponent": 6, "aliases": []},
+            {"denom": "uchips", "exponent": 0, "aliases": ["microchips"]},
+            {"denom": "mchips", "exponent": 3, "aliases": ["millichips"]},
+            {"denom": "chips",  "exponent": 6, "aliases": []},
         ],
-        "base": "uocp",
-        "display": "ocp",
+        "base": "uchips",
+        "display": "chips",
         "name": "OnChainPoker",
-        "symbol": "OCP",
+        "symbol": "CHIPS",
     }
 ]
 
-# Ensure staking bond_denom is uocp.
-g["app_state"]["staking"]["params"]["bond_denom"] = "uocp"
+# Ensure staking bond_denom is uchips.
+g["app_state"]["staking"]["params"]["bond_denom"] = "uchips"
 
 with open(path, "w") as f:
     json.dump(g, f, indent=2)
@@ -226,8 +226,8 @@ PYEOF
 
 # ── Gentx ──
 
-log "generating gentx: ${VALIDATOR_STAKE_UOCP}${DENOM} self-delegation"
-genesis_cmd gentx validator "${VALIDATOR_STAKE_UOCP}${DENOM}" \
+log "generating gentx: ${VALIDATOR_STAKE_UCHIPS}${DENOM} self-delegation"
+genesis_cmd gentx validator "${VALIDATOR_STAKE_UCHIPS}${DENOM}" \
   --chain-id "$CHAIN_ID" \
   --home "$OCPD_HOME" \
   --keyring-backend "$OCPD_KEYRING_BACKEND" \
@@ -299,10 +299,10 @@ log "  Validator addr:   $VALIDATOR_ADDR"
 log "  Pool-seeder addr: $POOL_SEEDER_ADDR"
 log "  Operator addr:    $OPERATOR_ADDR"
 log ""
-log "  Total supply:   4,294,967,295 OCP ($TOTAL_UOCP uocp)"
-log "    Pool seeding:       3,865,470,565 OCP (pool-seeder key)"
-log "    Validator stake:    10,000,000 OCP (validator key, self-delegated)"
-log "    Operations reserve: 419,496,730 OCP (operator key)"
+log "  Total supply:   4,294,967,295 CHIPS ($TOTAL_UCHIPS uchips)"
+log "    Pool seeding:       3,865,470,565 CHIPS (pool-seeder key)"
+log "    Validator stake:    10,000,000 CHIPS (validator key, self-delegated)"
+log "    Operations reserve: 419,496,730 CHIPS (operator key)"
 log ""
 log "  Config:"
 log "    timeout_commit:     $TIMEOUT_COMMIT"

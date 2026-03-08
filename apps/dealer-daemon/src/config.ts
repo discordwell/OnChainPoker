@@ -11,7 +11,7 @@ export interface DealerDaemonConfig {
   cosmosLcdUrl: string;
   /** Bech32 prefix */
   bech32Prefix: string;
-  /** Gas price string e.g. "0uocp" */
+  /** Gas price string e.g. "0uchips" */
   gasPrice: string;
   /** Directory for epoch secret state files */
   stateDir: string;
@@ -120,7 +120,7 @@ export function loadConfig(): DealerDaemonConfig {
     cosmosRpcUrl,
     cosmosLcdUrl,
     bech32Prefix,
-    gasPrice: envStr("DEALER_GAS_PRICE", "0uocp"),
+    gasPrice: envStr("DEALER_GAS_PRICE", "0uchips"),
     stateDir: envStr("DEALER_STATE_DIR", `${process.env.HOME ?? "/tmp"}/.ocp-dealer`),
     statePassphrase,
     autoBeginEpoch: envBool("DEALER_AUTO_BEGIN_EPOCH", true),

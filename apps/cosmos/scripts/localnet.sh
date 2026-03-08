@@ -10,7 +10,7 @@ OCPD_MONIKER="${OCPD_MONIKER:-local}"
 OCPD_KEYRING_BACKEND="${OCPD_KEYRING_BACKEND:-test}"
 # Default validator self-delegation for gentx. Must be high enough that slashing
 # does not drop the sole validator's power to 0 in single-node localnets.
-OCPD_GENTX_STAKE="${OCPD_GENTX_STAKE:-10000000}" # in base denom units (e.g. uocp)
+OCPD_GENTX_STAKE="${OCPD_GENTX_STAKE:-10000000}" # in base denom units (e.g. uchips)
 
 # Port overrides (useful when running multiple localnets side-by-side).
 OCPD_RPC_LADDR="${OCPD_RPC_LADDR:-tcp://127.0.0.1:26657}"

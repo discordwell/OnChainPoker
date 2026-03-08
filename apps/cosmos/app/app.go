@@ -97,6 +97,10 @@ func NewOcpApp(
 	appOpts servertypes.AppOptions,
 	baseAppOptions ...func(*baseapp.BaseApp),
 ) *OcpApp {
+	// Wrap the database to work around GoLevelDB's empty-value bug.
+	// See dbfix.go for details.
+	db = WrapDBForEmptyValues(db)
+
 	var (
 		app        = &OcpApp{}
 		appBuilder *runtime.AppBuilder

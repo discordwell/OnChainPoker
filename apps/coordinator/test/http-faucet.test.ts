@@ -20,11 +20,11 @@ const defaultFaucetConfig: FaucetConfig = {
   enabled: false,
   mnemonic: null,
   amount: "5000000",
-  denom: "utchips",
+  denom: "uchips",
   cooldownMs: 3_600_000,
   ipCooldownMs: 600_000,
   bech32Prefix: "ocp",
-  gasPrice: "0utchips",
+  gasPrice: "0uchips",
   rpcUrl: "http://127.0.0.1:26657",
   lcdUrl: "http://127.0.0.1:1317",
 };
@@ -83,7 +83,7 @@ class MockFaucetService {
       enabled: true,
       address: "ocp1faucetaddr",
       amount: "5000000",
-      denom: "utchips",
+      denom: "uchips",
       cooldownSecs: 3600,
     };
   }
@@ -99,7 +99,7 @@ class MockFaucetService {
     return {
       txHash: `HASH${this.dripCount}`,
       amount: "5000000",
-      denom: "utchips",
+      denom: "uchips",
     };
   }
 

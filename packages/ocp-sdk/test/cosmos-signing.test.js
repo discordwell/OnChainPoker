@@ -73,7 +73,7 @@ test("Cosmos signing: signAndBroadcastAuto uses LCD polling fallback when lcdUrl
           return [{ address: "ocp1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqz0m3v8" }];
         },
       },
-      gasPrice: "0uocp",
+      gasPrice: "0uchips",
       lcdUrl: "http://127.0.0.1:1317",
     });
 
@@ -136,7 +136,7 @@ test("Cosmos signing: signAndBroadcastAuto uses direct broadcast when lcdUrl is 
           return [{ address: "ocp1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqz0m3v8" }];
         },
       },
-      gasPrice: "0uocp",
+      gasPrice: "0uchips",
     });
 
     const out = await signing.signAndBroadcastAuto([]);
