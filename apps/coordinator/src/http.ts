@@ -156,19 +156,20 @@ function v0ExpectedRevealPos(table: any): number | null {
   const h = table?.hand;
   const dh = h?.dealer;
   if (!h || !dh) return null;
-  if (!dh.finalized) return null;
+  if (!(dh.deckFinalized ?? dh.deck_finalized)) return null;
 
   const phase = String(h.phase ?? "");
 
-  if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver") {
+  if (phase === "awaitFlop" || phase === "awaitTurn" || phase === "awaitRiver"
+    || phase === "HAND_PHASE_AWAIT_FLOP" || phase === "HAND_PHASE_AWAIT_TURN" || phase === "HAND_PHASE_AWAIT_RIVER") {
     const cursor = asNumber(dh.cursor) ?? 0;
     const boardLen = decodeU8Array(h.board)?.length ?? 0;
     const pos = cursor + boardLen;
     return Number.isFinite(pos) ? pos : null;
   }
 
-  if (phase === "awaitShowdown") {
-    const holePos = decodeU8Array(dh.holePos);
+  if (phase === "awaitShowdown" || phase === "HAND_PHASE_AWAIT_SHOWDOWN") {
+    const holePos = decodeU8Array(dh.holePos ?? dh.hole_pos);
     if (!holePos || holePos.length !== 18) return null;
 
     const reveals = new Set<number>();
@@ -181,7 +182,7 @@ function v0ExpectedRevealPos(table: any): number | null {
 
     const eligible: number[] = [];
     for (let seat = 0; seat < 9; seat++) {
-      if (!h.inHand?.[seat] || h.folded?.[seat]) continue;
+      if (!(h.inHand ?? h.in_hand)?.[seat] || h.folded?.[seat]) continue;
       for (let c = 0; c < 2; c++) {
         const p = asNumber(holePos[seat * 2 + c]);
         if (p == null || p === 255) continue;
@@ -275,47 +276,51 @@ export function createHttpApp(opts: {
   // ---- Appchain v0 helpers (CometBFT + ABCI scaffold) ----
 
   app.get("/v1/appchain/v0/tables/:tableId", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support v0 table queries" });
     }
 
     const tableId = String(req.params.tableId ?? "").trim();
     if (!tableId) return res.status(400).json({ error: "tableId required" });
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = result?.table ?? result;
     if (!table) return res.status(404).json({ error: "not found" });
     return res.json({ table });
   });
 
   app.get("/v1/appchain/v0/dealer/epoch", async (_req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer epoch queries" });
     }
-    const epoch = await chain.queryJson<V0DealerEpoch>("/dealer/epoch").catch(() => null);
+    const result = await chain.queryJson<any>("/onchainpoker/dealer/v1/epoch").catch(() => null);
+    const epoch = (result?.epoch ?? result) as V0DealerEpoch | null;
     if (!epoch) return res.status(404).json({ error: "no active epoch" });
     return res.json({ epoch });
   });
 
   app.get("/v1/appchain/v0/tables/:tableId/dealer/next", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support v0 dealer queries" });
     }
 
     const tableId = String(req.params.tableId ?? "").trim();
     if (!tableId) return res.status(400).json({ error: "tableId required" });
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const tableResult = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = tableResult?.table ?? tableResult;
     if (!table) return res.status(404).json({ error: "not found" });
 
     const h = table?.hand;
     const dh = h?.dealer;
-    const handId = asNumber(h?.handId);
+    const handId = asNumber(h?.handId ?? h?.hand_id);
     const phase = String(h?.phase ?? "");
 
     // Epoch is optional; used for "who" suggestions and threshold counts.
-    let epoch = await chain.queryJson<V0DealerEpoch>("/dealer/epoch").catch(() => null);
-    const dhEpochId = asNumber(dh?.epochId);
-    if (epoch && dhEpochId != null && asNumber(epoch.epochId) !== dhEpochId) {
+    const epochResult = await chain.queryJson<any>("/onchainpoker/dealer/v1/epoch").catch(() => null);
+    let epoch = (epochResult?.epoch ?? epochResult) as V0DealerEpoch | null;
+    const dhEpochId = asNumber(dh?.epochId ?? dh?.epoch_id);
+    if (epoch && dhEpochId != null && asNumber(epoch.epochId ?? (epoch as any).epoch_id) !== dhEpochId) {
       epoch = null;
     }
     const slashed = new Set((epoch?.slashed ?? []).map((x) => String(x)));
@@ -327,8 +332,8 @@ export function createHttpApp(opts: {
       });
     }
 
-    if (phase === "shuffle") {
-      const shuffleStep = asNumber(dh.shuffleStep) ?? 0;
+    if (phase === "shuffle" || phase === "HAND_PHASE_SHUFFLE") {
+      const shuffleStep = asNumber(dh.shuffleStep ?? dh.shuffle_step) ?? 0;
       const nextRound = shuffleStep + 1;
       // v1 dealer mode requires the deck be shuffled by every QUAL member before finalization.
       let canFinalize = shuffleStep > 0;
@@ -336,11 +341,11 @@ export function createHttpApp(opts: {
       let suggestedShuffler: string | null = null;
       if (epoch?.members?.length) {
         const qual = [...epoch.members]
-          .filter((m) => !slashed.has(String(m.validatorId)))
-          .sort((a, b) => (a.index ?? 0) - (b.index ?? 0) || String(a.validatorId).localeCompare(String(b.validatorId)));
+          .filter((m) => !slashed.has(String((m as any).validatorId ?? (m as any).validator_id ?? (m as any).validator)))
+          .sort((a, b) => ((a as any).index ?? 0) - ((b as any).index ?? 0) || String((a as any).validatorId ?? (a as any).validator_id ?? "").localeCompare(String((b as any).validatorId ?? (b as any).validator_id ?? "")));
         canFinalize = shuffleStep >= qual.length;
         const pick = qual[shuffleStep];
-        suggestedShuffler = pick?.validatorId ?? null;
+        suggestedShuffler = (pick as any)?.validatorId ?? (pick as any)?.validator_id ?? null;
       }
 
       return res.json({
@@ -358,20 +363,20 @@ export function createHttpApp(opts: {
 
     const pos = v0ExpectedRevealPos(table);
     if (pos != null) {
-      const pubShares = Array.isArray(dh.pubShares) ? dh.pubShares : [];
+      const pubShares = Array.isArray(dh.pubShares ?? dh.pub_shares) ? (dh.pubShares ?? dh.pub_shares) : [];
       const seen = new Set<string>();
       for (const ps of pubShares) {
         if (asNumber(ps?.pos) !== pos) continue;
-        const vid = String(ps?.validatorId ?? "");
+        const vid = String(ps?.validatorId ?? ps?.validator_id ?? "");
         if (vid) seen.add(vid);
       }
 
       const threshold = epoch ? asNumber(epoch.threshold) : null;
       const missingValidatorIds = epoch?.members?.length
         ? epoch.members
-            .filter((m) => !slashed.has(String(m.validatorId)))
-            .map((m) => m.validatorId)
-            .filter((vid) => !seen.has(String(vid)))
+            .filter((m) => !slashed.has(String((m as any).validatorId ?? (m as any).validator_id ?? (m as any).validator)))
+            .map((m) => (m as any).validatorId ?? (m as any).validator_id ?? (m as any).validator)
+            .filter((vid: string) => !seen.has(String(vid)))
         : null;
 
       return res.json({
@@ -397,7 +402,7 @@ export function createHttpApp(opts: {
   // ---- Dealer hand LCD proxy routes ----
 
   app.get("/v1/dealer/hand/:tableId/:handId", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer queries" });
     }
 
@@ -405,7 +410,8 @@ export function createHttpApp(opts: {
     const handId = String(req.params.handId ?? "").trim();
     if (!tableId || !handId) return res.status(400).json({ error: "tableId and handId required" });
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = result?.table ?? result;
     if (!table) return res.status(404).json({ error: "table not found" });
 
     const dh = table?.hand?.dealer;
@@ -417,7 +423,7 @@ export function createHttpApp(opts: {
   });
 
   app.get("/v1/dealer/hand/:tableId/:handId/hole-positions/:seat", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer queries" });
     }
 
@@ -428,7 +434,8 @@ export function createHttpApp(opts: {
       return res.status(400).json({ error: "tableId, handId, and seat (0-8) required" });
     }
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = result?.table ?? result;
     if (!table) return res.status(404).json({ error: "table not found" });
 
     const dh = table?.hand?.dealer;
@@ -447,7 +454,7 @@ export function createHttpApp(opts: {
   });
 
   app.get("/v1/dealer/hand/:tableId/:handId/enc-shares/:pos", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer queries" });
     }
 
@@ -458,7 +465,8 @@ export function createHttpApp(opts: {
       return res.status(400).json({ error: "tableId, handId, and pos required" });
     }
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = result?.table ?? result;
     if (!table) return res.status(404).json({ error: "table not found" });
 
     const dh = table?.hand?.dealer;
@@ -482,7 +490,7 @@ export function createHttpApp(opts: {
   });
 
   app.get("/v1/dealer/hand/:tableId/:handId/ciphertext/:pos", async (req, res) => {
-    if (chain.kind !== "comet" || !chain.queryJson) {
+    if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer queries" });
     }
 
@@ -493,7 +501,8 @@ export function createHttpApp(opts: {
       return res.status(400).json({ error: "tableId, handId, and pos required" });
     }
 
-    const table = await chain.queryJson<any>(`/table/${tableId}`).catch(() => null);
+    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
+    const table = result?.table ?? result;
     if (!table) return res.status(404).json({ error: "table not found" });
 
     const dh = table?.hand?.dealer;

@@ -23,8 +23,9 @@ switch (chainKind) {
     break;
   case "comet": {
     const rpcUrl = (process.env.COORDINATOR_COMET_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
+    const lcdUrl = (process.env.COORDINATOR_COMET_LCD_URL ?? process.env.COORDINATOR_COSMOS_LCD_URL ?? "").trim() || "http://127.0.0.1:1317";
     const wsUrlRaw = (process.env.COORDINATOR_COMET_WS_URL ?? "").trim();
-    chain = new CometChainAdapter({ rpcUrl, wsUrl: wsUrlRaw || undefined });
+    chain = new CometChainAdapter({ rpcUrl, lcdUrl, wsUrl: wsUrlRaw || undefined });
     break;
   }
   case "cosmos": {

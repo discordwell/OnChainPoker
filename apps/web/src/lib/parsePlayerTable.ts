@@ -52,9 +52,9 @@ export function parsePlayerTable(raw: unknown): PlayerTableState | null {
   const params = (root.params as Record<string, unknown>) ?? {};
   const rawSeats = Array.isArray(root.seats) ? root.seats : [];
   const rawHand = (root.hand as Record<string, unknown>) ?? null;
-  const inHands = Array.isArray(rawHand?.inHand) ? rawHand.inHand : [];
+  const inHands = Array.isArray(rawHand?.inHand ?? rawHand?.in_hand) ? (rawHand!.inHand ?? rawHand!.in_hand) as unknown[] : [];
   const folded = Array.isArray(rawHand?.folded) ? rawHand.folded : [];
-  const allIn = Array.isArray(rawHand?.allIn) ? rawHand.allIn : [];
+  const allIn = Array.isArray(rawHand?.allIn ?? rawHand?.all_in) ? (rawHand!.allIn ?? rawHand!.all_in) as unknown[] : [];
 
   const seats: PlayerSeatState[] = rawSeats
     .slice(0, 9)
@@ -86,16 +86,16 @@ export function parsePlayerTable(raw: unknown): PlayerTableState | null {
 
   const handRaw = rawHand;
   const phase = String(handRaw?.phase ?? "");
-  const actionOn = Number.isFinite(Number(handRaw?.actionOn)) ? Number(handRaw?.actionOn) : -1;
-  const buttonSeat = Number.isFinite(Number(handRaw?.buttonSeat ?? handRaw?.button)) ? Number(handRaw?.buttonSeat ?? handRaw?.button) : -1;
-  const smallBlindSeat = Number.isFinite(Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat)) ? Number(handRaw?.smallBlindSeat ?? handRaw?.sbSeat) : -1;
-  const bigBlindSeat = Number.isFinite(Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat)) ? Number(handRaw?.bigBlindSeat ?? handRaw?.bbSeat) : -1;
-  const actionDeadline = Number.isFinite(Number(handRaw?.actionDeadline ?? handRaw?.deadline)) ? Number(handRaw?.actionDeadline ?? handRaw?.deadline) : 0;
+  const actionOn = Number.isFinite(Number(handRaw?.actionOn ?? handRaw?.action_on)) ? Number(handRaw?.actionOn ?? handRaw?.action_on) : -1;
+  const buttonSeat = Number.isFinite(Number(handRaw?.buttonSeat ?? handRaw?.button_seat ?? handRaw?.button)) ? Number(handRaw?.buttonSeat ?? handRaw?.button_seat ?? handRaw?.button) : -1;
+  const smallBlindSeat = Number.isFinite(Number(handRaw?.smallBlindSeat ?? handRaw?.small_blind_seat ?? handRaw?.sbSeat)) ? Number(handRaw?.smallBlindSeat ?? handRaw?.small_blind_seat ?? handRaw?.sbSeat) : -1;
+  const bigBlindSeat = Number.isFinite(Number(handRaw?.bigBlindSeat ?? handRaw?.big_blind_seat ?? handRaw?.bbSeat)) ? Number(handRaw?.bigBlindSeat ?? handRaw?.big_blind_seat ?? handRaw?.bbSeat) : -1;
+  const actionDeadline = Number.isFinite(Number(handRaw?.actionDeadline ?? handRaw?.action_deadline ?? handRaw?.deadline)) ? Number(handRaw?.actionDeadline ?? handRaw?.action_deadline ?? handRaw?.deadline) : 0;
   const street = String(handRaw?.street ?? "");
 
   // Compute pot from totalCommit array (chain doesn't have a pot field)
   let pot = 0n;
-  const totalCommits = Array.isArray(handRaw?.totalCommit) ? handRaw.totalCommit : [];
+  const totalCommits = Array.isArray(handRaw?.totalCommit ?? handRaw?.total_commit) ? (handRaw!.totalCommit ?? handRaw!.total_commit) as unknown[] : [];
   for (const tc of totalCommits) {
     const v = typeof tc === "string" ? BigInt(tc || "0") : BigInt(tc ?? 0);
     pot += v;
@@ -110,16 +110,16 @@ export function parsePlayerTable(raw: unknown): PlayerTableState | null {
   return {
     tableId,
     params: {
-      maxPlayers: Number.isFinite(Number(params.maxPlayers)) ? Number(params.maxPlayers) : 9,
-      smallBlind: String(params.smallBlind ?? "0"),
-      bigBlind: String(params.bigBlind ?? "0"),
-      minBuyIn: String(params.minBuyIn ?? "0"),
-      maxBuyIn: String(params.maxBuyIn ?? "0")
+      maxPlayers: Number.isFinite(Number(params.maxPlayers ?? params.max_players)) ? Number(params.maxPlayers ?? params.max_players) : 9,
+      smallBlind: String(params.smallBlind ?? params.small_blind ?? "0"),
+      bigBlind: String(params.bigBlind ?? params.big_blind ?? "0"),
+      minBuyIn: String(params.minBuyIn ?? params.min_buy_in ?? "0"),
+      maxBuyIn: String(params.maxBuyIn ?? params.max_buy_in ?? "0")
     },
     seats,
     hand: handRaw
       ? {
-          handId: String(handRaw.handId ?? ""),
+          handId: String(handRaw.handId ?? handRaw.hand_id ?? ""),
           phase,
           actionOn,
           buttonSeat,

@@ -2,6 +2,13 @@
 
 ## Session Summaries
 
+### 2026-03-08T~UTC — Fix Coordinator LCD Queries + Epoch Mismatch Timeout
+Fixed two blockers preventing the live testnet from being playable:
+- **Coordinator LCD queries**: CometChainAdapter was using broken legacy ABCI queries (`/table/1`). Added `lcdUrl` to adapter, switched all queries to LCD REST (`/onchainpoker/poker/v1/tables/1`). Fixed v0 route guards from `chain.kind !== "comet"` to `!chain.queryJson`. Added snake_case fallbacks in `parsePlayerTable.ts` for LCD JSON format (e.g., `small_blind`, `hand_id`, `in_hand`).
+- **Epoch mismatch timeout**: Hand #164 was stuck in shuffle phase — referenced epoch 1 but chain was on epoch 3. The `dealer/timeout` handler rejected timeouts when epoch didn't match. Fixed `ops.go` to abort the hand (refund all commits) when the epoch has rotated, instead of erroring.
+- **Snake_case handling**: Updated coordinator `http.ts` v0 routes, `v0ExpectedRevealPos`, and `v0TableToTableInfo` to handle both camelCase and snake_case field names from LCD. Updated phase checks for proto enum names (`HAND_PHASE_SHUFFLE`, etc.).
+- **Result**: Table #1 live with 3 bots (FishyMcFish, LimpLarry, TightTanya), hands flowing autonomously through all phases.
+
 ### 2026-03-08T~UTC — Make OCP Playable (6-Step User Journey Fix)
 Audited and fixed the full user journey from visit → spectate → connect → play:
 - **Keplr chain suggestion**: Added `experimentalSuggestChain()` before `keplr.enable()` in `connectWallet()` with full OCP chain config (bech32 prefixes, currencies, gas price steps). Extended `KeplrLike` type. Wrapped in try/catch for wallet compat.

@@ -75,15 +75,18 @@ function attrsToObject(attrs: CometTxEventAttr[] | undefined): Record<string, st
 
 export function v0TableToTableInfo(v0: any, nowMs = Date.now()): TableInfo {
   const params = v0?.params ?? {};
-  const maxPlayers = Number(params.maxPlayers ?? 9);
-  const smallBlind = String(params.smallBlind ?? "0");
-  const bigBlind = String(params.bigBlind ?? "0");
-  const minBuyIn = String(params.minBuyIn ?? "0");
-  const maxBuyIn = String(params.maxBuyIn ?? "0");
+  const maxPlayers = Number(params.maxPlayers ?? params.max_players ?? 9);
+  const smallBlind = String(params.smallBlind ?? params.small_blind ?? "0");
+  const bigBlind = String(params.bigBlind ?? params.big_blind ?? "0");
+  const minBuyIn = String(params.minBuyIn ?? params.min_buy_in ?? "0");
+  const maxBuyIn = String(params.maxBuyIn ?? params.max_buy_in ?? "0");
+  const label = String(v0?.label ?? "") || undefined;
+  const passwordHash = String(params.passwordHash ?? params.password_hash ?? "") || undefined;
 
   return {
     tableId: String(v0?.id ?? ""),
-    params: { maxPlayers, smallBlind, bigBlind, minBuyIn, maxBuyIn },
+    label,
+    params: { maxPlayers, smallBlind, bigBlind, minBuyIn, maxBuyIn, passwordHash },
     status: v0?.hand ? "in_hand" : "open",
     updatedAtMs: nowMs
   };
@@ -114,6 +117,7 @@ export class CometChainAdapter implements ChainAdapter {
 
   private readonly rpcUrl: string;
   private readonly wsUrl: string;
+  private readonly lcdUrl: string;
 
   private nextEventIndex = 1;
 
@@ -121,9 +125,10 @@ export class CometChainAdapter implements ChainAdapter {
   private subscribers = new Set<(event: ChainEvent) => void>();
   private reconnectTimer: NodeJS.Timeout | null = null;
 
-  constructor(args: { rpcUrl: string; wsUrl?: string }) {
+  constructor(args: { rpcUrl: string; wsUrl?: string; lcdUrl?: string }) {
     this.rpcUrl = args.rpcUrl;
     this.wsUrl = args.wsUrl ?? toWebSocketUrl(args.rpcUrl);
+    this.lcdUrl = args.lcdUrl ?? "http://127.0.0.1:1317";
   }
 
   async stop(): Promise<void> {
@@ -142,24 +147,26 @@ export class CometChainAdapter implements ChainAdapter {
   }
 
   async listTables(): Promise<TableInfo[]> {
-    const ids = await this.abciQueryJson<number[]>("/tables");
-    const norm = (ids ?? []).map((x) => Number(x)).filter((x) => Number.isFinite(x) && x > 0);
-    norm.sort((a, b) => a - b);
+    const json = await this.lcdFetch<any>("/onchainpoker/poker/v1/tables");
+    const rawIds: any[] = Array.isArray(json?.table_ids) ? json.table_ids : Array.isArray(json?.tableIds) ? json.tableIds : [];
+    const ids = rawIds.map((x) => String(x)).filter(Boolean);
+    ids.sort((a, b) => a.localeCompare(b));
 
-    const tables = await Promise.all(norm.map((id) => this.getTable(String(id))));
+    const tables = await Promise.all(ids.map((id) => this.getTable(id).catch(() => null)));
     return tables.filter((t): t is TableInfo => t != null);
   }
 
   async getTable(tableId: string): Promise<TableInfo | null> {
     const id = String(tableId ?? "").trim();
     if (!id) return null;
-    const v0 = await this.abciQueryJson<any>(`/table/${id}`);
+    const json = await this.lcdFetch<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(id)}`);
+    const v0 = json?.table ?? json;
     if (!v0) return null;
     return v0TableToTableInfo(v0);
   }
 
   async queryJson<T = unknown>(path: string): Promise<T | null> {
-    return this.abciQueryJson<T>(path);
+    return this.lcdFetch<T>(path);
   }
 
   private async ensureWs(): Promise<void> {
@@ -273,23 +280,13 @@ export class CometChainAdapter implements ChainAdapter {
     });
   }
 
-  private async cometRpc<T>(method: string, params?: unknown): Promise<T> {
-    const res = await fetch(this.rpcUrl, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params })
-    });
-    const json = await res.json().catch(() => null);
-    if (!json || typeof json !== "object") throw new Error("comet rpc: invalid json");
-    if ((json as any).error) throw new Error(`comet rpc error: ${JSON.stringify((json as any).error)}`);
-    return (json as any).result as T;
-  }
-
-  private async abciQueryJson<T>(path: string): Promise<T | null> {
-    const result = await this.cometRpc<any>("abci_query", { path });
-    const valueB64 = result?.response?.value ?? "";
-    if (!valueB64) return null;
-    const bytes = Buffer.from(String(valueB64), "base64");
-    return JSON.parse(bytes.toString("utf8")) as T;
+  private async lcdFetch<T>(path: string): Promise<T | null> {
+    const u = new URL(this.lcdUrl);
+    const basePath = u.pathname.replace(/\/+$/, "");
+    const rel = String(path ?? "").trim();
+    u.pathname = `${basePath}${rel.startsWith("/") ? "" : "/"}${rel}`;
+    const res = await fetch(u.toString());
+    if (!res.ok) return null;
+    return (await res.json()) as T;
   }
 }

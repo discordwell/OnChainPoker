@@ -527,7 +527,12 @@ func (m msgServer) timeout(ctx context.Context, tableID, handID uint64) ([]sdk.E
 		return nil, err
 	}
 	if epoch == nil || epoch.EpochId != dh.EpochId {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("epoch not available")
+		// Epoch has been rotated — the hand is unrecoverable. Abort and refund.
+		abortEvents, err := m.abortHand(ctx, tableID, handID, "dealer: epoch rotated (hand epoch mismatch)")
+		if err != nil {
+			return nil, err
+		}
+		return abortEvents, nil
 	}
 
 	to := tableDealerTimeoutSecs(t)
