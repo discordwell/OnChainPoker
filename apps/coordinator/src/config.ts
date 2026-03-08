@@ -1,3 +1,16 @@
+export type FaucetConfig = {
+  enabled: boolean;
+  mnemonic: string | null;
+  amount: string;
+  denom: string;
+  cooldownMs: number;
+  ipCooldownMs: number;
+  bech32Prefix: string;
+  gasPrice: string;
+  rpcUrl: string;
+  lcdUrl: string;
+};
+
 export type CoordinatorConfig = {
   host: string;
   port: number;
@@ -11,6 +24,7 @@ export type CoordinatorConfig = {
   writeRateLimitEnabled: boolean;
   writeRateLimitMax: number;
   writeRateLimitWindowMs: number;
+  faucet: FaucetConfig;
 };
 
 function parseIntEnv(v: string | undefined): number | undefined {
@@ -82,6 +96,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
   const writeRateLimitWindowMs =
     (parseIntEnv(env.COORDINATOR_WRITE_RATE_LIMIT_WINDOW_SECS) ?? 60) * 1000;
 
+  const faucetEnabled = parseBoolEnv(env.FAUCET_ENABLED) ?? false;
+  const faucetMnemonic = (env.FAUCET_MNEMONIC ?? "").trim() || null;
+  const faucetAmount = (env.FAUCET_AMOUNT ?? "").trim() || "10000000";
+  const faucetDenom = (env.FAUCET_DENOM ?? "").trim() || "uchips";
+  const faucetCooldownSecs = parseIntEnv(env.FAUCET_COOLDOWN_SECS) ?? 3600;
+  const faucetIpCooldownSecs = parseIntEnv(env.FAUCET_IP_COOLDOWN_SECS) ?? 600;
+  const faucetBech32Prefix = (env.FAUCET_BECH32_PREFIX ?? "").trim() || "ocp";
+  const faucetGasPrice = (env.FAUCET_GAS_PRICE ?? "").trim() || "0uchips";
+  const faucetRpcUrl = (env.FAUCET_RPC_URL ?? env.COORDINATOR_COSMOS_RPC_URL ?? "").trim() || "http://127.0.0.1:26657";
+  const faucetLcdUrl = (env.FAUCET_LCD_URL ?? env.COORDINATOR_COSMOS_LCD_URL ?? "").trim() || "http://127.0.0.1:1317";
+
   return {
     host,
     port,
@@ -94,6 +119,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
     writeAuthToken,
     writeRateLimitEnabled,
     writeRateLimitMax,
-    writeRateLimitWindowMs
+    writeRateLimitWindowMs,
+    faucet: {
+      enabled: faucetEnabled,
+      mnemonic: faucetMnemonic,
+      amount: faucetAmount,
+      denom: faucetDenom,
+      cooldownMs: faucetCooldownSecs * 1000,
+      ipCooldownMs: faucetIpCooldownSecs * 1000,
+      bech32Prefix: faucetBech32Prefix,
+      gasPrice: faucetGasPrice,
+      rpcUrl: faucetRpcUrl,
+      lcdUrl: faucetLcdUrl,
+    },
   };
 }

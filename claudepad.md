@@ -2,6 +2,14 @@
 
 ## Session Summaries
 
+### 2026-03-07T~UTC — Public Testnet: Faucet + Bot Deploy Infrastructure
+Implemented public testnet infrastructure for anyone to play poker at discordwell.com/ocp:
+- **Faucet service**: New `FaucetService` class in coordinator with `GET /v1/faucet/status` and `POST /v1/faucet` endpoints. Address/IP rate limiting with configurable cooldowns, bech32 prefix validation, signing mutex, bounded cooldown maps. 7 new tests (18 total).
+- **Frontend faucet button**: "Get Testnet CHIPS" button in wallet panel with pending/success/error states and 8s auto-clear.
+- **Testnet genesis script**: `apps/cosmos/scripts/testnet-genesis.sh` — creates validator, faucet, bot-0/1/2 keys with mnemonic backup, pre-seeds table #1 (5k/10k blinds), patches denom metadata.
+- **Deploy fixes**: VITE env vars set at build time (relative paths for reverse proxy), bot restart detection (scans `bot-*.env`), coordinator ocp-sdk dependency wired for VPS.
+- **Config**: `FaucetConfig` type with 10 fields parsed from env, reuses existing COORDINATOR_COSMOS_* URLs as fallbacks.
+
 ### 2026-02-21T10:00~UTC — Dealer Daemon Bugfixes + Bot Integration Test
 Fixed multiple field-name mismatches and control-flow bugs in the dealer daemon that prevented hands from completing:
 - **Shuffle round**: `handleShuffle` now reads `shuffleStep` from `DealerHand` proto (authoritative) instead of poker table metadata.

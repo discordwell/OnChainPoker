@@ -4,6 +4,7 @@ import type { ChainAdapter } from "./chain/adapter.js";
 import { createHttpApp } from "./http.js";
 import type { CoordinatorStore } from "./store.js";
 import { createWsHub } from "./ws.js";
+import type { FaucetService } from "./faucet.js";
 import type { ChainEvent, TableInfo } from "./types.js";
 
 export type CoordinatorServer = {
@@ -15,8 +16,9 @@ export function createCoordinatorServer(opts: {
   config: CoordinatorConfig;
   chain: ChainAdapter;
   store: CoordinatorStore;
+  faucet?: FaucetService | null;
 }): CoordinatorServer {
-  const { config, chain, store } = opts;
+  const { config, chain, store, faucet } = opts;
 
   let httpServer: http.Server | null = null;
   let stopChainSub: (() => void) | null = null;
@@ -34,6 +36,7 @@ export function createCoordinatorServer(opts: {
       config,
       store,
       chain,
+      faucet: faucet ?? null,
       ws: {
         broadcastChainEvent: (ev: ChainEvent) => wsHub?.broadcastChainEvent(ev),
         broadcastToTopic: (topic: string, msg: unknown) => wsHub?.broadcastToTopic(topic, msg),
@@ -94,6 +97,7 @@ export function createCoordinatorServer(opts: {
     httpServer = null;
 
     if (chain.stop) await chain.stop().catch(() => {});
+    faucet?.stop();
   }
 
   return { start, stop };

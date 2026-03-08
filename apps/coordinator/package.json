@@ -11,6 +11,7 @@
     "test": "node --test --import tsx test/*.test.ts"
   },
   "dependencies": {
+    "@onchainpoker/ocp-sdk": "workspace:*",
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

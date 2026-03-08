@@ -8,20 +8,17 @@ set -euo pipefail
 #   ./scripts/deploy-vps.sh [--build-only] [--skip-build]
 #
 # Environment:
-#   VPS_HOST        — SSH host (default: discordwell.com)
-#   VPS_USER        — SSH user (default: root)
+#   DEPLOY_TARGETS  — Comma-separated SSH host aliases (default: ovh)
+#                     Example: DEPLOY_TARGETS=ovh,ovh2 ./scripts/deploy-vps.sh
+#   VPS_USER        — SSH user override (default: use SSH config)
 #   VPS_OCP_DIR     — Remote install dir (default: /opt/ocp)
+#   NO_RESTART      — If set to 1, skip service restart and env validation
+#                     (useful for pre-flip deploys to a standby server)
 
-VPS_HOST="${VPS_HOST:-ovh}"
+DEPLOY_TARGETS="${DEPLOY_TARGETS:-ovh}"
 VPS_USER="${VPS_USER:-}"
 VPS_OCP_DIR="${VPS_OCP_DIR:-/opt/ocp}"
-# Use SSH config alias directly (Host ovh → ubuntu@54.37.226.6 with ~/.ssh/ovh_vps key).
-# Override with VPS_USER=root VPS_HOST=discordwell.com if needed.
-if [[ -n "$VPS_USER" ]]; then
-  VPS_SSH="${VPS_USER}@${VPS_HOST}"
-else
-  VPS_SSH="${VPS_HOST}"
-fi
+NO_RESTART="${NO_RESTART:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -36,23 +33,35 @@ for arg in "$@"; do
   esac
 done
 
+# Helper: resolve VPS_SSH from a target alias
+resolve_ssh() {
+  local target="$1"
+  if [[ -n "$VPS_USER" ]]; then
+    echo "${VPS_USER}@${target}"
+  else
+    echo "${target}"
+  fi
+}
+
 ensure_service_active() {
-  local svc="$1"
-  if ssh "$VPS_SSH" "sudo systemctl is-active --quiet $svc"; then
+  local ssh_target="$1"
+  local svc="$2"
+  if ssh "$ssh_target" "sudo systemctl is-active --quiet $svc"; then
     return 0
   fi
   echo "ERROR: service is not active: $svc"
-  ssh "$VPS_SSH" "sudo systemctl --no-pager --full status $svc || true"
+  ssh "$ssh_target" "sudo systemctl --no-pager --full status $svc || true"
   return 1
 }
 
 wait_remote_http() {
-  local label="$1"
-  local url="$2"
-  local attempts="${3:-30}"
+  local ssh_target="$1"
+  local label="$2"
+  local url="$3"
+  local attempts="${4:-30}"
   local i
   for ((i=1; i<=attempts; i++)); do
-    if ssh "$VPS_SSH" "sudo curl -fsS --max-time 3 '$url' >/dev/null"; then
+    if ssh "$ssh_target" "sudo curl -fsS --max-time 3 '$url' >/dev/null"; then
       echo "   OK: $label"
       return 0
     fi
@@ -63,8 +72,9 @@ wait_remote_http() {
 }
 
 require_remote_file() {
-  local path="$1"
-  if ssh "$VPS_SSH" "sudo test -f '$path'"; then
+  local ssh_target="$1"
+  local path="$2"
+  if ssh "$ssh_target" "sudo test -f '$path'"; then
     return 0
   fi
   echo "ERROR: required remote file missing: $path"
@@ -72,8 +82,9 @@ require_remote_file() {
 }
 
 echo "=== OCP Deploy ==="
-echo "Host: $VPS_SSH"
+echo "Targets: $DEPLOY_TARGETS"
 echo "Remote dir: $VPS_OCP_DIR"
+echo "NO_RESTART: $NO_RESTART"
 echo ""
 
 # ── Build ──
@@ -86,6 +97,11 @@ if [ "$SKIP_BUILD" = false ]; then
   pnpm -C packages/ocp-sdk build
 
   echo ">> Building web..."
+  VITE_COORDINATOR_HTTP_URL=/ocp/api \
+  VITE_COSMOS_RPC_URL=/ocp/rpc \
+  VITE_COSMOS_LCD_URL=/ocp/lcd \
+  VITE_COSMOS_CHAIN_ID=onchainpoker-1 \
+  VITE_COSMOS_GAS_PRICE=0uchips \
   pnpm -C apps/web build
 
   echo ">> Building coordinator..."
@@ -110,93 +126,99 @@ if [ "$BUILD_ONLY" = true ]; then
   exit 0
 fi
 
-# ── Deploy ──
+# ── Deploy (loop over targets) ──
 
-echo ""
-echo ">> Syncing artifacts to $VPS_SSH:$VPS_OCP_DIR ..."
+IFS=',' read -ra TARGETS <<< "$DEPLOY_TARGETS"
 
-# Ensure remote directories exist
-ssh "$VPS_SSH" "sudo mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,bot,config,bin,chain,packages/ocp-crypto,packages/ocp-shuffle,packages/ocp-sdk,packages/holdem-eval} && sudo chown -R ocp:ocp $VPS_OCP_DIR"
+for TARGET in "${TARGETS[@]}"; do
+  VPS_SSH="$(resolve_ssh "$TARGET")"
 
-# Web (static)
-rsync -az --delete --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/web/dist/" \
-  "$VPS_SSH:$VPS_OCP_DIR/web/dist/"
+  echo ""
+  echo ">> [$TARGET] Syncing artifacts to $VPS_SSH:$VPS_OCP_DIR ..."
 
-# Coordinator (node)
-rsync -az --delete --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/coordinator/dist/" \
-  "$VPS_SSH:$VPS_OCP_DIR/coordinator/dist/"
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/coordinator/package.json" \
-  "$VPS_SSH:$VPS_OCP_DIR/coordinator/"
+  # Ensure remote directories exist
+  ssh "$VPS_SSH" "sudo mkdir -p $VPS_OCP_DIR/{web,coordinator,dealer-daemon,bot,config,bin,chain,packages/ocp-crypto,packages/ocp-shuffle,packages/ocp-sdk,packages/holdem-eval} && sudo chown -R ocp:ocp $VPS_OCP_DIR"
 
-# Dealer daemon (node)
-rsync -az --delete --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/dealer-daemon/dist/" \
-  "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/dist/"
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/dealer-daemon/package.json" \
-  "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/"
-
-# Bot (node)
-rsync -az --delete --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/bot/dist/" \
-  "$VPS_SSH:$VPS_OCP_DIR/bot/dist/"
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/bot/package.json" \
-  "$VPS_SSH:$VPS_OCP_DIR/bot/"
-
-# Chain binary (linux/amd64)
-OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
-if [[ -f "$OCPD_BIN" ]]; then
-  rsync -az --rsync-path="sudo rsync" "$OCPD_BIN" "$VPS_SSH:$VPS_OCP_DIR/bin/ocpd"
-  ssh "$VPS_SSH" "sudo chmod +x $VPS_OCP_DIR/bin/ocpd"
-else
-  echo "   WARN: ocpd-linux-amd64 not found, skipping chain binary deploy"
-fi
-
-# Production genesis script
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/apps/cosmos/scripts/production-genesis.sh" \
-  "$VPS_SSH:$VPS_OCP_DIR/chain/"
-
-# Shared packages (for node_modules resolution)
-for pkg in ocp-crypto ocp-shuffle ocp-sdk holdem-eval; do
+  # Web (static)
   rsync -az --delete --rsync-path="sudo rsync" \
-    "$PROJECT_ROOT/packages/$pkg/dist/" \
-    "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/dist/"
+    "$PROJECT_ROOT/apps/web/dist/" \
+    "$VPS_SSH:$VPS_OCP_DIR/web/dist/"
+
+  # Coordinator (node)
+  rsync -az --delete --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/coordinator/dist/" \
+    "$VPS_SSH:$VPS_OCP_DIR/coordinator/dist/"
   rsync -az --rsync-path="sudo rsync" \
-    "$PROJECT_ROOT/packages/$pkg/package.json" \
-    "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/"
-done
+    "$PROJECT_ROOT/apps/coordinator/package.json" \
+    "$VPS_SSH:$VPS_OCP_DIR/coordinator/"
 
-# Nginx config snippet (included from main discordwell.com server block)
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/deploy/nginx-ocp.conf" \
-  "$VPS_SSH:$VPS_OCP_DIR/config/"
+  # Dealer daemon (node)
+  rsync -az --delete --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/dealer-daemon/dist/" \
+    "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/dist/"
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/dealer-daemon/package.json" \
+    "$VPS_SSH:$VPS_OCP_DIR/dealer-daemon/"
 
-# Systemd units
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/deploy/ocp-coordinator.service" \
-  "$PROJECT_ROOT/deploy/ocp-dealer-daemon@.service" \
-  "$PROJECT_ROOT/deploy/ocp-bot@.service" \
-  "$PROJECT_ROOT/deploy/ocp-chain-node@.service" \
-  "$VPS_SSH:/etc/systemd/system/"
+  # Bot (node)
+  rsync -az --delete --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/bot/dist/" \
+    "$VPS_SSH:$VPS_OCP_DIR/bot/dist/"
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/bot/package.json" \
+    "$VPS_SSH:$VPS_OCP_DIR/bot/"
 
-# Environment templates (operator must copy + fill real env files).
-rsync -az --rsync-path="sudo rsync" \
-  "$PROJECT_ROOT/deploy/coordinator.env.example" \
-  "$PROJECT_ROOT/deploy/dealer.env.example" \
-  "$PROJECT_ROOT/deploy/bot.env.example" \
-  "$VPS_SSH:$VPS_OCP_DIR/config/"
+  # Chain binary (linux/amd64)
+  OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
+  if [[ -f "$OCPD_BIN" ]]; then
+    rsync -az --rsync-path="sudo rsync" "$OCPD_BIN" "$VPS_SSH:$VPS_OCP_DIR/bin/ocpd"
+    ssh "$VPS_SSH" "sudo chmod +x $VPS_OCP_DIR/bin/ocpd"
+  else
+    echo "   WARN: ocpd-linux-amd64 not found, skipping chain binary deploy"
+  fi
 
-# Fix ownership after rsync (sudo rsync creates files as root)
-ssh "$VPS_SSH" "sudo chown -R ocp:ocp $VPS_OCP_DIR"
+  # Genesis scripts
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/apps/cosmos/scripts/production-genesis.sh" \
+    "$PROJECT_ROOT/apps/cosmos/scripts/testnet-genesis.sh" \
+    "$VPS_SSH:$VPS_OCP_DIR/chain/"
 
-# Install dependencies remotely
-echo ">> Installing remote dependencies..."
-ssh "$VPS_SSH" "sudo -u ocp VPS_OCP_DIR='$VPS_OCP_DIR' node <<'NODE'
+  # Shared packages (for node_modules resolution)
+  for pkg in ocp-crypto ocp-shuffle ocp-sdk holdem-eval; do
+    rsync -az --delete --rsync-path="sudo rsync" \
+      "$PROJECT_ROOT/packages/$pkg/dist/" \
+      "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/dist/"
+    rsync -az --rsync-path="sudo rsync" \
+      "$PROJECT_ROOT/packages/$pkg/package.json" \
+      "$VPS_SSH:$VPS_OCP_DIR/packages/$pkg/"
+  done
+
+  # Nginx config snippet (included from main discordwell.com server block)
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/deploy/nginx-ocp.conf" \
+    "$VPS_SSH:$VPS_OCP_DIR/config/"
+
+  # Systemd units
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/deploy/ocp-coordinator.service" \
+    "$PROJECT_ROOT/deploy/ocp-dealer-daemon@.service" \
+    "$PROJECT_ROOT/deploy/ocp-bot@.service" \
+    "$PROJECT_ROOT/deploy/ocp-chain-node@.service" \
+    "$VPS_SSH:/etc/systemd/system/"
+
+  # Environment templates (operator must copy + fill real env files).
+  rsync -az --rsync-path="sudo rsync" \
+    "$PROJECT_ROOT/deploy/coordinator.env.example" \
+    "$PROJECT_ROOT/deploy/dealer.env.example" \
+    "$PROJECT_ROOT/deploy/bot.env.example" \
+    "$VPS_SSH:$VPS_OCP_DIR/config/"
+
+  # Fix ownership after rsync (sudo rsync creates files as root)
+  ssh "$VPS_SSH" "sudo chown -R ocp:ocp $VPS_OCP_DIR"
+
+  # Install dependencies remotely
+  echo ">> [$TARGET] Installing remote dependencies..."
+  ssh "$VPS_SSH" "sudo -u ocp VPS_OCP_DIR='$VPS_OCP_DIR' node <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 const root = process.env.VPS_OCP_DIR;
@@ -216,6 +238,10 @@ patchDeps('packages/ocp-shuffle/package.json', {
   '@onchainpoker/ocp-crypto': 'file:../ocp-crypto',
 });
 
+patchDeps('coordinator/package.json', {
+  '@onchainpoker/ocp-sdk': 'file:../packages/ocp-sdk',
+});
+
 patchDeps('dealer-daemon/package.json', {
   '@onchainpoker/ocp-crypto': 'file:../packages/ocp-crypto',
   '@onchainpoker/ocp-sdk': 'file:../packages/ocp-sdk',
@@ -228,51 +254,78 @@ patchDeps('bot/package.json', {
   '@onchainpoker/holdem-eval': 'file:../packages/holdem-eval',
 });
 NODE"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-crypto && npm install --omit=dev --no-fund --no-audit'"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-sdk && npm install --omit=dev --no-fund --no-audit'"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-shuffle && npm install --omit=dev --no-fund --no-audit'"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/coordinator && npm install --omit=dev --no-fund --no-audit'"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/dealer-daemon && npm install --omit=dev --no-fund --no-audit'"
-ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/bot && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-crypto && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-sdk && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/packages/ocp-shuffle && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/coordinator && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/dealer-daemon && npm install --omit=dev --no-fund --no-audit'"
+  ssh "$VPS_SSH" "sudo -u ocp bash -c 'cd $VPS_OCP_DIR/bot && npm install --omit=dev --no-fund --no-audit'"
 
-# Required runtime env files (fail-fast if absent).
-echo ">> Validating required runtime env files..."
-require_remote_file "$VPS_OCP_DIR/config/coordinator.env"
-require_remote_file "$VPS_OCP_DIR/config/dealer-0.env"
-require_remote_file "$VPS_OCP_DIR/config/dealer-1.env"
-require_remote_file "$VPS_OCP_DIR/config/dealer-2.env"
+  if [[ "$NO_RESTART" == "1" ]]; then
+    echo ">> [$TARGET] NO_RESTART=1 — skipping env validation, service restart, and proxy reload."
+    ssh "$VPS_SSH" "sudo systemctl daemon-reload"
+    echo ">> [$TARGET] Deploy (artifacts only) complete."
+    continue
+  fi
 
-# Reload and restart services
-echo ">> Restarting services..."
-ssh "$VPS_SSH" "sudo systemctl daemon-reload"
-ssh "$VPS_SSH" "sudo systemctl restart ocp-coordinator ocp-dealer-daemon@0 ocp-dealer-daemon@1 ocp-dealer-daemon@2"
-ensure_service_active "ocp-coordinator"
-ensure_service_active "ocp-dealer-daemon@0"
-ensure_service_active "ocp-dealer-daemon@1"
-ensure_service_active "ocp-dealer-daemon@2"
-wait_remote_http "coordinator health" "http://127.0.0.1:8788/health" 45
+  # Required runtime env files (fail-fast if absent).
+  echo ">> [$TARGET] Validating required runtime env files..."
+  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/coordinator.env"
+  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-0.env"
+  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-1.env"
+  require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-2.env"
 
-# Restart chain node if it's already initialized
-if ssh "$VPS_SSH" "sudo test -f '$VPS_OCP_DIR/chain/node0/config/genesis.json'"; then
-  ssh "$VPS_SSH" "sudo systemctl restart ocp-chain-node@0"
-  ensure_service_active "ocp-chain-node@0"
-  wait_remote_http "chain RPC status" "http://127.0.0.1:26657/status" 60
-else
-  echo "   Chain not initialized yet — run production-genesis.sh on VPS first"
-fi
+  # Reload and restart services
+  echo ">> [$TARGET] Restarting services..."
+  ssh "$VPS_SSH" "sudo systemctl daemon-reload"
+  ssh "$VPS_SSH" "sudo systemctl restart ocp-coordinator ocp-dealer-daemon@0 ocp-dealer-daemon@1 ocp-dealer-daemon@2"
+  ensure_service_active "$VPS_SSH" "ocp-coordinator"
+  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@0"
+  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@1"
+  ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@2"
+  wait_remote_http "$VPS_SSH" "coordinator health" "http://127.0.0.1:8788/health" 45
 
-# Reload nginx to pick up any config changes (lcd proxy, etc.)
-echo ">> Reloading nginx..."
-ssh "$VPS_SSH" "sudo nginx -t && sudo systemctl reload nginx"
+  # Restart any bot instances (detect bot-*.env in config dir)
+  BOT_INSTANCES="$(ssh "$VPS_SSH" "ls $VPS_OCP_DIR/config/bot-*.env 2>/dev/null | sed 's|.*/bot-||;s|\.env$||' || true")"
+  if [[ -n "$BOT_INSTANCES" ]]; then
+    for BOT_ID in $BOT_INSTANCES; do
+      echo "   Restarting ocp-bot@$BOT_ID..."
+      ssh "$VPS_SSH" "sudo systemctl restart ocp-bot@$BOT_ID"
+      ensure_service_active "$VPS_SSH" "ocp-bot@$BOT_ID"
+    done
+  else
+    echo "   No bot env files found — skipping bot restart"
+  fi
+
+  # Restart chain node if it's already initialized
+  if ssh "$VPS_SSH" "sudo test -f '$VPS_OCP_DIR/chain/node0/config/genesis.json'"; then
+    ssh "$VPS_SSH" "sudo systemctl restart ocp-chain-node@0"
+    ensure_service_active "$VPS_SSH" "ocp-chain-node@0"
+    wait_remote_http "$VPS_SSH" "chain RPC status" "http://127.0.0.1:26657/status" 60
+  else
+    echo "   Chain not initialized yet — run production-genesis.sh on VPS first"
+  fi
+
+  # Detect and reload the reverse proxy (nginx or caddy)
+  echo ">> [$TARGET] Reloading reverse proxy..."
+  PROXY_TYPE="$(ssh "$VPS_SSH" 'if command -v caddy >/dev/null 2>&1 && systemctl is-active --quiet caddy; then echo caddy; elif command -v nginx >/dev/null 2>&1 && systemctl is-active --quiet nginx; then echo nginx; else echo none; fi')"
+  case "$PROXY_TYPE" in
+    caddy) ssh "$VPS_SSH" "sudo systemctl reload caddy" ;;
+    nginx) ssh "$VPS_SSH" "sudo nginx -t && sudo systemctl reload nginx" ;;
+    *)     echo "   WARN: No supported reverse proxy detected on $TARGET" ;;
+  esac
+
+  echo ""
+  echo "=== [$TARGET] Deploy complete ==="
+done
 
 echo ""
-echo "=== Deploy complete ==="
 echo "Web:     https://discordwell.com/ocp"
 echo "LCD:     https://discordwell.com/ocp/lcd/cosmos/base/tendermint/v1beta1/node_info"
 echo "API:     https://discordwell.com/ocp/api/health"
 echo ""
 echo "Chain initialization (first deploy only):"
-echo "  ssh $VPS_SSH"
+echo "  ssh <target>"
 echo "  OCPD_HOME=$VPS_OCP_DIR/chain/node0 OCPD_BIN=$VPS_OCP_DIR/bin/ocpd bash $VPS_OCP_DIR/chain/production-genesis.sh"
 echo "  systemctl enable --now ocp-chain-node@0"
 echo ""

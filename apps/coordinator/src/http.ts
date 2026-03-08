@@ -7,6 +7,7 @@ import type { ChainAdapter } from "./chain/adapter.js";
 import type { CoordinatorStore } from "./store.js";
 import type { ArtifactKind } from "./types.js";
 import type { WsHub } from "./ws.js";
+import type { FaucetService } from "./faucet.js";
 
 const SeatIntentSchema = z.object({
   tableId: z.string().min(1),
@@ -202,8 +203,9 @@ export function createHttpApp(opts: {
   store: CoordinatorStore;
   chain: ChainAdapter;
   ws: WsHub;
+  faucet?: FaucetService | null;
 }) {
-  const { config, store, chain, ws } = opts;
+  const { config, store, chain, ws, faucet } = opts;
   const app = express();
   const writeGuards = [createWriteAuthGuard(config), createWriteRateLimiter(config)];
 
@@ -230,6 +232,33 @@ export function createHttpApp(opts: {
       chainAdapter: chain.kind,
       nowMs: Date.now()
     });
+  });
+
+  // ---- Faucet ----
+
+  app.get("/v1/faucet/status", (_req, res) => {
+    if (!faucet) return res.json({ enabled: false });
+    return res.json(faucet.getStatus());
+  });
+
+  app.post("/v1/faucet", async (req, res) => {
+    if (!faucet) return res.status(404).json({ error: "faucet not enabled" });
+
+    const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
+    if (!address) return res.status(400).json({ error: "address required" });
+
+    const clientIp = getClientId(req);
+
+    try {
+      const result = await faucet.drip(address, clientIp);
+      return res.json(result);
+    } catch (err: any) {
+      const status = err?.status ?? 500;
+      if (status === 429) {
+        res.setHeader("Retry-After", String(err.retryAfter ?? 60));
+      }
+      return res.status(status).json({ error: err?.message ?? "faucet error" });
+    }
   });
 
   app.get("/v1/tables", (_req, res) => {

@@ -8,6 +8,7 @@ import { MockChainAdapter } from "./chain/mock.js";
 import type { ChainAdapter } from "./chain/adapter.js";
 import { CoordinatorStore } from "./store.js";
 import { createCoordinatorServer } from "./server.js";
+import { FaucetService } from "./faucet.js";
 
 const thisDir = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(thisDir, "..", ".env") });
@@ -42,7 +43,17 @@ const store = new CoordinatorStore({
   artifactCacheMaxBytes: config.artifactCacheMaxBytes
 });
 
-const server = createCoordinatorServer({ config, chain, store });
+let faucet: FaucetService | null = null;
+if (config.faucet.enabled) {
+  if (!config.faucet.mnemonic) {
+    console.error("[coordinator] FAUCET_ENABLED=true but FAUCET_MNEMONIC is not set");
+    process.exit(1);
+  }
+  faucet = new FaucetService(config.faucet);
+  await faucet.init();
+}
+
+const server = createCoordinatorServer({ config, chain, store, faucet });
 const { url } = await server.start();
 console.log(`[coordinator] listening: ${url}`);
 

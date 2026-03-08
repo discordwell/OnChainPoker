@@ -151,7 +151,7 @@ const DEFAULT_COORDINATOR_HTTP_URL =
 const DEFAULT_COSMOS_RPC_URL = import.meta.env.VITE_COSMOS_RPC_URL ?? "http://127.0.0.1:26657";
 const DEFAULT_COSMOS_LCD_URL = import.meta.env.VITE_COSMOS_LCD_URL ?? "http://127.0.0.1:1317";
 const DEFAULT_COSMOS_CHAIN_ID = import.meta.env.VITE_COSMOS_CHAIN_ID ?? "ocp-local-1";
-const DEFAULT_COSMOS_GAS_PRICE = import.meta.env.VITE_COSMOS_GAS_PRICE ?? "0uocp";
+const DEFAULT_COSMOS_GAS_PRICE = import.meta.env.VITE_COSMOS_GAS_PRICE ?? "0uchips";
 const PLAYER_SK_KEY_PREFIX = "ocp.web.skPlayer";
 const LEGACY_PK_KEY_PREFIX = "ocp.web.pkPlayer";
 const MAX_EVENTS = 200;
@@ -460,6 +460,8 @@ export function App() {
     kind: "idle",
     message: null
   });
+
+  const [faucetStatus, setFaucetStatus] = useState<{ kind: "idle" | "pending" | "success" | "error"; message: string | null }>({ kind: "idle", message: null });
 
   const [createTableForm, setCreateTableForm] = useState<CreateTableForm>(defaultCreateTableForm);
   const [createTableSubmit, setCreateTableSubmit] = useState<PlayerTxState>({ kind: "idle", message: null });
@@ -1261,6 +1263,31 @@ export function App() {
     setPlayerActionForm((prev) => ({ ...prev, [field]: value }));
   }, []);
 
+  const requestFaucet = useCallback(async () => {
+    if (!playerWallet.address) return;
+    setFaucetStatus({ kind: "pending", message: null });
+    try {
+      const res = await fetch(`${coordinatorBase}/v1/faucet`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: playerWallet.address }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const msg = res.status === 429
+          ? `Cooldown active — ${data.error ?? "try again later"}`
+          : (data.error ?? "faucet error");
+        setFaucetStatus({ kind: "error", message: msg });
+        return;
+      }
+      const chips = (Number(data.amount) / 1_000_000).toFixed(0);
+      setFaucetStatus({ kind: "success", message: `Received ${chips} CHIPS (tx: ${data.txHash?.slice(0, 12)}...)` });
+      setTimeout(() => setFaucetStatus({ kind: "idle", message: null }), 8000);
+    } catch (err: any) {
+      setFaucetStatus({ kind: "error", message: err?.message ?? "network error" });
+    }
+  }, [playerWallet.address, coordinatorBase]);
+
   const connectWallet = useCallback(async () => {
     setPlayerWallet((prev) => ({ ...prev, status: "connecting", error: null }));
     setPlayerSitSubmit({ kind: "idle", message: null });
@@ -1844,6 +1871,21 @@ export function App() {
                 <>
                   <p>Connected as {playerWallet.address}</p>
                   <p className="hint">Seat state: {playerSeat ? `#${playerSeat.seat}` : "Not seated"}</p>
+                  <div style={{ marginTop: "0.5rem" }}>
+                    <button
+                      type="button"
+                      onClick={requestFaucet}
+                      disabled={faucetStatus.kind === "pending"}
+                      style={{ marginRight: "0.5rem" }}
+                    >
+                      {faucetStatus.kind === "pending" ? "Requesting..." : "Get Testnet CHIPS"}
+                    </button>
+                    {faucetStatus.message && (
+                      <p className={faucetStatus.kind === "error" ? "error-banner" : "hint"}>
+                        {faucetStatus.message}
+                      </p>
+                    )}
+                  </div>
                 </>
               ) : (
                 <>

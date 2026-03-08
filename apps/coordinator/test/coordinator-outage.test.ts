@@ -50,7 +50,12 @@ test("WS8 acceptance: coordinator outage does not block direct chain queries", a
       writeAuthToken: null,
       writeRateLimitEnabled: false,
       writeRateLimitMax: 30,
-      writeRateLimitWindowMs: 60_000
+      writeRateLimitWindowMs: 60_000,
+      faucet: {
+        enabled: false, mnemonic: null, amount: "10000000", denom: "uchips",
+        cooldownMs: 3_600_000, ipCooldownMs: 600_000, bech32Prefix: "ocp",
+        gasPrice: "0uchips", rpcUrl: "http://127.0.0.1:26657", lcdUrl: "http://127.0.0.1:1317",
+      },
     },
     chain,
     store
