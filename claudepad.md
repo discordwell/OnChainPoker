@@ -2,6 +2,15 @@
 
 ## Session Summaries
 
+### 2026-03-08T~UTC — Game Room Redesign (Dark Casino Luxury)
+Full UI redesign from developer "Control Room" dashboard to immersive dark casino poker room:
+- **Dark theme**: Replaced all CSS variables (--bg-a, --bg-b, --panel, --ink, --line, etc.) with dark palette. Updated body gradients, input/select/pre backgrounds, error banners, badges, table rows for dark mode.
+- **View mode toggle**: Added `viewMode` state ("game" | "admin"). Game mode is default — immersive poker room. Admin mode preserves the full 3-column dashboard verbatim (now dark-themed).
+- **Game layout**: New CSS classes — game-shell (flex column full viewport), game-topbar (48px sticky header with logo/table tabs/table info/balance/wallet/icons), game-stage (centered poker table), game-sidebar (360px slide-in drawer), game-footer (chat), onboard-overlay (3-step onboarding: connect wallet → choose table → sit down).
+- **Balance display**: Added playerBalance state with LCD polling every 10s, shown as gold chip icon + formatted CHIPS in topbar.
+- **Responsive**: Breakpoints at 1024px (sidebar full-width), 768px (hide topbar center), 640px (compact tabs/logo).
+- **No PokerTable.css changes**: Existing Emerald Velvet theme complements the dark body naturally.
+
 ### 2026-03-08T~UTC — Stale RPC Connection Fix + Chain Reinit
 Fixed the final blocker preventing hands from completing on the public testnet:
 - **Socket hang up fix**: CosmJS `SigningStargateClient` keeps persistent HTTP connections to CometBFT RPC. During ~20s shuffle proof computation, the connection goes stale (server closes idle keep-alive). Added reconnect-on-socket-error logic in `signAndBroadcastAuto()` — detects socket/ECONNRESET errors on `simulate()`, `signAndBroadcastSync()`, and `signAndBroadcast()`, then reconnects and retries once. Changed `client` to `let` with `get client()` accessor on the returned object.

@@ -484,6 +484,10 @@ export function App() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const [playerNotes, setPlayerNotes] = useState<Record<string, string>>(loadPlayerNotes);
 
+  const [viewMode, setViewMode] = useState<"game" | "admin">("game");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [playerBalance, setPlayerBalance] = useState<string | null>(null);
+
   useEffect(() => { saveHandHistory(handHistory); }, [handHistory]);
   useEffect(() => { savePlayerNotes(playerNotes); }, [playerNotes]);
 
@@ -1663,6 +1667,28 @@ export function App() {
     setChatInput("");
   }, [chatInput, selectedTableId, playerWallet.status, playerWallet.address]);
 
+  // Fetch player balance periodically when connected
+  useEffect(() => {
+    if (playerWallet.status !== "connected" || !playerWallet.address) {
+      setPlayerBalance(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchBalance = async () => {
+      try {
+        const res = await fetch(`${DEFAULT_COSMOS_LCD_URL}/cosmos/bank/v1beta1/balances/${playerWallet.address}`);
+        if (!res.ok || cancelled) return;
+        const data = await res.json();
+        const balances = data?.balances as Array<{ denom: string; amount: string }> | undefined;
+        const chips = balances?.find((b) => b.denom === "uchips");
+        if (!cancelled) setPlayerBalance(chips?.amount ?? "0");
+      } catch { /* ignore */ }
+    };
+    void fetchBalance();
+    const timer = window.setInterval(fetchBalance, 10_000);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [playerWallet.status, playerWallet.address]);
+
   // Auto-scroll chat
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1678,12 +1704,447 @@ export function App() {
     [applyCoordinatorBase]
   );
 
+  // Helper: format balance from uchips to CHIPS
+  const formattedBalance = playerBalance != null
+    ? (Number(playerBalance) / 1_000_000).toLocaleString(undefined, { maximumFractionDigits: 2 })
+    : null;
+
+  // Shared poker table render
+  const renderPokerTable = () => {
+    if (!playerTableForSelected) return null;
+    const tableProps = deriveTableProps({
+      raw: playerTableForSelected,
+      rawDealer: null,
+      localAddress: playerWallet.status === "connected" ? playerWallet.address : null,
+      localHoleCards: holeCardState.cards,
+      actionEnabled: playerActionEnabled,
+      onAction: (action: string, amount?: string) => {
+        onPlayerActionInputChange("action", action as PlayerActionForm["action"]);
+        if (amount) onPlayerActionInputChange("amount", amount);
+        if (action === "fold" || action === "check" || action === "call") {
+          void submitPlayerActionDirect(action, amount);
+        }
+      },
+    });
+    return tableProps ? <PokerTable {...tableProps} handHistory={handHistory.get(selectedTableId) ?? []} /> : null;
+  };
+
+  // Shared chat panel render
+  const renderChat = () => (
+    selectedTableId ? (
+      <div className="chat-panel">
+        <h4 className="chat-panel__title">Table Chat</h4>
+        <div className="chat-messages">
+          {chatMessages.length === 0 && (
+            <p className="chat-empty">No messages yet</p>
+          )}
+          {chatMessages.map((m, i) => (
+            <div key={i} className="chat-msg">
+              <span className="chat-msg__sender">{m.sender.slice(0, 8)}...</span>
+              <span className="chat-msg__text">{m.text}</span>
+            </div>
+          ))}
+          <div ref={chatEndRef} />
+        </div>
+        <div className="chat-input-row">
+          <input
+            className="chat-input"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendChat(); } }}
+            placeholder="Type a message..."
+            maxLength={200}
+          />
+          <button type="button" onClick={sendChat} disabled={!chatInput.trim()}>Send</button>
+        </div>
+      </div>
+    ) : null
+  );
+
+  // Determine onboarding step
+  const showOnboarding = viewMode === "game" && (
+    playerWallet.status !== "connected" ||
+    (!playerSeat && !selectedTableId) ||
+    (!playerSeat && !!selectedTableId)
+  );
+
+  if (viewMode === "game") {
+    return (
+      <div className="game-shell">
+        {/* ─── Top Bar ─── */}
+        <header className="game-topbar">
+          <div className="game-topbar__left">
+            <span className="game-topbar__logo">OCP</span>
+            {seatedTableIds.length > 0 && (
+              <div className="table-tabs">
+                {seatedTableIds.map((tid) => {
+                  const info = tableList.find((t) => t.tableId === tid);
+                  return (
+                    <button
+                      key={tid}
+                      type="button"
+                      className={`table-tab${tid === selectedTableId ? " active" : ""}`}
+                      onClick={() => setSelectedTableId(tid)}
+                    >
+                      <span>#{tid}</span>
+                      {info && <span>{info.params.smallBlind}/{info.params.bigBlind}</span>}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <div className="game-topbar__center">
+            {selectedTable ? (
+              <>
+                <strong>Table #{selectedTable.tableId}</strong>
+                <span>{selectedTable.params.smallBlind}/{selectedTable.params.bigBlind}</span>
+                <span className={`badge ${statusTone(selectedTable.status)}`}>{selectedTable.status}</span>
+              </>
+            ) : (
+              <span>No table selected</span>
+            )}
+          </div>
+
+          <div className="game-topbar__right">
+            {playerWallet.status === "connected" && formattedBalance != null && (
+              <div className="game-topbar__balance">
+                <span className="chip-icon" />
+                <span>{formattedBalance}</span>
+              </div>
+            )}
+
+            {selectedTableId && <ChainVerificationBadge {...chainVerification} cometMetrics={cometMetrics} />}
+
+            {playerWallet.status === "connected" && (
+              <button
+                type="button"
+                className="topbar-btn"
+                onClick={requestFaucet}
+                disabled={faucetStatus.kind === "pending"}
+              >
+                {faucetStatus.kind === "pending" ? "..." : "Faucet"}
+              </button>
+            )}
+
+            {playerWallet.status === "connected" ? (
+              <button type="button" className="topbar-btn" title={playerWallet.address}>
+                {playerWallet.address.slice(0, 8)}...{playerWallet.address.slice(-4)}
+              </button>
+            ) : (
+              <button type="button" className="topbar-btn topbar-btn--accent" onClick={connectWallet} disabled={playerWallet.status === "connecting"}>
+                Connect
+              </button>
+            )}
+
+            <span className="topbar-divider" />
+
+            <button
+              type="button"
+              className="topbar-btn topbar-btn--icon"
+              onClick={() => setSidebarOpen((p) => !p)}
+              title="Settings"
+            >
+              {sidebarOpen ? "\u2715" : "\u2699"}
+            </button>
+
+            <button
+              type="button"
+              className="topbar-btn topbar-btn--icon"
+              onClick={() => setViewMode("admin")}
+              title="Admin view"
+            >
+              {"\u2630"}
+            </button>
+          </div>
+        </header>
+
+        {/* Faucet status toast */}
+        {faucetStatus.message && (
+          <div style={{ position: "fixed", top: 56, right: 16, zIndex: 200, maxWidth: 320 }}>
+            <p className={faucetStatus.kind === "error" ? "error-banner" : "hint"} style={{ background: "var(--panel-solid)", padding: "0.5rem 0.75rem", borderRadius: 10, border: "1px solid var(--line)" }}>
+              {faucetStatus.message}
+            </p>
+          </div>
+        )}
+
+        {/* ─── Game Stage ─── */}
+        <main className="game-stage">
+          {renderPokerTable()}
+
+          {/* Onboarding overlay */}
+          {showOnboarding && !playerSeat && (
+            <div className="onboard-overlay">
+              <div className="onboard-card">
+                {playerWallet.status !== "connected" ? (
+                  <>
+                    <h2>Welcome to OnChainPoker</h2>
+                    <p>Provably fair poker on the Cosmos blockchain. Connect your wallet to start playing.</p>
+                    <button
+                      className="onboard-btn"
+                      type="button"
+                      onClick={connectWallet}
+                      disabled={playerWallet.status === "connecting"}
+                    >
+                      {playerWallet.status === "connecting" ? "Connecting..." : "Connect Wallet"}
+                    </button>
+                    {playerWallet.error && <p className="error-banner">{playerWallet.error}</p>}
+                  </>
+                ) : !selectedTableId ? (
+                  <>
+                    <h2>Choose a Table</h2>
+                    <p>Select a table to join, or open the sidebar to create one.</p>
+                    {tables.loading && !tables.data && <p className="placeholder">Loading tables...</p>}
+                    <ul className="table-list">
+                      {filteredTableList.slice(0, 8).map((table) => (
+                        <li key={table.tableId}>
+                          <button
+                            type="button"
+                            className={`table-row ${table.tableId === selectedTableId ? "active" : ""}`}
+                            onClick={() => setSelectedTableId(table.tableId)}
+                          >
+                            <div>
+                              <strong>#{table.tableId}{table.label ? ` ${table.label}` : ""}</strong>
+                              <p>
+                                blinds {table.params.smallBlind}/{table.params.bigBlind}
+                              </p>
+                            </div>
+                            <div className="table-meta">
+                              <span className={`badge ${statusTone(table.status)}`}>{table.status}</span>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </>
+                ) : (
+                  <>
+                    <h2>Take a Seat</h2>
+                    <p>Table #{selectedTableId} &mdash; {selectedTable?.params.smallBlind}/{selectedTable?.params.bigBlind} blinds</p>
+                    <form className="seat-form" onSubmit={submitPlayerSeat}>
+                      <label>
+                        Buy-In (chips)
+                        <input
+                          required
+                          value={playerSeatForm.buyIn}
+                          onChange={(event) => onPlayerSeatInputChange("buyIn", event.target.value)}
+                          placeholder={selectedTable?.params.minBuyIn ?? "1000000"}
+                          disabled={playerSitSubmit.kind === "pending"}
+                        />
+                      </label>
+                      {selectedTable?.params?.passwordHash && (
+                        <label>
+                          Password
+                          <input
+                            type="password"
+                            value={playerSeatForm.password}
+                            onChange={(event) => onPlayerSeatInputChange("password", event.target.value)}
+                            placeholder="Table password"
+                            disabled={playerSitSubmit.kind === "pending"}
+                          />
+                        </label>
+                      )}
+                      <button
+                        type="submit"
+                        className="onboard-btn"
+                        disabled={playerSitSubmit.kind === "pending" || playerWallet.status !== "connected"}
+                      >
+                        {playerSitSubmit.kind === "pending" ? "Sitting..." : "Sit Down"}
+                      </button>
+                    </form>
+                    {playerSitSubmit.message && (
+                      <p className={playerSitSubmit.kind === "error" ? "error-banner" : "hint"}>
+                        {playerSitSubmit.message}
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      className="topbar-btn"
+                      onClick={() => setSelectedTableId("")}
+                    >
+                      Back to table list
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* ─── Sidebar ─── */}
+        {sidebarOpen && <div className="sidebar-backdrop" onClick={() => setSidebarOpen(false)} />}
+        <aside className={`game-sidebar${sidebarOpen ? " game-sidebar--open" : ""}`}>
+          {/* Wallet Section */}
+          <div className="game-sidebar__section">
+            <h4>Wallet</h4>
+            <p className="hint">
+              Chain: {playerWallet.chainId}
+            </p>
+            {playerWallet.status === "connected" ? (
+              <>
+                <p style={{ fontSize: "0.76rem", wordBreak: "break-all" }}>{playerWallet.address}</p>
+                <p className="hint">Seat: {playerSeat ? `#${playerSeat.seat}` : "Not seated"}</p>
+              </>
+            ) : (
+              <button type="button" onClick={connectWallet} disabled={playerWallet.status === "connecting"}>
+                Connect wallet
+              </button>
+            )}
+            {playerWallet.error && <p className="error-banner">{playerWallet.error}</p>}
+          </div>
+
+          {/* Key Management */}
+          {playerWallet.status === "connected" && playerKeyState === "locked" && (
+            <div className="game-sidebar__section">
+              <h4>Unlock Keys</h4>
+              <p className="hint">Keys are encrypted. Enter passphrase to unlock.</p>
+              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <input
+                  type="password"
+                  value={keyPassphrase}
+                  onChange={(e) => setKeyPassphrase(e.target.value)}
+                  placeholder="Passphrase"
+                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); doUnlock(); } }}
+                />
+                <button type="button" onClick={doUnlock}>Unlock</button>
+              </div>
+              {keyError && <p className="error-banner">{keyError}</p>}
+            </div>
+          )}
+
+          {playerWallet.status === "connected" && playerKeyState === "unlocked" && (
+            <div className="game-sidebar__section">
+              <h4>Key Protection</h4>
+              <details>
+                <summary style={{ cursor: "pointer", fontSize: "0.76rem", color: "var(--muted)" }}>Encrypt keys with passphrase</summary>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem" }}>
+                  <input type="password" value={protectPassphrase} onChange={(e) => setProtectPassphrase(e.target.value)} placeholder="New passphrase" />
+                  <input type="password" value={protectConfirm} onChange={(e) => setProtectConfirm(e.target.value)} placeholder="Confirm passphrase" />
+                  <button type="button" disabled={!protectPassphrase || protectPassphrase !== protectConfirm} onClick={() => {
+                    setProtectStatus(null);
+                    void (async () => {
+                      try {
+                        await protectPlayerKeys(playerWallet.address, protectPassphrase);
+                        isKeyEncryptedRef.current = true;
+                        setProtectStatus("Keys encrypted successfully.");
+                        setProtectPassphrase("");
+                        setProtectConfirm("");
+                        setPlayerKeyState("unlocked");
+                      } catch (err) { setProtectStatus(errorMessage(err)); }
+                    })();
+                  }}>Encrypt Keys</button>
+                </div>
+                {protectStatus && <p className="hint">{protectStatus}</p>}
+              </details>
+            </div>
+          )}
+
+          {/* Seat / Leave / Rebuy */}
+          {playerWallet.status === "connected" && selectedTableId && (
+            <div className="game-sidebar__section">
+              <h4>Table Actions</h4>
+              {!playerSeat ? (
+                <form className="seat-form" onSubmit={submitPlayerSeat}>
+                  <label>
+                    Buy-In
+                    <input required value={playerSeatForm.buyIn} onChange={(e) => onPlayerSeatInputChange("buyIn", e.target.value)} placeholder={selectedTable?.params.minBuyIn ?? "1000000"} disabled={playerSitSubmit.kind === "pending"} />
+                  </label>
+                  {selectedTable?.params?.passwordHash && (
+                    <label>
+                      Password
+                      <input type="password" value={playerSeatForm.password} onChange={(e) => onPlayerSeatInputChange("password", e.target.value)} placeholder="Table password" disabled={playerSitSubmit.kind === "pending"} />
+                    </label>
+                  )}
+                  <button type="submit" disabled={playerSitSubmit.kind === "pending" || playerWallet.status !== "connected"}>
+                    {playerSitSubmit.kind === "pending" ? "Sitting..." : "Sit Down"}
+                  </button>
+                  {playerSitSubmit.message && <p className={playerSitSubmit.kind === "error" ? "error-banner" : "hint"}>{playerSitSubmit.message}</p>}
+                </form>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                    <button
+                      type="button" className="btn-leave"
+                      disabled={playerLeaveSubmit.kind === "pending" || playerWallet.status !== "connected" || !selectedTableId || Boolean(playerTableForSelected?.hand && playerSeat.inHand)}
+                      onClick={submitPlayerLeave}
+                    >
+                      {playerLeaveSubmit.kind === "pending" ? "Leaving..." : "Leave Table"}
+                    </button>
+                  </div>
+                  {playerLeaveSubmit.message && <p className={playerLeaveSubmit.kind === "error" ? "error-banner" : "hint"}>{playerLeaveSubmit.message}</p>}
+
+                  <div className="rebuy-row">
+                    <input value={rebuyAmount} onChange={(e) => setRebuyAmount(e.target.value)} placeholder="Rebuy amount" inputMode="numeric" disabled={rebuySubmit.kind === "pending"} />
+                    <button type="button" disabled={rebuySubmit.kind === "pending" || playerWallet.status !== "connected" || !selectedTableId || Boolean(playerTableForSelected?.hand && playerSeat.inHand)} onClick={submitRebuy}>
+                      {rebuySubmit.kind === "pending" ? "..." : "Rebuy"}
+                    </button>
+                  </div>
+                  {rebuySubmit.message && <p className={rebuySubmit.kind === "error" ? "error-banner" : "hint"}>{rebuySubmit.message}</p>}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* Faucet */}
+          {playerWallet.status === "connected" && (
+            <div className="game-sidebar__section">
+              <h4>Faucet</h4>
+              <button type="button" onClick={requestFaucet} disabled={faucetStatus.kind === "pending"}>
+                {faucetStatus.kind === "pending" ? "Requesting..." : "Get Free CHIPS"}
+              </button>
+              {faucetStatus.message && <p className={faucetStatus.kind === "error" ? "error-banner" : "hint"}>{faucetStatus.message}</p>}
+            </div>
+          )}
+
+          {/* Connection */}
+          <div className="game-sidebar__section">
+            <h4>Connection</h4>
+            <div className="endpoint-row">
+              <label htmlFor="sidebar-coordinator-url">Coordinator URL</label>
+              <div className="endpoint-controls">
+                <input
+                  id="sidebar-coordinator-url"
+                  value={coordinatorInput}
+                  onChange={(event) => setCoordinatorInput(event.target.value)}
+                  onKeyDown={onInputKeyDown}
+                  placeholder="http://127.0.0.1:8788"
+                  spellCheck={false}
+                />
+                <button type="button" onClick={applyCoordinatorBase}>Set</button>
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.4rem" }}>
+              <span className={`dot ${health.error ? "status-closed" : "status-open"}`} />
+              <span className="hint">{health.error ? "Unavailable" : "Connected"}</span>
+              <span className={`dot ${wsTone(wsStatus)}`} style={{ marginLeft: "0.5rem" }} />
+              <span className="hint">WS: {wsStatus}</span>
+            </div>
+          </div>
+        </aside>
+
+        {/* ─── Footer — Chat ─── */}
+        <footer className="game-footer">
+          {renderChat()}
+        </footer>
+      </div>
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════
+  // ADMIN MODE — original dashboard layout (dark-themed)
+  // ═══════════════════════════════════════════════════════
   return (
     <div className="app-shell">
       <header className="topbar panel">
-        <div>
-          <p className="kicker">OnChainPoker</p>
-          <h1>Control Room + Player</h1>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div>
+            <p className="kicker">OnChainPoker</p>
+            <h1>Control Room</h1>
+          </div>
+          <button type="button" className="topbar-btn topbar-btn--accent" onClick={() => setViewMode("game")}>
+            Game View
+          </button>
         </div>
 
         <div className="endpoint-row">
@@ -1805,58 +2266,11 @@ export function App() {
 
           {!selectedTable && <p className="placeholder">Select a table to join as a player.</p>}
 
-          {/* Chain verification badge */}
           {selectedTableId && <ChainVerificationBadge {...chainVerification} cometMetrics={cometMetrics} />}
 
-          {/* Visual poker table */}
-          {playerTableForSelected && (() => {
-            const tableProps = deriveTableProps({
-              raw: playerTableForSelected,
-              rawDealer: null,
-              localAddress: playerWallet.status === "connected" ? playerWallet.address : null,
-              localHoleCards: holeCardState.cards,
-              actionEnabled: playerActionEnabled,
-              onAction: (action: string, amount?: string) => {
-                onPlayerActionInputChange("action", action as PlayerActionForm["action"]);
-                if (amount) onPlayerActionInputChange("amount", amount);
-                // Auto-submit simple actions
-                if (action === "fold" || action === "check" || action === "call") {
-                  void submitPlayerActionDirect(action, amount);
-                }
-              },
-            });
-            return tableProps ? <PokerTable {...tableProps} handHistory={handHistory.get(selectedTableId) ?? []} /> : null;
-          })()}
+          {renderPokerTable()}
 
-          {/* Chat Panel */}
-          {selectedTableId && (
-            <div className="chat-panel">
-              <h4 className="chat-panel__title">Table Chat</h4>
-              <div className="chat-messages">
-                {chatMessages.length === 0 && (
-                  <p className="chat-empty">No messages yet</p>
-                )}
-                {chatMessages.map((m, i) => (
-                  <div key={i} className="chat-msg">
-                    <span className="chat-msg__sender">{m.sender.slice(0, 8)}...</span>
-                    <span className="chat-msg__text">{m.text}</span>
-                  </div>
-                ))}
-                <div ref={chatEndRef} />
-              </div>
-              <div className="chat-input-row">
-                <input
-                  className="chat-input"
-                  value={chatInput}
-                  onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); sendChat(); } }}
-                  placeholder="Type a message..."
-                  maxLength={200}
-                />
-                <button type="button" onClick={sendChat} disabled={!chatInput.trim()}>Send</button>
-              </div>
-            </div>
-          )}
+          {renderChat()}
 
           <div className="stack-two">
             <div>
@@ -1950,7 +2364,7 @@ export function App() {
                             setProtectStatus("Keys encrypted successfully.");
                             setProtectPassphrase("");
                             setProtectConfirm("");
-                            setPlayerKeyState("unlocked"); // remains unlocked for this session
+                            setPlayerKeyState("unlocked");
                           } catch (err) {
                             setProtectStatus(errorMessage(err));
                           }
