@@ -633,6 +633,69 @@ pre {
 }
 
 /* ═══════════════════════════════════════════════════════
+   COLLAPSIBLE SECTIONS (Admin)
+   ═══════════════════════════════════════════════════════ */
+
+.admin-collapse {
+  margin-top: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(10, 14, 18, 0.4);
+}
+
+.admin-collapse summary {
+  cursor: pointer;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  user-select: none;
+  transition: color 0.15s;
+  list-style: none;
+}
+
+.admin-collapse summary::before {
+  content: "\25B8";
+  display: inline-block;
+  margin-right: 0.4rem;
+  transition: transform 0.15s;
+  font-size: 0.6rem;
+}
+
+.admin-collapse[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.admin-collapse summary:hover {
+  color: var(--ink);
+}
+
+.admin-collapse summary::-webkit-details-marker {
+  display: none;
+}
+
+.admin-collapse > :not(summary) {
+  padding: 0 0.6rem 0.5rem;
+}
+
+.admin-collapse--inline {
+  margin-top: 0.2rem;
+  border: none;
+  background: transparent;
+}
+
+.admin-collapse--inline summary {
+  padding: 0.15rem 0;
+  font-size: 0.64rem;
+}
+
+.admin-collapse--inline > :not(summary) {
+  padding: 0;
+}
+
+/* ═══════════════════════════════════════════════════════
    CHAT PANEL
    ═══════════════════════════════════════════════════════ */
 

@@ -687,115 +687,109 @@ export function AdminView({ g }: { g: GameState }) {
                 </div>
               </dl>
 
-              <div className="stack-two">
-                <div>
-                  <h4>Seat Intents</h4>
-                  {g.seatIntents.loading && <p className="placeholder">Loading intents...</p>}
-                  {g.seatIntents.error && <p className="error-banner">{g.seatIntents.error}</p>}
-                  {!g.seatIntents.loading && !g.seatIntents.error && (g.seatIntents.data?.length ?? 0) === 0 && (
-                    <p className="placeholder">No active intents.</p>
-                  )}
+              <h4 style={{ marginTop: "0.5rem" }}>Seat Intents</h4>
+              {g.seatIntents.loading && <p className="placeholder">Loading intents...</p>}
+              {g.seatIntents.error && <p className="error-banner">{g.seatIntents.error}</p>}
+              {!g.seatIntents.loading && !g.seatIntents.error && (g.seatIntents.data?.length ?? 0) === 0 && (
+                <p className="placeholder">No active intents.</p>
+              )}
 
-                  {(g.seatIntents.data ?? []).map((intent) => (
-                    <article key={intent.intentId} className="intent-card">
-                      <header>
-                        <strong>Seat {intent.seat}</strong>
-                        <span>{intent.player}</span>
-                      </header>
-                      <p>
-                        buyIn {intent.buyIn ?? "-"} | bond {intent.bond ?? "-"}
-                      </p>
-                      <small>expires {formatRelative(intent.expiresAtMs)}</small>
-                    </article>
-                  ))}
-                </div>
+              {(g.seatIntents.data ?? []).map((intent) => (
+                <article key={intent.intentId} className="intent-card">
+                  <header>
+                    <strong>Seat {intent.seat}</strong>
+                    <span>{intent.player}</span>
+                  </header>
+                  <p>
+                    buyIn {intent.buyIn ?? "-"} | bond {intent.bond ?? "-"}
+                  </p>
+                  <small>expires {formatRelative(intent.expiresAtMs)}</small>
+                </article>
+              ))}
 
-                <div>
-                  <h4>Submit Seat Intent</h4>
-                  <form className="seat-form" onSubmit={g.submitSeatIntent}>
-                    <label>
-                      Player
-                      <input
-                        required
-                        value={g.seatForm.player}
-                        onChange={(event) => g.onSeatInputChange("player", event.target.value)}
-                        placeholder="alice"
-                      />
-                    </label>
+              <details className="admin-collapse">
+                <summary>Submit Seat Intent</summary>
+                <form className="seat-form" onSubmit={g.submitSeatIntent}>
+                  <label>
+                    Player
+                    <input
+                      required
+                      value={g.seatForm.player}
+                      onChange={(event) => g.onSeatInputChange("player", event.target.value)}
+                      placeholder="ocp1abc..."
+                    />
+                  </label>
 
-                    <label>
-                      Seat (0-8)
-                      <input
-                        required
-                        value={g.seatForm.seat}
-                        onChange={(event) => g.onSeatInputChange("seat", event.target.value)}
-                        inputMode="numeric"
-                      />
-                    </label>
+                  <label>
+                    Seat (0-8)
+                    <input
+                      required
+                      value={g.seatForm.seat}
+                      onChange={(event) => g.onSeatInputChange("seat", event.target.value)}
+                      inputMode="numeric"
+                    />
+                  </label>
 
-                    <label>
-                      Buy-In (optional)
-                      <input
-                        value={g.seatForm.buyIn}
-                        onChange={(event) => g.onSeatInputChange("buyIn", event.target.value)}
-                        placeholder="1000000"
-                      />
-                    </label>
+                  <label>
+                    Buy-In (optional)
+                    <input
+                      value={g.seatForm.buyIn}
+                      onChange={(event) => g.onSeatInputChange("buyIn", event.target.value)}
+                      placeholder="1000000"
+                    />
+                  </label>
 
-                    <label>
-                      Bond (optional)
-                      <input
-                        value={g.seatForm.bond}
-                        onChange={(event) => g.onSeatInputChange("bond", event.target.value)}
-                        placeholder="10000"
-                      />
-                    </label>
+                  <label>
+                    Bond (optional)
+                    <input
+                      value={g.seatForm.bond}
+                      onChange={(event) => g.onSeatInputChange("bond", event.target.value)}
+                      placeholder="10000"
+                    />
+                  </label>
 
-                    <label>
-                      pkPlayer (optional)
-                      <input
-                        value={g.seatForm.pkPlayer}
-                        onChange={(event) => g.onSeatInputChange("pkPlayer", event.target.value)}
-                        placeholder="base64"
-                        spellCheck={false}
-                      />
-                    </label>
+                  <label>
+                    pkPlayer (optional)
+                    <input
+                      value={g.seatForm.pkPlayer}
+                      onChange={(event) => g.onSeatInputChange("pkPlayer", event.target.value)}
+                      placeholder="base64"
+                      spellCheck={false}
+                    />
+                  </label>
 
-                    <button
-                      type="submit"
-                      disabled={
-                        g.seatSubmit.kind === "pending" ||
-                        !g.selectedTableId ||
-                        g.seatForm.player.trim().length === 0
-                      }
-                    >
-                      {g.seatSubmit.kind === "pending" ? "Submitting..." : "Submit"}
-                    </button>
-                  </form>
+                  <button
+                    type="submit"
+                    disabled={
+                      g.seatSubmit.kind === "pending" ||
+                      !g.selectedTableId ||
+                      g.seatForm.player.trim().length === 0
+                    }
+                  >
+                    {g.seatSubmit.kind === "pending" ? "Submitting..." : "Submit"}
+                  </button>
+                </form>
 
-                  {g.seatSubmit.message && (
-                    <p className={g.seatSubmit.kind === "error" ? "error-banner" : "hint"}>
-                      {g.seatSubmit.message}
-                    </p>
-                  )}
-                </div>
-              </div>
+                {g.seatSubmit.message && (
+                  <p className={g.seatSubmit.kind === "error" ? "error-banner" : "hint"}>
+                    {g.seatSubmit.message}
+                  </p>
+                )}
+              </details>
 
-              <div className="stack-two">
-                <div>
-                  <h4>v0 Raw Table Query</h4>
-                  {g.rawTable.loading && <p className="placeholder">Loading raw table view...</p>}
-                  {g.rawTable.error && <p className="placeholder">{g.rawTable.error}</p>}
-                  {g.rawTable.data != null ? <pre>{prettyJson(g.rawTable.data)}</pre> : null}
-                </div>
+              <details className="admin-collapse">
+                <summary>Raw Table State</summary>
+                {g.rawTable.loading && <p className="placeholder">Loading...</p>}
+                {g.rawTable.error && <p className="placeholder">{g.rawTable.error}</p>}
+                {g.rawTable.data != null ? <pre>{prettyJson(g.rawTable.data)}</pre> : null}
+              </details>
 
-                <div>
-                  <h4>v0 Dealer Next Helper</h4>
-                  {g.dealerNext.loading && <p className="placeholder">Loading dealer hint...</p>}
-                  {g.dealerNext.error && <p className="placeholder">{g.dealerNext.error}</p>}
-                  {g.dealerNext.data != null ? <pre>{prettyJson(g.dealerNext.data)}</pre> : null}
-                </div>
-              </div>
+              <details className="admin-collapse">
+                <summary>Dealer Next Action</summary>
+                {g.dealerNext.loading && <p className="placeholder">Loading...</p>}
+                {g.dealerNext.error && <p className="placeholder">{g.dealerNext.error}</p>}
+                {g.dealerNext.data != null ? <pre>{prettyJson(g.dealerNext.data)}</pre> : null}
+              </details>
             </>
           )}
         </section>
@@ -823,7 +817,12 @@ export function AdminView({ g }: { g: GameState }) {
                   table {event.tableId ?? "-"} | hand {event.handId ?? "-"}
                 </p>
                 <small>{formatTimestamp(event.timeMs)}</small>
-                {event.data != null ? <pre>{prettyJson(event.data)}</pre> : null}
+                {event.data != null ? (
+                  <details className="admin-collapse admin-collapse--inline">
+                    <summary>data</summary>
+                    <pre>{prettyJson(event.data)}</pre>
+                  </details>
+                ) : null}
               </article>
             ))}
           </div>
