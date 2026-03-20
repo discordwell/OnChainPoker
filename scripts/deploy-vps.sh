@@ -22,6 +22,22 @@ NO_RESTART="${NO_RESTART:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+REBOOT_SCRIPT="${HOME}/Projects/shared/reboot-vps.sh"
+
+# SSH kicker: test connectivity, reboot via OVH API if unreachable
+ensure_ssh() {
+  local host="$1"
+  if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "true" 2>/dev/null; then
+    return 0
+  fi
+  echo "SSH unreachable on $host — kicking server via OVH API..."
+  if [[ -x "$REBOOT_SCRIPT" ]]; then
+    "$REBOOT_SCRIPT" "$host" --wait
+  else
+    echo "ERROR: reboot script not found: $REBOOT_SCRIPT" >&2
+    exit 1
+  fi
+}
 
 BUILD_ONLY=false
 SKIP_BUILD=false
@@ -132,6 +148,7 @@ IFS=',' read -ra TARGETS <<< "$DEPLOY_TARGETS"
 
 for TARGET in "${TARGETS[@]}"; do
   VPS_SSH="$(resolve_ssh "$TARGET")"
+  ensure_ssh "$VPS_SSH"
 
   echo ""
   echo ">> [$TARGET] Syncing artifacts to $VPS_SSH:$VPS_OCP_DIR ..."
