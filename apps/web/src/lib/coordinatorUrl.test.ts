@@ -50,6 +50,22 @@ describe("normalizeCoordinatorBase", () => {
   });
 });
 
+describe("normalizeCoordinatorBase rejects dangerous schemes", () => {
+  it("falls back to default for javascript: URLs", () => {
+    const result = normalizeCoordinatorBase("javascript:alert(1)");
+    // normalizeCoordinatorBase resolves against window.location.origin,
+    // so javascript: becomes a path — verify it doesn't produce a javascript: URL
+    expect(result).not.toMatch(/^javascript:/i);
+    expect(result).toMatch(/^http/);
+  });
+
+  it("falls back to default for data: URLs", () => {
+    const result = normalizeCoordinatorBase("data:text/html,<h1>hi</h1>");
+    expect(result).not.toMatch(/^data:/i);
+    expect(result).toMatch(/^http/);
+  });
+});
+
 describe("toWsUrl", () => {
   it("converts http to ws and appends /ws", () => {
     const result = toWsUrl("http://127.0.0.1:8788");

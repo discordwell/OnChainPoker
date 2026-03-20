@@ -386,7 +386,14 @@ export function useGameState() {
       setWsStatus("connecting");
       setWsError(null);
 
-      const ws = new WebSocket(toWsUrl(coordinatorBase));
+      let ws: WebSocket;
+      try {
+        ws = new WebSocket(toWsUrl(coordinatorBase));
+      } catch (err) {
+        setWsStatus("error");
+        setWsError(err instanceof Error ? err.message : "Invalid WebSocket URL");
+        return;
+      }
       wsRef.current = ws;
 
       ws.onopen = () => {

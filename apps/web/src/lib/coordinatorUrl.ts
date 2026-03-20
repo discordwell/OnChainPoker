@@ -4,12 +4,17 @@ function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
 }
 
+const ALLOWED_PROTOCOLS = new Set(["http:", "https:"]);
+
 export function normalizeCoordinatorBase(raw: string): string {
   const input = raw.trim();
   if (!input) return trimTrailingSlashes(DEFAULT_COORDINATOR_HTTP_URL);
 
   try {
     const absolute = new URL(input, window.location.origin);
+    if (!ALLOWED_PROTOCOLS.has(absolute.protocol)) {
+      return trimTrailingSlashes(DEFAULT_COORDINATOR_HTTP_URL);
+    }
     return trimTrailingSlashes(absolute.toString());
   } catch {
     return trimTrailingSlashes(DEFAULT_COORDINATOR_HTTP_URL);
