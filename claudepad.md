@@ -2,6 +2,13 @@
 
 ## Session Summaries
 
+### 2026-03-20T~UTC — VC Polish: App.tsx Decomposition + Documentation
+Full repo polish for VC demo presentation:
+- **App.tsx decomposition**: Broke 3,029-line monolith into well-organized modules. App.tsx is now 13 lines. Created `hooks/useGameState.ts` (all state + logic), `components/GameView.tsx` (game mode UI), `components/AdminView.tsx` (admin/control room UI), `lib/types.ts`, `lib/constants.ts`, `lib/utils.ts`, `lib/playerKeys.ts`, `lib/coordinatorUrl.ts`.
+- **Documentation**: Rewrote README.md with VC-facing value prop, live demo link, architecture table. Created ARCHITECTURE.md with system overview, ASCII data flow diagram, component map, crypto pipeline, security model. Added MIT LICENSE file (was missing).
+- **Deploy + wet test**: Deployed to discordwell.com/ocp, verified both game mode and admin view render correctly, zero console errors, WebSocket connected, coordinator health green.
+- **Pre-existing issues noted**: coordinator http-dealer-next test failure, web tsc --noEmit type errors (both pre-existing, not caused by refactoring).
+
 ### 2026-03-08T~UTC — Fix Coordinator LCD Queries + Epoch Mismatch Timeout
 Fixed two blockers preventing the live testnet from being playable:
 - **Coordinator LCD queries**: CometChainAdapter was using broken legacy ABCI queries (`/table/1`). Added `lcdUrl` to adapter, switched all queries to LCD REST (`/onchainpoker/poker/v1/tables/1`). Fixed v0 route guards from `chain.kind !== "comet"` to `!chain.queryJson`. Added snake_case fallbacks in `parsePlayerTable.ts` for LCD JSON format (e.g., `small_blind`, `hand_id`, `in_hand`).
