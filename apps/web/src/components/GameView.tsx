@@ -1,14 +1,29 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { GameState } from "../hooks/useGameState";
 import { PixiPokerTable } from "../pixi/PixiPokerTable";
 import { ChainVerificationBadge } from "./ChainVerificationBadge";
+import { ToastContainer } from "./Toast";
+import { PlayerStats } from "./PlayerStats";
 import { audioManager } from "../audio/AudioManager";
 import { useNicknames } from "../hooks/useNicknames";
+import { useToast } from "../hooks/useToast";
 import { statusTone, wsTone } from "../lib/utils";
 
 export function GameView({ g }: { g: GameState }) {
   const [audioMuted, setAudioMuted] = useState(audioManager.muted);
   const { getDisplayName } = useNicknames();
+  const toast = useToast();
+
+  // Bridge faucet status to toast system
+  const prevFaucetMsg = useRef("");
+  useEffect(() => {
+    const msg = g.faucetStatus.message;
+    if (msg && msg !== prevFaucetMsg.current) {
+      prevFaucetMsg.current = msg;
+      if (g.faucetStatus.kind === "error") toast.error(msg);
+      else toast.success(msg);
+    }
+  }, [g.faucetStatus.message, g.faucetStatus.kind]);
 
   const toggleAudioMute = () => {
     audioManager.toggleMute();
@@ -218,14 +233,8 @@ export function GameView({ g }: { g: GameState }) {
         </div>
       </header>
 
-      {/* Faucet status toast */}
-      {g.faucetStatus.message && (
-        <div style={{ position: "fixed", top: 56, right: 16, zIndex: 200, maxWidth: 320 }}>
-          <p className={g.faucetStatus.kind === "error" ? "error-banner" : "hint"} style={{ background: "var(--panel-solid)", padding: "0.5rem 0.75rem", borderRadius: 10, border: "1px solid var(--line)" }}>
-            {g.faucetStatus.message}
-          </p>
-        </div>
-      )}
+      {/* Toast notifications */}
+      <ToastContainer />
 
       {/* ─── Game Stage ─── */}
       <main className="game-stage">
@@ -261,19 +270,28 @@ export function GameView({ g }: { g: GameState }) {
                     {g.playerWallet.status === "connected" ? "Select a table to join" : "Select a table to watch"}
                   </p>
                   <ul className="table-list">
-                    {g.filteredTableList.slice(0, 8).map((table) => (
+                    {g.filteredTableList.slice(0, 12).map((table) => (
                       <li key={table.tableId}>
                         <button
                           type="button"
                           className="table-row"
                           onClick={() => g.setSelectedTableId(table.tableId)}
                         >
-                          <div>
-                            <strong>#{table.tableId}{table.label ? ` ${table.label}` : ""}</strong>
-                            <p>blinds {table.params.smallBlind}/{table.params.bigBlind}</p>
+                          <div className="table-row__info">
+                            <strong className="table-row__name">
+                              {table.label || `Table #${table.tableId}`}
+                            </strong>
+                            <span className="table-row__blinds">
+                              {table.params.smallBlind}/{table.params.bigBlind} blinds
+                            </span>
+                            <span className="table-row__buyin">
+                              Buy-in: {table.params.minBuyIn}–{table.params.maxBuyIn}
+                            </span>
                           </div>
                           <div className="table-meta">
-                            <span className={`badge ${statusTone(table.status)}`}>{table.status}</span>
+                            <span className={`badge ${statusTone(table.status)}`}>
+                              {table.status === "in_hand" ? "Playing" : table.status === "open" ? "Open" : table.status}
+                            </span>
                           </div>
                         </button>
                       </li>
@@ -352,6 +370,15 @@ export function GameView({ g }: { g: GameState }) {
       {/* ─── Sidebar ─── */}
       {g.sidebarOpen && <div className="sidebar-backdrop" onClick={() => g.setSidebarOpen(false)} />}
       <aside className={`game-sidebar${g.sidebarOpen ? " game-sidebar--open" : ""}`}>
+        {/* Session Stats */}
+        {g.playerWallet.status === "connected" && g.selectedTableId && (
+          <div className="game-sidebar__section">
+            <PlayerStats
+              address={g.playerWallet.address}
+              handHistory={g.handHistory.get(g.selectedTableId) ?? []}
+            />
+          </div>
+        )}
         {/* Wallet Section */}
         <div className="game-sidebar__section">
           <h4>Wallet</h4>

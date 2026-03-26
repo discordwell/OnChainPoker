@@ -337,6 +337,27 @@ pre {
   margin-top: 0.2rem;
 }
 
+.table-row__info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.table-row__name {
+  font-size: 0.82rem;
+}
+
+.table-row__blinds {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ring);
+}
+
+.table-row__buyin {
+  font-size: 0.68rem;
+  color: var(--muted);
+}
+
 .table-row.active {
   border-color: var(--ring);
   background: linear-gradient(120deg, rgba(240, 191, 79, 0.07) 0%, rgba(14, 122, 93, 0.07) 100%);
@@ -1244,4 +1265,108 @@ pre {
     padding: 0.24rem 0.4rem;
     font-size: 0.68rem;
   }
+}
+
+/* ─── Toast Notifications ─── */
+
+.toast-container {
+  position: fixed;
+  top: 56px;
+  right: 1rem;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: 360px;
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 0.82rem;
+  font-family: var(--font-sans);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  pointer-events: auto;
+  cursor: pointer;
+  animation: toast-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  backdrop-filter: blur(12px);
+}
+
+.toast--success { border-color: var(--accent); }
+.toast--error { border-color: var(--danger); }
+.toast--info { border-color: var(--ring); }
+
+.toast__icon {
+  font-size: 0.9rem;
+  flex-shrink: 0;
+}
+.toast--success .toast__icon { color: var(--accent); }
+.toast--error .toast__icon { color: var(--danger); }
+.toast--info .toast__icon { color: var(--ring); }
+
+.toast__msg {
+  line-height: 1.4;
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* ─── Player Stats ─── */
+
+.player-stats {
+  padding: 0.75rem;
+  background: var(--panel-solid);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.player-stats__title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.5rem;
+}
+
+.player-stats__grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  text-align: center;
+}
+
+.player-stats__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.player-stats__value {
+  font-family: var(--font-mono);
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--ring);
+}
+
+.player-stats__label {
+  font-size: 0.65rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
