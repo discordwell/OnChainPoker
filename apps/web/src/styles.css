@@ -1,20 +1,5 @@
 @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap");
-
-:root {
-  --bg-a: #0c0e12;
-  --bg-b: #111518;
-  --panel: rgba(18, 22, 28, 0.92);
-  --panel-solid: #151a21;
-  --ink: #e0ddd4;
-  --muted: #6b7a74;
-  --line: #2a3530;
-  --accent: #0e7a5d;
-  --accent-soft: #122e24;
-  --warn: #c8862a;
-  --danger: #c44545;
-  --ring: #f0bf4f;
-  --shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
-}
+@import "@feltprotocol/design-tokens/tokens.css";
 
 * {
   box-sizing: border-box;

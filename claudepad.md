@@ -2,6 +2,17 @@
 
 ## Session Summaries
 
+### 2026-03-26T~UTC — Token Launch: Rebrand to Felt Protocol + Phase 1 Foundation
+User wants to launch a token. Scoped a 5-phase UI overhaul plan:
+- **Phase 0**: Chose name "Felt Protocol" (FELT). Chain identifiers (`ocp`, `uchips`) unchanged.
+- **Phase 1 (done)**: Created `packages/design-tokens/` (tokens.css, tokens.js, colors.js). Extracted `:root` CSS vars from styles.css. Renamed all user-facing strings (logo, title, Keplr chain name, lobby). Scaffolded `apps/landing/` with full premium CSS (Noir Casino Luxe aesthetic).
+- **Phase 2 (next)**: PixiJS poker table — canvas-rendered game engine replacing HTML/CSS table. Card dealing anims, chip movement, win celebrations.
+- **Phase 3**: Sound system (Web Audio API) + player identity (coordinator nicknames + identicons).
+- **Phase 4**: Missing features (hand history, leaderboard, toasts, enhanced lobby).
+- **Phase 5**: Landing/marketing site buildout on separate domain.
+- **Deploy fix**: Discovered discordwell.com DNS points to `ovh2` (15.204.59.61), not `ovh` (54.37.226.6). Must use `DEPLOY_TARGETS=ovh2`.
+- **Decisions**: PixiJS full game engine for animations, essential sound, coordinator-stored nicknames + color-coded addresses, separate landing site.
+
 ### 2026-03-20T~UTC — VC Polish: App.tsx Decomposition + Documentation
 Full repo polish for VC demo presentation:
 - **App.tsx decomposition**: Broke 3,029-line monolith into well-organized modules. App.tsx is now 13 lines. Created `hooks/useGameState.ts` (all state + logic), `components/GameView.tsx` (game mode UI), `components/AdminView.tsx` (admin/control room UI), `lib/types.ts`, `lib/constants.ts`, `lib/utils.ts`, `lib/playerKeys.ts`, `lib/coordinatorUrl.ts`.

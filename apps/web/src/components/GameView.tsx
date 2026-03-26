@@ -1,5 +1,5 @@
 import type { GameState } from "../hooks/useGameState";
-import { PokerTable } from "./PokerTable";
+import { PixiPokerTable } from "../pixi/PixiPokerTable";
 import { ChainVerificationBadge } from "./ChainVerificationBadge";
 import { statusTone, wsTone } from "../lib/utils";
 
@@ -7,7 +7,7 @@ export function GameView({ g }: { g: GameState }) {
   const renderPokerTable = () => {
     const tableProps = g.renderPokerTableProps;
     if (!tableProps) return null;
-    return <PokerTable {...tableProps} handHistory={g.handHistory.get(g.selectedTableId) ?? []} />;
+    return <PixiPokerTable {...tableProps} handHistory={g.handHistory.get(g.selectedTableId) ?? []} />;
   };
 
   const renderChat = () => (
@@ -101,7 +101,7 @@ export function GameView({ g }: { g: GameState }) {
       {/* ─── Top Bar ─── */}
       <header className="game-topbar">
         <div className="game-topbar__left">
-          <span className="game-topbar__logo">OCP</span>
+          <span className="game-topbar__logo">FELT</span>
           {g.seatedTableIds.length > 0 && (
             <div className="table-tabs">
               {g.seatedTableIds.map((tid) => {
@@ -221,8 +221,8 @@ export function GameView({ g }: { g: GameState }) {
         {g.showLobby && (
           <div className="onboard-overlay">
             <div className="onboard-card">
-              <h2>OnChainPoker</h2>
-              <p>Provably fair poker on the Cosmos blockchain.</p>
+              <h2>Felt Protocol</h2>
+              <p>Provably fair poker, dealt by the chain.</p>
               {g.playerWallet.status !== "connected" && (
                 <button
                   className="onboard-btn"

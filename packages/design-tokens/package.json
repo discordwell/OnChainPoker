@@ -1,0 +1,24 @@
+{
+  "name": "@feltprotocol/design-tokens",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "exports": {
+    "./tokens.css": "./tokens.css",
+    "./tokens": {
+      "types": "./tokens.d.ts",
+      "default": "./tokens.js"
+    },
+    "./colors": {
+      "types": "./colors.d.ts",
+      "default": "./colors.js"
+    }
+  },
+  "files": [
+    "tokens.css",
+    "tokens.js",
+    "tokens.d.ts",
+    "colors.js",
+    "colors.d.ts"
+  ]
+}

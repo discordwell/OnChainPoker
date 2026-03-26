@@ -1,0 +1,32 @@
+/* Felt Protocol — Design Tokens */
+
+:root {
+  /* ─── Backgrounds ─── */
+  --bg-a: #0c0e12;
+  --bg-b: #111518;
+  --panel: rgba(18, 22, 28, 0.92);
+  --panel-solid: #151a21;
+
+  /* ─── Typography ─── */
+  --ink: #e0ddd4;
+  --muted: #6b7a74;
+
+  /* ─── Borders & Lines ─── */
+  --line: #2a3530;
+
+  /* ─── Brand ─── */
+  --accent: #0e7a5d;
+  --accent-soft: #122e24;
+  --ring: #f0bf4f;
+
+  /* ─── Semantic ─── */
+  --warn: #c8862a;
+  --danger: #c44545;
+
+  /* ─── Elevation ─── */
+  --shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+
+  /* ─── Font Stacks ─── */
+  --font-sans: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", "Menlo", "Consolas", monospace;
+}

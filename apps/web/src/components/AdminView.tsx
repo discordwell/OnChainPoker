@@ -104,7 +104,7 @@ export function AdminView({ g }: { g: GameState }) {
       <header className="topbar panel">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <p className="kicker">OnChainPoker</p>
+            <p className="kicker">Felt Protocol</p>
             <h1>Control Room</h1>
           </div>
           <button type="button" className="topbar-btn topbar-btn--accent" onClick={() => g.setViewMode("game")}>
@@ -271,7 +271,7 @@ export function AdminView({ g }: { g: GameState }) {
                   <p className="placeholder">
                     {g.playerWallet.status === "connecting" ? "Connecting wallet..." : "Wallet not connected"}
                   </p>
-                  <p className="hint">Connect a compatible Cosmos wallet with onchainpoker prefix account (ocp).</p>
+                  <p className="hint">Connect a compatible Cosmos wallet with Felt Protocol prefix account (ocp).</p>
                   <button type="button" onClick={g.connectWallet} disabled={g.playerWallet.status === "connecting"}>
                     Connect wallet
                   </button>

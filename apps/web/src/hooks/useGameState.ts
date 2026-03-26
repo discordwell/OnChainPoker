@@ -1016,7 +1016,7 @@ export function useGameState() {
       try {
         await keplr.experimentalSuggestChain?.({
           chainId: DEFAULT_COSMOS_CHAIN_ID,
-          chainName: "OnChainPoker Testnet",
+          chainName: "Felt Protocol Testnet",
           rpc: DEFAULT_COSMOS_RPC_URL,
           rest: DEFAULT_COSMOS_LCD_URL,
           bip44: { coinType: 118 },

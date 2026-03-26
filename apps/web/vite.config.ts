@@ -24,6 +24,9 @@ export default defineConfig({
             if (id.includes("react-dom") || id.includes("/react/")) {
               return "vendor-react";
             }
+            if (id.includes("pixi.js") || id.includes("@pixi/")) {
+              return "vendor-pixi";
+            }
             if (id.includes("@noble/curves") || id.includes("@noble/hashes")) {
               return "vendor-crypto";
             }
