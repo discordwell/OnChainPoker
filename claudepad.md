@@ -15,9 +15,9 @@ Full rebrand + PixiJS game engine implementation:
   - Win celebration particle system (confetti + flash)
   - Action panel + hand history stay as React/CSS below canvas
   - PixiJS v8 in separate vendor chunk (146KB gzip)
-- **Phase 3 (next)**: Sound system (Web Audio API) + player identity (coordinator nicknames + identicons).
-- **Phase 4**: Missing features (hand history, leaderboard, toasts, enhanced lobby).
-- **Phase 5**: Landing/marketing site buildout on separate domain.
+- **Phase 3 (done)**: Sound system (12 synth sounds via Web Audio API, mute toggle in topbar) + player identity (coordinator nickname endpoints, useNicknames hook, identicon generator, nameResolver in TableScene).
+- **Phase 4 (done)**: Toast notification system (useToast + ToastContainer), enhanced lobby (buy-in range, better badges), PlayerStats component in sidebar.
+- **Phase 5 (next)**: Landing/marketing site buildout on separate domain.
 - **Deploy fix**: discordwell.com DNS → `ovh2` (15.204.59.61). Must use `DEPLOY_TARGETS=ovh2`.
 - **Decisions**: PixiJS full game engine, essential sound, coordinator nicknames + color-coded addresses, separate landing site.
 
