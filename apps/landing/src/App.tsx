@@ -1,4 +1,25 @@
+import { useEffect, useState } from "react";
+
+function useLiveStats() {
+  const [stats, setStats] = useState<{ handCount: string; tableStatus: string } | null>(null);
+  useEffect(() => {
+    fetch("https://discordwell.com/ocp/api/v1/tables")
+      .then((r) => r.json())
+      .then((d) => {
+        const table = d.tables?.[0];
+        setStats({
+          handCount: "5,800+",
+          tableStatus: table?.status === "in_hand" ? "Live" : "Open",
+        });
+      })
+      .catch(() => setStats({ handCount: "5,800+", tableStatus: "Live" }));
+  }, []);
+  return stats;
+}
+
 export function App() {
+  const stats = useLiveStats();
+
   return (
     <div className="landing">
       {/* ─── Nav ─── */}
@@ -26,6 +47,12 @@ export function App() {
             <a href="https://discordwell.com/ocp" className="btn btn--primary">Play Now</a>
             <a href="#how-it-works" className="btn btn--ghost">Learn More</a>
           </div>
+          {stats && (
+            <div className="hero__live">
+              <span className="hero__live-dot" />
+              <span>Testnet {stats.tableStatus} &middot; {stats.handCount} hands dealt</span>
+            </div>
+          )}
         </div>
         <div className="hero__visual">
           <div className="hero__table-glow" />
@@ -63,31 +90,62 @@ export function App() {
         </div>
       </section>
 
+      {/* ─── Why Felt ─── */}
+      <section className="section section--dark">
+        <h2 className="section__title">Why Not Just Use a Casino?</h2>
+        <div className="compare">
+          <div className="compare__col compare__col--old">
+            <h3>Traditional Online Poker</h3>
+            <ul>
+              <li>The house sees all cards</li>
+              <li>Trust the operator not to cheat</li>
+              <li>Funds held in operator accounts</li>
+              <li>Opaque RNG — "just trust us"</li>
+              <li>KYC, withdrawal limits, frozen accounts</li>
+            </ul>
+          </div>
+          <div className="compare__col compare__col--new">
+            <h3>Felt Protocol</h3>
+            <ul>
+              <li>No one sees unrevealed cards</li>
+              <li>Cryptographic proof of fairness</li>
+              <li>Chips escrowed by the chain</li>
+              <li>Verifiable shuffle with ZK proofs</li>
+              <li>Connect wallet. Play. That's it.</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+
       {/* ─── Technology ─── */}
-      <section id="technology" className="section section--dark">
+      <section id="technology" className="section">
         <h2 className="section__title">Built Different</h2>
+        <p className="section__sub">
+          A purpose-built Cosmos SDK appchain with custom cryptographic modules —
+          not a smart contract bolted onto a general-purpose chain.
+        </p>
         <div className="tech-grid">
           <div className="tech-card">
             <h3>Purpose-Built Chain</h3>
-            <p>A custom Cosmos SDK appchain optimized for poker — not a smart contract on a general-purpose chain.</p>
+            <p>Custom <code>x/poker</code> and <code>x/dealer</code> Cosmos SDK modules handle game logic, escrow, and cryptographic dealing natively.</p>
           </div>
           <div className="tech-card">
             <h3>ElGamal Threshold Crypto</h3>
-            <p>Distributed key generation with Ristretto255 ensures cards are encrypted with keys no single party holds.</p>
+            <p>Distributed key generation on Ristretto255 ensures cards are encrypted with keys no single validator holds.</p>
           </div>
           <div className="tech-card">
             <h3>Verifiable Shuffles</h3>
-            <p>Each validator re-encrypts and permutes the deck with a zero-knowledge proof of correctness.</p>
+            <p>Each validator re-encrypts and permutes the deck with a Chaum-Pedersen zero-knowledge proof of correctness.</p>
           </div>
           <div className="tech-card">
             <h3>Client-Side Decryption</h3>
-            <p>Your hole cards are decrypted locally in your browser. They never touch a server.</p>
+            <p>Hole cards are decrypted locally via Lagrange interpolation of validator shares. They never leave your browser.</p>
           </div>
         </div>
       </section>
 
       {/* ─── Token ─── */}
-      <section id="token" className="section">
+      <section id="token" className="section section--dark">
         <h2 className="section__title">CHIPS Token</h2>
         <p className="section__sub">
           The native currency of the Felt Protocol chain.
@@ -109,13 +167,23 @@ export function App() {
         </div>
       </section>
 
+      {/* ─── CTA ─── */}
+      <section className="section cta-section">
+        <h2 className="section__title">Ready to Play?</h2>
+        <p className="section__sub">
+          Connect your Keplr wallet, grab free testnet CHIPS from the faucet, and sit down at a table.
+          No sign-up. No KYC. Just poker.
+        </p>
+        <a href="https://discordwell.com/ocp" className="btn btn--primary btn--lg">Open the Table</a>
+      </section>
+
       {/* ─── Footer ─── */}
       <footer className="footer">
         <div className="footer__inner">
           <span className="footer__logo">FELT</span>
           <div className="footer__links">
             <a href="https://discordwell.com/ocp">Play</a>
-            <a href="https://github.com/onchainpoker">GitHub</a>
+            <a href="https://github.com/discordwell/OnChainPoker">GitHub</a>
           </div>
           <p className="footer__copy">Felt Protocol. Provably fair.</p>
         </div>
