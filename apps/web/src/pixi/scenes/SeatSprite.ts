@@ -35,6 +35,7 @@ export class SeatSprite extends Container {
   private _timerPct = 0;
   private _timerUrgent = false;
   private _markers: string[] = [];
+  private _displayName = "";
 
   constructor() {
     super();
@@ -85,12 +86,13 @@ export class SeatSprite extends Container {
     this.pivot.set(0, 0);
   }
 
-  update(data: SeatData, isActive: boolean, timerPct: number, timerUrgent: boolean, markers: string[]) {
+  update(data: SeatData, isActive: boolean, timerPct: number, timerUrgent: boolean, markers: string[], displayName?: string) {
     this._data = data;
     this._isActive = isActive;
     this._timerPct = timerPct;
     this._timerUrgent = timerUrgent;
     this._markers = markers;
+    this._displayName = displayName ?? "";
     this.draw();
   }
 
@@ -142,9 +144,9 @@ export class SeatSprite extends Container {
       this.badgeText.text = "";
       this.alpha = 0.35;
     } else {
-      const name = d.player.length > 16
+      const name = this._displayName || (d.player.length > 16
         ? `${d.player.slice(0, 8)}...${d.player.slice(-4)}`
-        : d.player;
+        : d.player);
       this.nameText.text = name;
       this.nameText.style.fill = INK;
       this.nameText.style.fontSize = 12;

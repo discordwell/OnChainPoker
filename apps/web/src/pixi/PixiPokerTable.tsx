@@ -8,6 +8,7 @@ import { useEffect, useRef, useState } from "react";
 import { Application } from "pixi.js";
 import { TableScene } from "./scenes/TableScene";
 import { bindTweener, cancelAll } from "./animations/Tweener";
+import { audioManager } from "../audio/AudioManager";
 import type { PokerTableProps, HandResult } from "../components/PokerTable";
 import { CardFace, cardIdFromLabel } from "../components/CardFace";
 import "../components/PokerTable.css";
@@ -38,6 +39,10 @@ function phaseLabel(phase: string): string {
   return map[phase] ?? phase;
 }
 
+interface PixiPokerTableProps extends PokerTableProps {
+  getDisplayName?: (address: string) => string;
+}
+
 export function PixiPokerTable({
   seats,
   hand,
@@ -46,7 +51,8 @@ export function PixiPokerTable({
   onAction,
   actionEnabled,
   handHistory,
-}: PokerTableProps) {
+  getDisplayName,
+}: PixiPokerTableProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const appRef = useRef<Application | null>(null);
   const sceneRef = useRef<TableScene | null>(null);
@@ -115,6 +121,7 @@ export function PixiPokerTable({
   // Sync props into the PixiJS scene every render
   useEffect(() => {
     if (sceneRef.current) {
+      sceneRef.current.nameResolver = getDisplayName ?? null;
       sceneRef.current.syncProps({ seats, hand, localPlayerSeat, localHoleCards, onAction, actionEnabled });
     }
   });
@@ -127,10 +134,11 @@ export function PixiPokerTable({
     if (!latest || latest.handId === prevHandIdRef.current) return;
     prevHandIdRef.current = latest.handId;
 
-    // Celebrate winners
+    // Celebrate winners with sound
     if (sceneRef.current && latest.winners.length > 0) {
+      const big = latest.winners.some((w) => Number(w.amount) > 50000);
+      audioManager.play(big ? "winBig" : "winSmall");
       for (const w of latest.winners) {
-        const big = Number(w.amount) > 50000;
         sceneRef.current.celebrateWinner(w.seat, big);
       }
     }

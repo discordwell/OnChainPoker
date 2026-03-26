@@ -9,6 +9,7 @@ import { PotDisplay } from "./PotDisplay";
 import { BoardRenderer } from "./BoardRenderer";
 import { DealAnimation } from "./DealAnimation";
 import { WinCelebration } from "./WinCelebration";
+import { audioManager } from "../../audio/AudioManager";
 import type { PokerTableProps } from "../../components/PokerTable";
 
 /**
@@ -40,6 +41,9 @@ export class TableScene extends Container {
   private _prevHandId: string | null = null;
   private _prevBoardLen = 0;
   private _prevPot = "0";
+  private _prevActionOn = -1;
+  private _prevPhase = "";
+  private _localSeat: number | null = null;
 
   constructor() {
     super();
@@ -82,6 +86,9 @@ export class TableScene extends Container {
     this.dealAnim.setDeckPosition(w / 2, h * 0.35);
   }
 
+  /** Optional name resolver for player display names (nicknames) */
+  nameResolver: ((address: string) => string) | null = null;
+
   /**
    * Sync React props into the Pixi scene.
    * Detects state transitions and triggers animations.
@@ -108,10 +115,29 @@ export class TableScene extends Container {
 
     // ─── Detect state transitions ───
 
+    this._localSeat = localPlayerSeat;
     const isNewHand = handId !== null && handId !== this._prevHandId && this._prevHandId !== null;
     const newBoardCards = boardCards.filter((c) => c != null).length;
     const boardGrew = newBoardCards > this._prevBoardLen;
     const potChanged = pot !== this._prevPot && pot !== "0";
+    const actionChanged = actionOn !== this._prevActionOn && actionOn >= 0;
+    const phaseChanged = phase !== this._prevPhase && phase !== "";
+
+    // ─── Sound triggers ───
+
+    if (isNewHand) {
+      audioManager.play("deal");
+    }
+    if (boardGrew && !isNewHand) {
+      audioManager.play("cardFlip");
+      audioManager.play("phaseChange");
+    }
+    if (potChanged && !isNewHand) {
+      audioManager.play("chipClick");
+    }
+    if (actionChanged && actionOn === localPlayerSeat) {
+      audioManager.play("yourTurn");
+    }
 
     // ─── Update seats ───
 
@@ -134,7 +160,8 @@ export class TableScene extends Container {
         if (i === bbSeat) markers.push("BB");
       }
 
-      this.seatSprites[i]!.update(data, isActive, timerPct, timerUrgent, markers);
+      const displayName = data.player && this.nameResolver ? this.nameResolver(data.player) : undefined;
+      this.seatSprites[i]!.update(data, isActive, timerPct, timerUrgent, markers, displayName);
 
       // Hole cards
       const isLocal = i === localPlayerSeat;
@@ -187,6 +214,8 @@ export class TableScene extends Container {
     this._prevHandId = handId;
     this._prevBoardLen = newBoardCards;
     this._prevPot = pot;
+    this._prevActionOn = actionOn;
+    this._prevPhase = phase;
   }
 
   /**

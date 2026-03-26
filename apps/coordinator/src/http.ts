@@ -18,6 +18,10 @@ const SeatIntentSchema = z.object({
   bond: z.string().min(1).optional()
 });
 
+const NicknameSchema = z.object({
+  nickname: z.string().min(2).max(20).regex(/^[a-zA-Z0-9_ -]+$/, "Alphanumeric, spaces, hyphens, underscores only"),
+});
+
 const ArtifactPutSchema = z.object({
   kind: z
     .enum(["shuffle", "encShare", "pubShare", "reveal", "other"] as const)
@@ -572,6 +576,42 @@ export function createHttpApp(opts: {
     const tableId = String(req.query.tableId ?? "");
     if (!tableId) return res.status(400).json({ error: "tableId required" });
     res.json({ intents: store.listSeatIntents(tableId) });
+  });
+
+  // ─── Nicknames ───
+
+  const nicknames = new Map<string, string>();
+
+  app.get("/v1/nicknames", (_req, res) => {
+    const result: Record<string, string> = {};
+    for (const [addr, nick] of nicknames) result[addr] = nick;
+    res.json(result);
+  });
+
+  app.get("/v1/nicknames/:address", (req, res) => {
+    const addr = String(req.params.address ?? "");
+    const nick = nicknames.get(addr);
+    if (!nick) return res.status(404).json({ error: "no nickname set" });
+    res.json({ address: addr, nickname: nick });
+  });
+
+  app.put("/v1/nicknames/:address", ...writeGuards, (req, res) => {
+    const addr = String(req.params.address ?? "");
+    if (!addr || !addr.startsWith("ocp")) return res.status(400).json({ error: "invalid address" });
+
+    const parsed = NicknameSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
+
+    // Check uniqueness (case-insensitive)
+    const lower = parsed.data.nickname.toLowerCase();
+    for (const [existingAddr, existingNick] of nicknames) {
+      if (existingAddr !== addr && existingNick.toLowerCase() === lower) {
+        return res.status(409).json({ error: "nickname already taken" });
+      }
+    }
+
+    nicknames.set(addr, parsed.data.nickname);
+    res.json({ address: addr, nickname: parsed.data.nickname });
   });
 
   app.put("/v1/artifacts/:artifactId", ...writeGuards, (req, res) => {

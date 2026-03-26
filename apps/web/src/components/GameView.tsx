@@ -1,13 +1,24 @@
+import { useState } from "react";
 import type { GameState } from "../hooks/useGameState";
 import { PixiPokerTable } from "../pixi/PixiPokerTable";
 import { ChainVerificationBadge } from "./ChainVerificationBadge";
+import { audioManager } from "../audio/AudioManager";
+import { useNicknames } from "../hooks/useNicknames";
 import { statusTone, wsTone } from "../lib/utils";
 
 export function GameView({ g }: { g: GameState }) {
+  const [audioMuted, setAudioMuted] = useState(audioManager.muted);
+  const { getDisplayName } = useNicknames();
+
+  const toggleAudioMute = () => {
+    audioManager.toggleMute();
+    setAudioMuted(audioManager.muted);
+  };
+
   const renderPokerTable = () => {
     const tableProps = g.renderPokerTableProps;
     if (!tableProps) return null;
-    return <PixiPokerTable {...tableProps} handHistory={g.handHistory.get(g.selectedTableId) ?? []} />;
+    return <PixiPokerTable {...tableProps} handHistory={g.handHistory.get(g.selectedTableId) ?? []} getDisplayName={getDisplayName} />;
   };
 
   const renderChat = () => (
@@ -177,6 +188,15 @@ export function GameView({ g }: { g: GameState }) {
           )}
 
           <span className="topbar-divider" />
+
+          <button
+            type="button"
+            className="topbar-btn topbar-btn--icon"
+            onClick={toggleAudioMute}
+            title={audioMuted ? "Unmute" : "Mute"}
+          >
+            {audioMuted ? "\uD83D\uDD07" : "\uD83D\uDD0A"}
+          </button>
 
           <button
             type="button"
