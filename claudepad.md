@@ -2,16 +2,24 @@
 
 ## Session Summaries
 
-### 2026-03-26T~UTC — Token Launch: Rebrand to Felt Protocol + Phase 1 Foundation
-User wants to launch a token. Scoped a 5-phase UI overhaul plan:
+### 2026-03-26T~UTC — Token Launch: Rebrand + PixiJS Poker Table (Phases 0-2)
+Full rebrand + PixiJS game engine implementation:
 - **Phase 0**: Chose name "Felt Protocol" (FELT). Chain identifiers (`ocp`, `uchips`) unchanged.
-- **Phase 1 (done)**: Created `packages/design-tokens/` (tokens.css, tokens.js, colors.js). Extracted `:root` CSS vars from styles.css. Renamed all user-facing strings (logo, title, Keplr chain name, lobby). Scaffolded `apps/landing/` with full premium CSS (Noir Casino Luxe aesthetic).
-- **Phase 2 (next)**: PixiJS poker table — canvas-rendered game engine replacing HTML/CSS table. Card dealing anims, chip movement, win celebrations.
-- **Phase 3**: Sound system (Web Audio API) + player identity (coordinator nicknames + identicons).
+- **Phase 1 (done)**: Created `packages/design-tokens/` (tokens.css, tokens.js, colors.js). Extracted `:root` CSS vars. Renamed all strings. Scaffolded `apps/landing/` with Noir Casino Luxe CSS.
+- **Phase 2 (done)**: Full PixiJS poker table replacing CSS/HTML table:
+  - 10 modules: Tweener, FeltRenderer, CardSprite, SeatSprite, BoardRenderer, PotDisplay, DealAnimation, WinCelebration, TableScene, PixiPokerTable
+  - Rich felt with wood frame, gold rim, overhead lighting, table shadow
+  - Cards with flip animation (scaleX tween), face-up rendering with rank/suit
+  - Multi-marker support (D+SB on same seat in 3-player)
+  - Timer ring with urgency state, animated waiting dots
+  - Win celebration particle system (confetti + flash)
+  - Action panel + hand history stay as React/CSS below canvas
+  - PixiJS v8 in separate vendor chunk (146KB gzip)
+- **Phase 3 (next)**: Sound system (Web Audio API) + player identity (coordinator nicknames + identicons).
 - **Phase 4**: Missing features (hand history, leaderboard, toasts, enhanced lobby).
 - **Phase 5**: Landing/marketing site buildout on separate domain.
-- **Deploy fix**: Discovered discordwell.com DNS points to `ovh2` (15.204.59.61), not `ovh` (54.37.226.6). Must use `DEPLOY_TARGETS=ovh2`.
-- **Decisions**: PixiJS full game engine for animations, essential sound, coordinator-stored nicknames + color-coded addresses, separate landing site.
+- **Deploy fix**: discordwell.com DNS → `ovh2` (15.204.59.61). Must use `DEPLOY_TARGETS=ovh2`.
+- **Decisions**: PixiJS full game engine, essential sound, coordinator nicknames + color-coded addresses, separate landing site.
 
 ### 2026-03-20T~UTC — VC Polish: App.tsx Decomposition + Documentation
 Full repo polish for VC demo presentation:
