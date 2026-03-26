@@ -16,15 +16,15 @@ import type { PokerTableProps } from "../../components/PokerTable";
  * Index = seat number, arranged clockwise from bottom-center.
  */
 const SEAT_POSITIONS: Array<{ x: number; y: number }> = [
-  { x: 0.50, y: 0.88 },  // 0 - bottom center
-  { x: 0.18, y: 0.78 },  // 1 - bottom left
-  { x: 0.06, y: 0.48 },  // 2 - left
-  { x: 0.14, y: 0.16 },  // 3 - top left
-  { x: 0.35, y: 0.04 },  // 4 - top center-left
-  { x: 0.65, y: 0.04 },  // 5 - top center-right
-  { x: 0.86, y: 0.16 },  // 6 - top right
-  { x: 0.94, y: 0.48 },  // 7 - right
-  { x: 0.82, y: 0.78 },  // 8 - bottom right
+  { x: 0.50, y: 0.90 },  // 0 - bottom center
+  { x: 0.20, y: 0.80 },  // 1 - bottom left
+  { x: 0.10, y: 0.50 },  // 2 - left
+  { x: 0.16, y: 0.15 },  // 3 - top left
+  { x: 0.37, y: 0.04 },  // 4 - top center-left
+  { x: 0.63, y: 0.04 },  // 5 - top center-right
+  { x: 0.84, y: 0.15 },  // 6 - top right
+  { x: 0.90, y: 0.50 },  // 7 - right
+  { x: 0.80, y: 0.80 },  // 8 - bottom right
 ];
 
 export class TableScene extends Container {
@@ -127,14 +127,14 @@ export class TableScene extends Container {
       };
 
       const isActive = i === actionOn;
-      let marker: "" | "D" | "SB" | "BB" = "";
+      const markers: string[] = [];
       if (hand && data.player) {
-        if (i === buttonSeat) marker = "D";
-        else if (i === sbSeat) marker = "SB";
-        else if (i === bbSeat) marker = "BB";
+        if (i === buttonSeat) markers.push("D");
+        if (i === sbSeat) markers.push("SB");
+        if (i === bbSeat) markers.push("BB");
       }
 
-      this.seatSprites[i]!.update(data, isActive, timerPct, timerUrgent, marker);
+      this.seatSprites[i]!.update(data, isActive, timerPct, timerUrgent, markers);
 
       // Hole cards
       const isLocal = i === localPlayerSeat;
@@ -156,10 +156,10 @@ export class TableScene extends Container {
     }
 
     if (boardGrew || isNewHand) {
-      void this.board.setBoard(boardCards, boardGrew && !isNewHand);
+      this.board.setBoard(boardCards, boardGrew && !isNewHand);
     } else if (!isNewHand) {
       // Quiet update (no animation)
-      void this.board.setBoard(boardCards, false);
+      this.board.setBoard(boardCards, false);
     }
 
     // ─── Pot ───
@@ -187,6 +187,13 @@ export class TableScene extends Container {
     this._prevHandId = handId;
     this._prevBoardLen = newBoardCards;
     this._prevPot = pot;
+  }
+
+  /**
+   * Called each frame for continuous animations (waiting dots, etc.).
+   */
+  tick() {
+    this.board.animateWaiting();
   }
 
   /**

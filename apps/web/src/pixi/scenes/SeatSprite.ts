@@ -6,9 +6,9 @@ import { CardSprite } from "./CardSprite";
 import { tween, Easing } from "../animations/Tweener";
 import { INK, MUTED, RING, ACCENT, PANEL_SOLID, LINE, DANGER } from "@feltprotocol/design-tokens/tokens";
 
-const INFO_W = 130;
-const INFO_H = 50;
-const INFO_R = 8;
+const INFO_W = 140;
+const INFO_H = 48;
+const INFO_R = 10;
 
 export interface SeatData {
   seat: number;
@@ -34,7 +34,7 @@ export class SeatSprite extends Container {
   private _isActive = false;
   private _timerPct = 0;
   private _timerUrgent = false;
-  private _marker: "" | "D" | "SB" | "BB" = "";
+  private _markers: string[] = [];
 
   constructor() {
     super();
@@ -48,6 +48,7 @@ export class SeatSprite extends Container {
     const stackStyle = new TextStyle({
       fontFamily: '"IBM Plex Mono", monospace',
       fontSize: 11,
+      fontWeight: "500",
       fill: RING,
     });
     const badgeStyle = new TextStyle({
@@ -55,6 +56,7 @@ export class SeatSprite extends Container {
       fontSize: 9,
       fontWeight: "700",
       fill: INK,
+      letterSpacing: 1,
     });
 
     this.nameText = new Text({ text: "", style: nameStyle });
@@ -65,30 +67,30 @@ export class SeatSprite extends Container {
     this.stackText.anchor.set(0.5, 0);
     this.badgeText.anchor.set(0.5, 0.5);
 
-    // Cards above the info panel
-    this.card0.scale.set(0.85);
-    this.card1.scale.set(0.85);
-    this.card0.position.set(-18, 0);
-    this.card1.position.set(18, 0);
+    // Cards above the info panel — slightly larger
+    this.card0.scale.set(0.9);
+    this.card1.scale.set(0.9);
+    this.card0.position.set(-20, 0);
+    this.card1.position.set(20, 0);
     this.cardsContainer.addChild(this.card0, this.card1);
-    this.cardsContainer.position.set(0, -50);
+    this.cardsContainer.position.set(0, -52);
 
     // Info panel below cards
-    this.nameText.position.set(0, 6);
-    this.stackText.position.set(0, 22);
-    this.badgeText.position.set(0, 38);
+    this.nameText.position.set(0, 7);
+    this.stackText.position.set(0, 24);
+    this.badgeText.position.set(0, 40);
 
     this.addChild(this.ring, this.cardsContainer, this.infoBg, this.nameText, this.stackText, this.badgeText, this.markerContainer);
 
     this.pivot.set(0, 0);
   }
 
-  update(data: SeatData, isActive: boolean, timerPct: number, timerUrgent: boolean, marker: "" | "D" | "SB" | "BB") {
+  update(data: SeatData, isActive: boolean, timerPct: number, timerUrgent: boolean, markers: string[]) {
     this._data = data;
     this._isActive = isActive;
     this._timerPct = timerPct;
     this._timerUrgent = timerUrgent;
-    this._marker = marker;
+    this._markers = markers;
     this.draw();
   }
 
@@ -114,30 +116,40 @@ export class SeatSprite extends Container {
 
     const isEmpty = !d.player;
     const borderColor = this._isActive ? RING : isEmpty ? LINE : ACCENT;
-    const borderAlpha = isEmpty ? 0.3 : this._isActive ? 0.8 : 0.5;
+    const borderAlpha = isEmpty ? 0.2 : this._isActive ? 0.9 : 0.5;
 
     // Info background
     this.infoBg.clear();
-    this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
-    this.infoBg.fill({ color: PANEL_SOLID, alpha: isEmpty ? 0.5 : 0.9 });
-    this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
-    this.infoBg.stroke({ color: borderColor, width: 1.5, alpha: borderAlpha });
+    if (isEmpty) {
+      // Dashed outline for empty seats
+      this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
+      this.infoBg.fill({ color: PANEL_SOLID, alpha: 0.3 });
+      this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
+      this.infoBg.stroke({ color: LINE, width: 1, alpha: 0.25 });
+    } else {
+      this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
+      this.infoBg.fill({ color: PANEL_SOLID, alpha: 0.92 });
+      this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
+      this.infoBg.stroke({ color: borderColor, width: 1.5, alpha: borderAlpha });
+    }
 
     // Name & stack
     if (isEmpty) {
       this.nameText.text = "Empty";
       this.nameText.style.fill = MUTED;
+      this.nameText.style.fontSize = 11;
       this.stackText.text = "";
       this.badgeText.text = "";
-      this.alpha = 0.5;
+      this.alpha = 0.35;
     } else {
       const name = d.player.length > 16
         ? `${d.player.slice(0, 8)}...${d.player.slice(-4)}`
         : d.player;
       this.nameText.text = name;
       this.nameText.style.fill = INK;
+      this.nameText.style.fontSize = 12;
       this.stackText.text = d.stack;
-      this.alpha = d.folded ? 0.45 : 1;
+      this.alpha = d.folded ? 0.4 : 1;
 
       if (d.folded) {
         this.badgeText.text = "FOLD";
@@ -150,53 +162,64 @@ export class SeatSprite extends Container {
       }
     }
 
-    // Active turn ring
+    // Active turn ring — more prominent
     this.ring.clear();
-    if (this._isActive) {
-      const ringR = 42;
+    if (this._isActive && !isEmpty) {
+      const ringR = 46;
       const ringColor = this._timerUrgent ? DANGER : RING;
+
+      // Outer glow
+      this.ring.circle(0, INFO_H / 2, ringR + 4);
+      this.ring.fill({ color: ringColor, alpha: 0.06 });
 
       if (this._timerPct > 0) {
         // Timer arc
         const startAngle = -Math.PI / 2;
         const endAngle = startAngle + this._timerPct * Math.PI * 2;
         this.ring.arc(0, INFO_H / 2, ringR, startAngle, endAngle);
-        this.ring.stroke({ color: ringColor, width: 3, alpha: 0.8 });
+        this.ring.stroke({ color: ringColor, width: 3.5, alpha: 0.9 });
 
-        // Background arc
+        // Background arc (remaining time)
         this.ring.arc(0, INFO_H / 2, ringR, endAngle, startAngle + Math.PI * 2);
-        this.ring.stroke({ color: LINE, width: 2, alpha: 0.3 });
+        this.ring.stroke({ color: LINE, width: 2, alpha: 0.25 });
       } else {
-        // Static glow ring
+        // Static pulsing glow ring
         this.ring.circle(0, INFO_H / 2, ringR);
-        this.ring.stroke({ color: RING, width: 2, alpha: 0.6 });
+        this.ring.stroke({ color: RING, width: 2.5, alpha: 0.7 });
       }
     }
 
-    // D/SB/BB marker
+    // D/SB/BB markers — support multiple
     this.markerContainer.removeChildren();
-    if (this._marker) {
-      const markerBg = new Graphics();
-      const markerText = new Text({
-        text: this._marker,
-        style: new TextStyle({
-          fontFamily: '"Space Grotesk", sans-serif',
-          fontSize: 10,
-          fontWeight: "700",
-          fill: this._marker === "D" ? 0x1a1a2e : PANEL_SOLID,
-        }),
-      });
-      markerText.anchor.set(0.5, 0.5);
+    if (this._markers.length > 0) {
+      let offsetX = 0;
+      for (const mk of this._markers) {
+        const markerBg = new Graphics();
+        const markerText = new Text({
+          text: mk,
+          style: new TextStyle({
+            fontFamily: '"Space Grotesk", sans-serif',
+            fontSize: 9,
+            fontWeight: "700",
+            fill: mk === "D" ? 0x1a1a2e : PANEL_SOLID,
+          }),
+        });
+        markerText.anchor.set(0.5, 0.5);
 
-      const markerColor = this._marker === "D" ? 0xffffff
-        : this._marker === "SB" ? 0xd4c59a
-        : RING;
+        const markerColor = mk === "D" ? 0xffffff
+          : mk === "SB" ? 0xd4c59a
+          : RING;
 
-      markerBg.circle(0, 0, 12);
-      markerBg.fill({ color: markerColor });
+        markerBg.circle(0, 0, 11);
+        markerBg.fill({ color: markerColor });
 
-      this.markerContainer.addChild(markerBg, markerText);
-      this.markerContainer.position.set(-INFO_W / 2 - 8, INFO_H / 2);
+        const chip = new Container();
+        chip.addChild(markerBg, markerText);
+        chip.position.set(-INFO_W / 2 - 10 + offsetX, INFO_H / 2);
+        this.markerContainer.addChild(chip);
+
+        offsetX -= 22; // stack markers to the left
+      }
     }
   }
 

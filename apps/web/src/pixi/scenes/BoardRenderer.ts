@@ -1,17 +1,19 @@
 /**
  * Community cards area — renders flop/turn/river with staggered flip animations.
  */
-import { Container, Text, TextStyle } from "pixi.js";
+import { Container, Graphics, Text, TextStyle } from "pixi.js";
 import { CardSprite } from "./CardSprite";
 import { tween, Easing, wait } from "../animations/Tweener";
-import { MUTED } from "@feltprotocol/design-tokens/tokens";
+import { MUTED, ACCENT } from "@feltprotocol/design-tokens/tokens";
 
-const CARD_GAP = 8;
+const CARD_GAP = 10;
 
 export class BoardRenderer extends Container {
   private cards: CardSprite[] = [];
   private waitingText: Text;
+  private waitingDots = new Graphics();
   private _currentBoard: (number | null)[] = [];
+  private _dotPhase = 0;
 
   constructor() {
     super();
@@ -25,26 +27,30 @@ export class BoardRenderer extends Container {
     }
 
     this.waitingText = new Text({
-      text: "Waiting for cards",
+      text: "WAITING FOR CARDS",
       style: new TextStyle({
         fontFamily: '"Space Grotesk", sans-serif',
-        fontSize: 14,
+        fontSize: 13,
+        fontWeight: "500",
         fill: MUTED,
-        letterSpacing: 1,
+        letterSpacing: 2,
       }),
     });
     this.waitingText.anchor.set(0.5, 0.5);
-    this.addChild(this.waitingText);
+    this.waitingText.position.set(0, -8);
+
+    // Animated dots below waiting text
+    this.waitingDots.position.set(0, 10);
+    this.addChild(this.waitingText, this.waitingDots);
 
     this.layoutCards();
   }
 
   private layoutCards() {
     const cardW = this.cards[0]!.cardWidth;
-    const totalWidth = 5 * cardW + 4 * CARD_GAP;
+    const totalWidth = 5 * cardW + 4 * CARD_GAP + CARD_GAP * 3; // extra gaps between streets
     const startX = -totalWidth / 2 + cardW / 2;
 
-    // Flop (0-2) grouped, then gap, turn (3), gap, river (4)
     for (let i = 0; i < 5; i++) {
       let x = startX + i * (cardW + CARD_GAP);
       // Extra gap between flop and turn
@@ -56,14 +62,31 @@ export class BoardRenderer extends Container {
   }
 
   /**
+   * Call each frame to animate the waiting dots.
+   */
+  animateWaiting() {
+    if (!this.waitingText.visible) return;
+    this._dotPhase = (this._dotPhase + 0.02) % (Math.PI * 2);
+
+    this.waitingDots.clear();
+    for (let i = 0; i < 3; i++) {
+      const phase = this._dotPhase + i * 0.8;
+      const alpha = 0.2 + 0.3 * Math.max(0, Math.sin(phase));
+      this.waitingDots.circle(-12 + i * 12, 0, 2.5);
+      this.waitingDots.fill({ color: ACCENT, alpha });
+    }
+  }
+
+  /**
    * Update board cards. Detects which cards are new and animates them.
    */
-  async setBoard(board: (number | null)[], animate = true) {
+  setBoard(board: (number | null)[], animate = true) {
     const prevLen = this._currentBoard.filter((c) => c != null).length;
     const newLen = board.filter((c) => c != null).length;
     this._currentBoard = [...board];
 
     this.waitingText.visible = newLen === 0;
+    this.waitingDots.visible = newLen === 0;
 
     for (let i = 0; i < 5; i++) {
       const card = this.cards[i]!;
@@ -74,27 +97,33 @@ export class BoardRenderer extends Container {
 
         const isNew = i >= prevLen && animate;
         if (isNew) {
-          // Animate card appearing: slide down + flip
-          card.position.y = -30;
+          // Reset card position for animation
+          const baseY = 0;
+          card.position.y = -40;
           card.alpha = 0;
-          card.setCard(cardId, false);
 
-          const delay = (i - prevLen) * 120; // stagger
-          await wait(delay);
+          const staggerDelay = (i - prevLen) * 150;
 
+          // Animate: slide down + fade in + flip (all non-blocking)
           void tween({
             target: card.position,
-            to: { y: 0 },
-            duration: 300,
-            easing: Easing.easeOutCubic,
+            to: { y: baseY },
+            duration: 350,
+            easing: Easing.easeOutBack,
+            delay: staggerDelay,
           });
           void tween({
             target: card,
             to: { alpha: 1 },
             duration: 200,
             easing: Easing.linear,
+            delay: staggerDelay,
           });
-          card.setCard(cardId, true);
+
+          // Flip the card face-up with a short delay
+          setTimeout(() => {
+            card.setCard(cardId, true);
+          }, staggerDelay + 50);
         } else {
           card.setCard(cardId, false);
           card.alpha = 1;
@@ -110,6 +139,7 @@ export class BoardRenderer extends Container {
   clear() {
     this._currentBoard = [];
     this.waitingText.visible = true;
+    this.waitingDots.visible = true;
     for (const card of this.cards) {
       card.visible = false;
       card.setCard(null);

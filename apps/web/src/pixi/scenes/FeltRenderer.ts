@@ -1,9 +1,9 @@
 /**
  * Renders the poker table felt surface as PixiJS graphics.
- * Replicates the CSS felt design with gradients and borders.
+ * Rich layered design: wood frame, gold rim, emerald felt with lighting.
  */
 import { Container, Graphics } from "pixi.js";
-import { ACCENT, ACCENT_SOFT, BG_A, LINE, RING } from "@feltprotocol/design-tokens/tokens";
+import { ACCENT, ACCENT_SOFT, LINE, RING } from "@feltprotocol/design-tokens/tokens";
 
 export class FeltRenderer extends Container {
   private feltGfx = new Graphics();
@@ -28,40 +28,56 @@ export class FeltRenderer extends Container {
     const h = this._h;
     const cx = w / 2;
     const cy = h / 2;
-    const rx = w * 0.46;
-    const ry = h * 0.40;
+    const rx = w * 0.45;
+    const ry = h * 0.38;
 
-    // Ambient overhead glow
+    // ─── Ambient overhead glow ───
     this.ambientGlow.clear();
-    this.ambientGlow.ellipse(cx, cy * 0.3, rx * 0.6, ry * 0.4);
-    this.ambientGlow.fill({ color: ACCENT, alpha: 0.04 });
+    // Wide soft glow
+    this.ambientGlow.ellipse(cx, cy * 0.5, rx * 0.8, ry * 0.6);
+    this.ambientGlow.fill({ color: ACCENT, alpha: 0.03 });
+    // Focused spotlight
+    this.ambientGlow.ellipse(cx, cy * 0.6, rx * 0.35, ry * 0.3);
+    this.ambientGlow.fill({ color: 0xf0bf4f, alpha: 0.02 });
 
-    // Main felt surface
+    // ─── Table surface ───
     this.feltGfx.clear();
 
-    // Outer wood frame
-    this.feltGfx.ellipse(cx, cy, rx + 8, ry + 8);
+    // Outer shadow (table depth)
+    this.feltGfx.ellipse(cx, cy + 4, rx + 14, ry + 14);
+    this.feltGfx.fill({ color: 0x000000, alpha: 0.25 });
+
+    // Wood frame — dark walnut
+    this.feltGfx.ellipse(cx, cy, rx + 10, ry + 10);
     this.feltGfx.fill({ color: 0x1a1207 });
 
-    // Gold rim
-    this.feltGfx.ellipse(cx, cy, rx + 5, ry + 5);
-    this.feltGfx.stroke({ color: RING, width: 2, alpha: 0.35 });
+    // Wood grain highlight
+    this.feltGfx.ellipse(cx, cy - 2, rx + 9, ry + 9);
+    this.feltGfx.stroke({ color: 0x2d2010, width: 1, alpha: 0.6 });
 
-    // Felt border
+    // Gold rim — thin elegant line
+    this.feltGfx.ellipse(cx, cy, rx + 5, ry + 5);
+    this.feltGfx.stroke({ color: RING, width: 2, alpha: 0.4 });
+
+    // Felt border — darker green edge
     this.feltGfx.ellipse(cx, cy, rx + 3, ry + 3);
-    this.feltGfx.fill({ color: 0x0a4a37 });
+    this.feltGfx.fill({ color: 0x084a35 });
 
     // Main felt — emerald green
     this.feltGfx.ellipse(cx, cy, rx, ry);
     this.feltGfx.fill({ color: 0x0d6b4e });
 
-    // Felt highlight — lighter patch at top for overhead light effect
-    this.feltGfx.ellipse(cx, cy - ry * 0.15, rx * 0.7, ry * 0.5);
-    this.feltGfx.fill({ color: 0x11805d, alpha: 0.3 });
+    // Felt highlight — overhead light creating a subtle bright spot
+    this.feltGfx.ellipse(cx, cy - ry * 0.12, rx * 0.65, ry * 0.45);
+    this.feltGfx.fill({ color: 0x11805d, alpha: 0.25 });
 
-    // Inner decorative line
+    // Even brighter center highlight
+    this.feltGfx.ellipse(cx, cy - ry * 0.08, rx * 0.3, ry * 0.25);
+    this.feltGfx.fill({ color: 0x15926a, alpha: 0.12 });
+
+    // ─── Inner decorative line ───
     this.innerLine.clear();
-    this.innerLine.ellipse(cx, cy, rx * 0.82, ry * 0.75);
-    this.innerLine.stroke({ color: ACCENT_SOFT, width: 1.5, alpha: 0.5 });
+    this.innerLine.ellipse(cx, cy, rx * 0.80, ry * 0.72);
+    this.innerLine.stroke({ color: ACCENT_SOFT, width: 1.5, alpha: 0.4 });
   }
 }

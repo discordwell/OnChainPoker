@@ -83,6 +83,11 @@ export function PixiPokerTable({
       appRef.current = app;
       sceneRef.current = scene;
 
+      // Per-frame tick for continuous animations
+      app.ticker.add(() => {
+        sceneRef.current?.tick();
+      });
+
       // Handle resize
       const resizeObserver = new ResizeObserver(() => {
         if (sceneRef.current && appRef.current) {
