@@ -2,7 +2,14 @@
 
 ## Session Summaries
 
-### 2026-03-26T~UTC — Token Launch: Rebrand + PixiJS Poker Table (Phases 0-2)
+### 2026-03-27T~UTC — feltprotocol.com Launch + Polish
+- **feltprotocol.com** live with auto-TLS via Caddy on ovh2. Caddy site config at `/etc/caddy/sites/feltprotocol.com`.
+- **Tokenomics**: 4,294,967,295 total supply (2^32-1), three utility cards (buy-ins, staking, rake/burns).
+- **Nickname UI**: "Set Display Name" form in sidebar wallet section, wired to coordinator PUT /v1/nicknames/:address with toast feedback.
+- **Wet test**: Shuffle phase working (30-60s threshold crypto), 6000+ hands dealt autonomously. Board card flip animations code-verified, pending visual confirmation (shuffle timing).
+- Landing page base path fixed for root domain (`/` instead of `/felt/`).
+
+### 2026-03-26T~UTC — Token Launch: Rebrand + PixiJS Poker Table (Phases 0-5)
 Full rebrand + PixiJS game engine implementation:
 - **Phase 0**: Chose name "Felt Protocol" (FELT). Chain identifiers (`ocp`, `uchips`) unchanged.
 - **Phase 1 (done)**: Created `packages/design-tokens/` (tokens.css, tokens.js, colors.js). Extracted `:root` CSS vars. Renamed all strings. Scaffolded `apps/landing/` with Noir Casino Luxe CSS.
@@ -17,7 +24,7 @@ Full rebrand + PixiJS game engine implementation:
   - PixiJS v8 in separate vendor chunk (146KB gzip)
 - **Phase 3 (done)**: Sound system (12 synth sounds via Web Audio API, mute toggle in topbar) + player identity (coordinator nickname endpoints, useNicknames hook, identicon generator, nameResolver in TableScene).
 - **Phase 4 (done)**: Toast notification system (useToast + ToastContainer), enhanced lobby (buy-in range, better badges), PlayerStats component in sidebar.
-- **Phase 5 (next)**: Landing/marketing site buildout on separate domain.
+- **Phase 5 (done)**: Landing page deployed to feltprotocol.com with tokenomics (2^32-1 supply), comparison table, CTA.
 - **Deploy fix**: discordwell.com DNS → `ovh2` (15.204.59.61). Must use `DEPLOY_TARGETS=ovh2`.
 - **Decisions**: PixiJS full game engine, essential sound, coordinator nicknames + color-coded addresses, separate landing site.
 
