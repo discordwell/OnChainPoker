@@ -607,6 +607,36 @@ a {
   pointer-events: none;
 }
 
+/* ─── Token Utility Grid ─── */
+
+.token-utility {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1.25rem;
+  margin-top: 2.5rem;
+}
+
+.token-utility__item {
+  padding: 1.5rem;
+  background: rgba(21, 26, 33, 0.5);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.token-utility__item h4 {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--ring);
+  margin-bottom: 0.5rem;
+}
+
+.token-utility__item p {
+  font-size: 0.85rem;
+  line-height: 1.65;
+  color: var(--muted);
+}
+
 /* ═══════════════════════════════════════════
    Footer
    ═══════════════════════════════════════════ */
@@ -887,6 +917,10 @@ code {
   }
 
   .compare {
+    grid-template-columns: 1fr;
+  }
+
+  .token-utility {
     grid-template-columns: 1fr;
   }
 

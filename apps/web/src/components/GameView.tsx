@@ -11,8 +11,9 @@ import { statusTone, wsTone } from "../lib/utils";
 
 export function GameView({ g }: { g: GameState }) {
   const [audioMuted, setAudioMuted] = useState(audioManager.muted);
-  const { getDisplayName } = useNicknames();
+  const { getDisplayName, setNickname } = useNicknames();
   const toast = useToast();
+  const [nicknameInput, setNicknameInput] = useState("");
 
   // Bridge faucet status to toast system
   const prevFaucetMsg = useRef("");
@@ -389,6 +390,33 @@ export function GameView({ g }: { g: GameState }) {
             <>
               <p style={{ fontSize: "0.76rem", wordBreak: "break-all" }}>{g.playerWallet.address}</p>
               <p className="hint">Seat: {g.playerSeat ? `#${g.playerSeat.seat}` : "Not seated"}</p>
+              <div style={{ marginTop: "0.5rem" }}>
+                <label className="hint" style={{ display: "block", marginBottom: "0.25rem" }}>Display Name</label>
+                <form
+                  style={{ display: "flex", gap: "0.4rem" }}
+                  onSubmit={async (e) => {
+                    e.preventDefault();
+                    if (!nicknameInput.trim()) return;
+                    const res = await setNickname(g.playerWallet.address, nicknameInput.trim());
+                    if (res.ok) {
+                      toast.success(`Nickname set to "${nicknameInput.trim()}"`);
+                      setNicknameInput("");
+                    } else {
+                      toast.error(res.error ?? "Failed to set nickname");
+                    }
+                  }}
+                >
+                  <input
+                    type="text"
+                    placeholder={getDisplayName(g.playerWallet.address)}
+                    value={nicknameInput}
+                    onChange={(e) => setNicknameInput(e.target.value)}
+                    maxLength={20}
+                    style={{ flex: 1, minWidth: 0 }}
+                  />
+                  <button type="submit" disabled={!nicknameInput.trim()}>Set</button>
+                </form>
+              </div>
             </>
           ) : (
             <button type="button" onClick={g.connectWallet} disabled={g.playerWallet.status === "connecting"}>

@@ -149,20 +149,34 @@ export function App() {
         <h2 className="section__title">CHIPS Token</h2>
         <p className="section__sub">
           The native currency of the Felt Protocol chain.
-          Used for buy-ins, settlements, and validator staking.
+          Every table buy-in, every pot settlement, every validator stake — denominated in CHIPS.
         </p>
         <div className="token-stats">
           <div className="token-stat">
-            <span className="token-stat__value">CHIPS</span>
-            <span className="token-stat__label">Display Denomination</span>
+            <span className="token-stat__value">4,294,967,295</span>
+            <span className="token-stat__label">Total Supply (2&sup3;&sup2; &minus; 1)</span>
           </div>
           <div className="token-stat">
-            <span className="token-stat__value">uchips</span>
-            <span className="token-stat__label">Base Denomination</span>
+            <span className="token-stat__value">CHIPS</span>
+            <span className="token-stat__label">Ticker</span>
           </div>
           <div className="token-stat">
             <span className="token-stat__value">6</span>
             <span className="token-stat__label">Decimal Places</span>
+          </div>
+        </div>
+        <div className="token-utility">
+          <div className="token-utility__item">
+            <h4>Buy-ins &amp; Settlement</h4>
+            <p>Sit down at any table with CHIPS. Pots are escrowed by the chain and settled atomically at showdown.</p>
+          </div>
+          <div className="token-utility__item">
+            <h4>Validator Staking</h4>
+            <p>Validators stake CHIPS to participate in consensus and earn dealing fees. Misbehavior is slashable.</p>
+          </div>
+          <div className="token-utility__item">
+            <h4>Rake &amp; Burns</h4>
+            <p>A configurable per-table rake (basis points) is collected by the protocol. A portion is burned, creating deflationary pressure.</p>
           </div>
         </div>
       </section>
