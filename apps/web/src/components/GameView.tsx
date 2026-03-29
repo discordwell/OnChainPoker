@@ -4,6 +4,7 @@ import { PixiPokerTable } from "../pixi/PixiPokerTable";
 import { ChainVerificationBadge } from "./ChainVerificationBadge";
 import { ToastContainer } from "./Toast";
 import { PlayerStats } from "./PlayerStats";
+import { Leaderboard } from "./Leaderboard";
 import { audioManager } from "../audio/AudioManager";
 import { useNicknames } from "../hooks/useNicknames";
 import { useToast } from "../hooks/useToast";
@@ -378,6 +379,17 @@ export function GameView({ g }: { g: GameState }) {
             <PlayerStats
               address={g.playerWallet.address}
               handHistory={g.handHistory.get(g.selectedTableId) ?? []}
+            />
+          </div>
+        )}
+        {/* Leaderboard */}
+        {g.selectedTableId && (g.handHistory.get(g.selectedTableId)?.length ?? 0) > 0 && (
+          <div className="game-sidebar__section">
+            <h4>Leaderboard</h4>
+            <Leaderboard
+              handHistory={g.handHistory.get(g.selectedTableId) ?? []}
+              seats={g.renderPokerTableProps?.seats ?? []}
+              getDisplayName={getDisplayName}
             />
           </div>
         )}

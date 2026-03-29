@@ -683,10 +683,32 @@
    RESPONSIVE
    ═══════════════════════════════════════════════════════ */
 
+/* Tablet */
+@media (max-width: 768px) {
+  .hand-history {
+    padding: 8px 10px;
+  }
+
+  .hand-history__list {
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .action-panel__row {
+    flex-wrap: wrap;
+  }
+}
+
+/* Phone */
 @media (max-width: 640px) {
   .felt {
     aspect-ratio: 4 / 3;
     min-height: 320px;
+  }
+
+  .pixi-table-container {
+    aspect-ratio: 4 / 3 !important;
+    min-height: 280px !important;
   }
 
   .seat__info {
@@ -697,12 +719,34 @@
   .seat__name { font-size: 0.56rem; max-width: 64px; }
   .seat__stack { font-size: 0.52rem; }
 
+  .action-panel__row {
+    flex-direction: column;
+    gap: 6px;
+  }
+
   .action-btn {
-    padding: 6px 12px !important;
-    font-size: 0.72rem !important;
+    padding: 10px 12px !important;
+    font-size: 0.82rem !important;
+    width: 100%;
+  }
+
+  .action-panel__bet-group {
+    display: flex;
+    width: 100%;
   }
 
   .action-panel__bet-input {
-    width: 72px !important;
+    flex: 1;
+    min-width: 0;
+    font-size: 0.9rem !important;
+    padding: 10px !important;
+  }
+
+  .hand-history {
+    display: none;
+  }
+
+  .poker-room__phase {
+    font-size: 0.65rem;
   }
 }

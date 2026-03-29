@@ -1226,7 +1226,22 @@ pre {
 
 @media (max-width: 1024px) {
   .game-sidebar {
-    width: min(360px, 100%);
+    width: min(360px, 100vw);
+  }
+}
+
+@media (max-width: 640px) {
+  .game-sidebar {
+    width: 100vw;
+    right: -100vw;
+  }
+
+  .game-sidebar--open {
+    right: 0;
+  }
+
+  .chat-panel {
+    max-height: 100px;
   }
 }
 
@@ -1324,6 +1339,61 @@ pre {
     opacity: 1;
     transform: translateX(0);
   }
+}
+
+/* ─── Leaderboard ─── */
+
+.leaderboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.leaderboard__empty {
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+.leaderboard__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  border-left: 3px solid transparent;
+}
+
+.leaderboard__row--top {
+  background: rgba(240, 191, 79, 0.04);
+}
+
+.leaderboard__rank {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  font-size: 0.82rem;
+  width: 1.5rem;
+  text-align: center;
+  color: var(--muted);
+}
+
+.leaderboard__name {
+  flex: 1;
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard__stat {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--ring);
 }
 
 /* ─── Audio Controls ─── */
