@@ -2,6 +2,25 @@
 
 ## Session Summaries
 
+### 2026-03-28T~UTC — Cleanup + Future Polish Plan
+Quick wins done:
+- Added SVG favicon (emerald chip) to poker app index.html
+- Removed redundant `/felt/` route from discordwell.com Caddy config (feltprotocol.com is canonical)
+- Fixed broken Caddy config (duplicate root/file_server blocks from bad sed)
+- Audited entire codebase for rough edges
+
+**Future Session Polish Plan:**
+1. **Board card wet test** — Watch a hand reach flop/turn/river to confirm card flip animations visually. The code is verified correct; just needs live observation.
+2. **Inline style cleanup** — GameView.tsx has ~15 inline `style={{}}` props that should be CSS classes. Low priority but cleaner code.
+3. **OG image** — Create an Open Graph share image for feltprotocol.com and discordwell.com/ocp social previews.
+4. **Mobile responsive test** — Run the poker app on an actual phone viewport. The CSS has breakpoints but hasn't been tested.
+5. **PixiJS mobile fallback** — If WebGL fails on low-end mobile, fall back to the old CSS PokerTable component. The flag mechanism exists but isn't wired.
+6. **Landing page env vars** — The `discordwell.com/ocp` URLs in the landing page are hardcoded. Consider making them configurable via Vite env vars.
+7. **Identicon rendering** — The identicon generator is built (`lib/identicon.ts`) but not yet integrated into the PixiJS seat sprites visually. Currently only nicknames are shown.
+8. **Sound volume slider** — AudioManager supports volume control but there's no slider UI in the sidebar. Only the mute toggle is exposed.
+9. **Leaderboard** — The plan called for a coordinator leaderboard endpoint + UI component. Not yet built.
+10. **Hand history expansion** — The plan called for expandable/collapsible hand history entries. Currently they show inline.
+
 ### 2026-03-27T~UTC — feltprotocol.com Launch + Polish
 - **feltprotocol.com** live with auto-TLS via Caddy on ovh2. Caddy site config at `/etc/caddy/sites/feltprotocol.com`.
 - **Tokenomics**: 4,294,967,295 total supply (2^32-1), three utility cards (buy-ins, staking, rake/burns).
