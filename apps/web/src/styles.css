@@ -1326,6 +1326,36 @@ pre {
   }
 }
 
+/* ─── Audio Controls ─── */
+
+.audio-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.audio-controls__mute {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.audio-controls__slider {
+  flex: 1;
+  height: 4px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.audio-controls__slider:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
 /* ─── Player Stats ─── */
 
 .player-stats {

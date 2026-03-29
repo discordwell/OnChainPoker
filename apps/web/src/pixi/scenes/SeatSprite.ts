@@ -1,9 +1,10 @@
 /**
  * Per-seat container: player name, stack, hole cards, turn ring, D/SB/BB markers.
  */
-import { Container, Graphics, Text, TextStyle } from "pixi.js";
+import { Container, Graphics, Sprite, Text, TextStyle, Texture } from "pixi.js";
 import { CardSprite } from "./CardSprite";
 import { tween, Easing } from "../animations/Tweener";
+import { generateIdenticon } from "../../lib/identicon";
 import { INK, MUTED, RING, ACCENT, PANEL_SOLID, LINE, DANGER } from "@feltprotocol/design-tokens/tokens";
 
 const INFO_W = 140;
@@ -29,6 +30,10 @@ export class SeatSprite extends Container {
   readonly card0 = new CardSprite();
   readonly card1 = new CardSprite();
   private cardsContainer = new Container();
+
+  private identiconSprite: Sprite | null = null;
+  private _identiconAddr = "";
+  private static _texCache = new Map<string, Texture>();
 
   private _data: SeatData | null = null;
   private _isActive = false;
@@ -133,6 +138,29 @@ export class SeatSprite extends Container {
       this.infoBg.fill({ color: PANEL_SOLID, alpha: 0.92 });
       this.infoBg.roundRect(-INFO_W / 2, 0, INFO_W, INFO_H, INFO_R);
       this.infoBg.stroke({ color: borderColor, width: 1.5, alpha: borderAlpha });
+    }
+
+    // Identicon
+    if (!isEmpty && d.player && d.player !== this._identiconAddr) {
+      this._identiconAddr = d.player;
+      let tex = SeatSprite._texCache.get(d.player);
+      if (!tex) {
+        const dataUrl = generateIdenticon(d.player, 24);
+        tex = Texture.from(dataUrl);
+        SeatSprite._texCache.set(d.player, tex);
+      }
+      if (this.identiconSprite) this.removeChild(this.identiconSprite);
+      this.identiconSprite = new Sprite(tex);
+      this.identiconSprite.width = 20;
+      this.identiconSprite.height = 20;
+      this.identiconSprite.position.set(-INFO_W / 2 + 6, 14);
+      this.identiconSprite.roundPixels = true;
+      this.addChild(this.identiconSprite);
+    }
+    if (isEmpty && this.identiconSprite) {
+      this.removeChild(this.identiconSprite);
+      this.identiconSprite = null;
+      this._identiconAddr = "";
     }
 
     // Name & stack

@@ -233,8 +233,8 @@ export function PixiPokerTable({
           <h4 className="hand-history__title">Hand History</h4>
           <div className="hand-history__list">
             {handHistory.map((result, idx) => (
-              <div key={result.handId} className="hand-history__entry">
-                <div className="hand-history__header">
+              <details key={result.handId} className="hand-history__entry" open={idx === 0 ? true : undefined}>
+                <summary className="hand-history__header">
                   <span className="hand-history__hand-id">
                     Hand #{result.handId}
                     {result.street && <span className="hand-history__street">{result.street}</span>}
@@ -244,7 +244,7 @@ export function PixiPokerTable({
                     <span className="hand-history__relative">{idx === 0 ? "Last hand" : `${idx} hand${idx > 1 ? "s" : ""} ago`}</span>
                     <span className="hand-history__pot">Pot: {result.pot}</span>
                   </span>
-                </div>
+                </summary>
                 {result.board.length > 0 && (
                   <div className="hand-history__board">
                     {result.board.map((cardId, i) => (
@@ -291,7 +291,7 @@ export function PixiPokerTable({
                     <span className="hand-history__winner">Pot distributed</span>
                   )}
                 </div>
-              </div>
+              </details>
             ))}
           </div>
         </div>

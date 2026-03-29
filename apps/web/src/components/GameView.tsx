@@ -11,6 +11,7 @@ import { statusTone, wsTone } from "../lib/utils";
 
 export function GameView({ g }: { g: GameState }) {
   const [audioMuted, setAudioMuted] = useState(audioManager.muted);
+  const [audioVolume, setAudioVolume] = useState(audioManager.volume);
   const { getDisplayName, setNickname } = useNicknames();
   const toast = useToast();
   const [nicknameInput, setNicknameInput] = useState("");
@@ -518,6 +519,28 @@ export function GameView({ g }: { g: GameState }) {
             {g.faucetStatus.message && <p className={g.faucetStatus.kind === "error" ? "error-banner" : "hint"}>{g.faucetStatus.message}</p>}
           </div>
         )}
+
+        {/* Audio */}
+        <div className="game-sidebar__section">
+          <h4>Audio</h4>
+          <div className="audio-controls">
+            <button type="button" className="audio-controls__mute" onClick={toggleAudioMute}>
+              {audioMuted ? "\uD83D\uDD07" : "\uD83D\uDD0A"}
+            </button>
+            <input
+              type="range"
+              className="audio-controls__slider"
+              min="0" max="1" step="0.05"
+              value={audioVolume}
+              disabled={audioMuted}
+              onChange={(e) => {
+                const v = parseFloat(e.target.value);
+                audioManager.setVolume(v);
+                setAudioVolume(v);
+              }}
+            />
+          </div>
+        </div>
 
         {/* Connection */}
         <div className="game-sidebar__section">

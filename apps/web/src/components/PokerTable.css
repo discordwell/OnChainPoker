@@ -549,10 +549,36 @@
   border: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+.hand-history__entry summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.hand-history__entry summary::-webkit-details-marker {
+  display: none;
+}
+
+.hand-history__entry summary::after {
+  content: "\25B6";
+  font-size: 0.55rem;
+  color: rgba(255, 255, 255, 0.3);
+  margin-left: 0.4rem;
+  transition: transform 0.2s ease;
+  display: inline-block;
+}
+
+.hand-history__entry[open] summary::after {
+  transform: rotate(90deg);
+}
+
 .hand-history__header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 0;
+}
+
+.hand-history__entry[open] .hand-history__header {
   margin-bottom: 6px;
 }
 
