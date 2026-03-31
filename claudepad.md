@@ -9,7 +9,10 @@ Executed the full polish plan:
 - **Batch 3 (Mobile Polish)**: Tablet (768px) and phone (640px) breakpoints. Stacked action buttons, full-width sidebar overlay, hand history hidden on phone, canvas 4:3 on mobile.
 - **Batch 4 (OG Image)**: SVG share image at feltprotocol.com/og.svg. Wired og:image + twitter:image on both sites. Immutable cache headers.
 - **Infra**: Removed /felt/ subpath from discordwell.com Caddy, fixed broken config from bad sed, favicon added.
-- **Remaining**: Board card wet test (code verified, needs live observation of flop/turn/river). PixiJS mobile WebGL fallback (not wired). Landing page hardcoded URLs.
+- **Dealer infra fix**: Validator was slashed in epoch 33 (missed shuffle deadlines during deploy restarts). Fixed by manually triggering `begin-epoch` (epoch 34) via CLI, then restarting dealer daemon. DKG committed + finalized, hands flowing again.
+- **Board card wet test PASSED**: Hand #8550 reached showdown with all 5 board cards visible: 3♦ J♦ 7♦ Q♦ A♣. PixiJS CardSprite face-up rendering confirmed working (cream bg, red/black suits, rank+suit layout).
+- **WebGL fallback**: Wired — auto-detects WebGL, falls back to CSS PokerTable if unavailable.
+- **Landing URLs**: Configurable via VITE_APP_URL, VITE_API_URL, VITE_GITHUB_URL env vars.
 
 ### 2026-03-27T~UTC — feltprotocol.com Launch + Polish
 - **feltprotocol.com** live with auto-TLS via Caddy on ovh2. Caddy site config at `/etc/caddy/sites/feltprotocol.com`.
