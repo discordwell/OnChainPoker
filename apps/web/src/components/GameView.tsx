@@ -256,10 +256,10 @@ export function GameView({ g }: { g: GameState }) {
       {/* ─── Game Stage ─── */}
       <main className="game-stage">
         {g.playerTable.loading && g.playerWallet.status === "connected" && !g.playerTableForSelected && (
-          <p className="placeholder" style={{ position: "absolute", top: "1rem" }}>Loading table...</p>
+          <p className="placeholder" className="abs-top">Loading table...</p>
         )}
         {g.playerTable.error && g.playerWallet.status === "connected" && (
-          <p className="error-banner" style={{ position: "absolute", top: "1rem", maxWidth: 400 }}>{g.playerTable.error}</p>
+          <p className="error-banner abs-top" style={{ maxWidth: 400 }}>{g.playerTable.error}</p>
         )}
         {renderPokerTable()}
 
@@ -283,7 +283,7 @@ export function GameView({ g }: { g: GameState }) {
               {g.tables.loading && !g.tables.data && <p className="placeholder">Loading tables...</p>}
               {g.filteredTableList.length > 0 && (
                 <>
-                  <p className="hint" style={{ marginTop: "0.5rem" }}>
+                  <p className="hint" className="mt-md">
                     {g.playerWallet.status === "connected" ? "Select a table to join" : "Select a table to watch"}
                   </p>
                   <ul className="table-list">
@@ -323,7 +323,7 @@ export function GameView({ g }: { g: GameState }) {
                 <button
                   type="button"
                   className="topbar-btn"
-                  style={{ marginTop: "0.5rem" }}
+                  className="mt-md"
                   onClick={() => g.setShowCreateTableModal(true)}
                 >
                   + Create Table
@@ -373,11 +373,11 @@ export function GameView({ g }: { g: GameState }) {
 
       {/* ─── Create Table Modal ─── */}
       {g.showCreateTableModal && (
-        <div className="onboard-overlay" style={{ position: "fixed", inset: 0 }} onClick={(e) => { if (e.target === e.currentTarget) g.setShowCreateTableModal(false); }}>
+        <div className="onboard-overlay" className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) g.setShowCreateTableModal(false); }}>
           <div className="onboard-card">
             <h2>Create Table</h2>
             {renderCreateTableForm()}
-            <button type="button" className="topbar-btn" style={{ marginTop: "0.5rem" }} onClick={() => g.setShowCreateTableModal(false)}>
+            <button type="button" className="topbar-btn" className="mt-md" onClick={() => g.setShowCreateTableModal(false)}>
               Cancel
             </button>
           </div>
@@ -415,9 +415,9 @@ export function GameView({ g }: { g: GameState }) {
           </p>
           {g.playerWallet.status === "connected" ? (
             <>
-              <p style={{ fontSize: "0.76rem", wordBreak: "break-all" }}>{g.playerWallet.address}</p>
+              <p className="addr-text">{g.playerWallet.address}</p>
               <p className="hint">Seat: {g.playerSeat ? `#${g.playerSeat.seat}` : "Not seated"}</p>
-              <div style={{ marginTop: "0.5rem" }}>
+              <div className="mt-md">
                 <label className="hint" style={{ display: "block", marginBottom: "0.25rem" }}>Display Name</label>
                 <form
                   style={{ display: "flex", gap: "0.4rem" }}
@@ -439,7 +439,7 @@ export function GameView({ g }: { g: GameState }) {
                     value={nicknameInput}
                     onChange={(e) => setNicknameInput(e.target.value)}
                     maxLength={20}
-                    style={{ flex: 1, minWidth: 0 }}
+                    className="flex-fill"
                   />
                   <button type="submit" disabled={!nicknameInput.trim()}>Set</button>
                 </form>
@@ -458,7 +458,7 @@ export function GameView({ g }: { g: GameState }) {
           <div className="game-sidebar__section">
             <h4>Unlock Keys</h4>
             <p className="hint">Keys are encrypted. Enter passphrase to unlock.</p>
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+            <div className="flex-row">
               <input
                 type="password"
                 value={g.keyPassphrase}
@@ -476,8 +476,8 @@ export function GameView({ g }: { g: GameState }) {
           <div className="game-sidebar__section">
             <h4>Key Protection</h4>
             <details>
-              <summary style={{ cursor: "pointer", fontSize: "0.76rem", color: "var(--muted)" }}>Encrypt keys with passphrase</summary>
-              <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginTop: "0.4rem" }}>
+              <summary className="details-summary">Encrypt keys with passphrase</summary>
+              <div className="flex-col mt-sm">
                 <input type="password" value={g.protectPassphrase} onChange={(e) => g.setProtectPassphrase(e.target.value)} placeholder="New passphrase" />
                 <input type="password" value={g.protectConfirm} onChange={(e) => g.setProtectConfirm(e.target.value)} placeholder="Confirm passphrase" />
                 <button type="button" disabled={!g.protectPassphrase || g.protectPassphrase !== g.protectConfirm} onClick={() => {
@@ -512,7 +512,7 @@ export function GameView({ g }: { g: GameState }) {
               </form>
             ) : (
               <>
-                <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+                <div className="flex-row">
                   <button
                     type="button" className="btn-leave"
                     disabled={g.playerLeaveSubmit.kind === "pending" || g.playerWallet.status !== "connected" || !g.selectedTableId || Boolean(g.playerTableForSelected?.hand && g.playerSeat.inHand)}
@@ -585,7 +585,7 @@ export function GameView({ g }: { g: GameState }) {
               <button type="button" onClick={g.applyCoordinatorBase}>Set</button>
             </div>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.4rem" }}>
+          <div className="flex-row mt-sm">
             <span className={`dot ${g.health.error ? "status-closed" : "status-open"}`} />
             <span className="hint">{g.health.error ? "Unavailable" : "Connected"}</span>
             <span className={`dot ${wsTone(g.wsStatus)}`} style={{ marginLeft: "0.5rem" }} />

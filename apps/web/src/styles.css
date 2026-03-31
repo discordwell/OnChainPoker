@@ -1341,6 +1341,18 @@ pre {
   }
 }
 
+/* ─── Utility Classes ─── */
+
+.flex-row { display: flex; gap: 0.5rem; align-items: center; }
+.flex-col { display: flex; flex-direction: column; gap: 0.25rem; }
+.mt-sm { margin-top: 0.4rem; }
+.mt-md { margin-top: 0.5rem; }
+.abs-top { position: absolute; top: 1rem; }
+.addr-text { font-size: 0.76rem; word-break: break-all; }
+.modal-backdrop { position: fixed; inset: 0; }
+.flex-fill { flex: 1; min-width: 0; }
+.details-summary { cursor: pointer; font-size: 0.76rem; color: var(--muted); }
+
 /* ─── Leaderboard ─── */
 
 .leaderboard {
