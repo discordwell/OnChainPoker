@@ -1,9 +1,13 @@
 import { useEffect, useState } from "react";
 
+const APP_URL = import.meta.env.VITE_APP_URL ?? "https://discordwell.com/ocp";
+const API_URL = import.meta.env.VITE_API_URL ?? "https://discordwell.com/ocp/api";
+const GITHUB_URL = import.meta.env.VITE_GITHUB_URL ?? "https://github.com/discordwell/OnChainPoker";
+
 function useLiveStats() {
   const [stats, setStats] = useState<{ handCount: string; tableStatus: string } | null>(null);
   useEffect(() => {
-    fetch("https://discordwell.com/ocp/api/v1/tables")
+    fetch(`${API_URL}/v1/tables`)
       .then((r) => r.json())
       .then((d) => {
         const table = d.tables?.[0];
@@ -29,7 +33,7 @@ export function App() {
           <a href="#how-it-works">How It Works</a>
           <a href="#technology">Technology</a>
           <a href="#token">CHIPS Token</a>
-          <a href="https://discordwell.com/ocp" className="nav__cta">Play Now</a>
+          <a href={APP_URL} className="nav__cta">Play Now</a>
         </div>
       </nav>
 
@@ -44,7 +48,7 @@ export function App() {
             network of validators — and every hand is provably fair.
           </p>
           <div className="hero__actions">
-            <a href="https://discordwell.com/ocp" className="btn btn--primary">Play Now</a>
+            <a href={APP_URL} className="btn btn--primary">Play Now</a>
             <a href="#how-it-works" className="btn btn--ghost">Learn More</a>
           </div>
           {stats && (
@@ -188,7 +192,7 @@ export function App() {
           Connect your Keplr wallet, grab free testnet CHIPS from the faucet, and sit down at a table.
           No sign-up. No KYC. Just poker.
         </p>
-        <a href="https://discordwell.com/ocp" className="btn btn--primary btn--lg">Open the Table</a>
+        <a href={APP_URL} className="btn btn--primary btn--lg">Open the Table</a>
       </section>
 
       {/* ─── Footer ─── */}
@@ -196,8 +200,8 @@ export function App() {
         <div className="footer__inner">
           <span className="footer__logo">FELT</span>
           <div className="footer__links">
-            <a href="https://discordwell.com/ocp">Play</a>
-            <a href="https://github.com/discordwell/OnChainPoker">GitHub</a>
+            <a href={APP_URL}>Play</a>
+            <a href={GITHUB_URL}>GitHub</a>
           </div>
           <p className="footer__copy">Felt Protocol. Provably fair.</p>
         </div>

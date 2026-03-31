@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { GameState } from "../hooks/useGameState";
 import { PixiPokerTable } from "../pixi/PixiPokerTable";
+import { PokerTable } from "./PokerTable";
 import { ChainVerificationBadge } from "./ChainVerificationBadge";
 import { ToastContainer } from "./Toast";
 import { PlayerStats } from "./PlayerStats";
@@ -9,6 +10,14 @@ import { audioManager } from "../audio/AudioManager";
 import { useNicknames } from "../hooks/useNicknames";
 import { useToast } from "../hooks/useToast";
 import { statusTone, wsTone } from "../lib/utils";
+
+/** Detect WebGL support once */
+const hasWebGL = (() => {
+  try {
+    const c = document.createElement("canvas");
+    return !!(c.getContext("webgl2") || c.getContext("webgl"));
+  } catch { return false; }
+})();
 
 export function GameView({ g }: { g: GameState }) {
   const [audioMuted, setAudioMuted] = useState(audioManager.muted);
@@ -36,7 +45,12 @@ export function GameView({ g }: { g: GameState }) {
   const renderPokerTable = () => {
     const tableProps = g.renderPokerTableProps;
     if (!tableProps) return null;
-    return <PixiPokerTable {...tableProps} handHistory={g.handHistory.get(g.selectedTableId) ?? []} getDisplayName={getDisplayName} />;
+    const history = g.handHistory.get(g.selectedTableId) ?? [];
+    if (hasWebGL) {
+      return <PixiPokerTable {...tableProps} handHistory={history} getDisplayName={getDisplayName} />;
+    }
+    // Fallback: CSS-rendered table for devices without WebGL
+    return <PokerTable {...tableProps} handHistory={history} />;
   };
 
   const renderChat = () => (
