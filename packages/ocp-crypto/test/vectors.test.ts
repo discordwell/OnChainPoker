@@ -13,6 +13,7 @@ import {
 } from "../src/index.js";
 import { elgamalDecrypt, elgamalEncrypt } from "../src/elgamal.js";
 import { chaumPedersenVerify, decodeChaumPedersenProof } from "../src/proofs/chaumPedersen.js";
+import { decodeDkgEncShareProof, dkgEncShareVerify } from "../src/proofs/dkgEncShare.js";
 
 type Vectors = {
   suite: string;
@@ -29,6 +30,15 @@ type Vectors = {
     yHex: string;
     c1Hex: string;
     dHex: string;
+    proofHex: string;
+  }>;
+  dkgEncShare?: Array<{
+    description?: string;
+    commitmentsHex: string[];
+    j: number;
+    pkRHex: string;
+    uHex: string;
+    vHex: string;
     proofHex: string;
   }>;
 };
@@ -68,6 +78,22 @@ describe("ocp-crypto vectors", () => {
       const d = groupElementFromBytes(hexToBytes(v.dHex));
       const proof = decodeChaumPedersenProof(hexToBytes(v.proofHex));
       expect(chaumPedersenVerify({ y, c1, d, proof })).toBe(true);
+    }
+  });
+
+  it("DkgEncShare vectors verify (cross-language parity)", () => {
+    // Same vector block is consumed by apps/cosmos/internal/ocpcrypto vectors_test.go.
+    // If this asserts false while the Go side passes (or vice versa), the
+    // TS/Go transcript or encoding has drifted.
+    const v2 = vectors.dkgEncShare ?? [];
+    expect(v2.length).toBeGreaterThan(0);
+    for (const v of v2) {
+      const commitments = v.commitmentsHex.map((h) => groupElementFromBytes(hexToBytes(h)));
+      const pkR = groupElementFromBytes(hexToBytes(v.pkRHex));
+      const u = groupElementFromBytes(hexToBytes(v.uHex));
+      const vv = groupElementFromBytes(hexToBytes(v.vHex));
+      const proof = decodeDkgEncShareProof(hexToBytes(v.proofHex));
+      expect(dkgEncShareVerify({ commitments, j: v.j, pkR, u, v: vv, proof })).toBe(true);
     }
   });
 });
