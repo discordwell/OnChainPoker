@@ -1,8 +1,4 @@
 // Codec registration for the randomness-beacon messages.
-//
-//	cd apps/cosmos/proto && buf generate
-//
-// then drop the build tag.
 package types
 
 import (
@@ -15,6 +11,7 @@ import (
 // RegisterBeaconAminoCodec registers amino names for the beacon messages.
 // Intended to be called from RegisterLegacyAminoCodec after regen.
 func RegisterBeaconAminoCodec(cdc *codec.LegacyAmino) {
+	legacy.RegisterAminoMsg(cdc, &MsgOpenBeaconWindow{}, "ocp/dealer/OpenBeaconWindow")
 	legacy.RegisterAminoMsg(cdc, &MsgBeaconCommit{}, "ocp/dealer/BeaconCommit")
 	legacy.RegisterAminoMsg(cdc, &MsgBeaconReveal{}, "ocp/dealer/BeaconReveal")
 }
@@ -23,6 +20,7 @@ func RegisterBeaconAminoCodec(cdc *codec.LegacyAmino) {
 // for the beacon messages. Intended to be called from RegisterInterfaces.
 func RegisterBeaconInterfaces(registry codectypes.InterfaceRegistry) {
 	registry.RegisterImplementations((*sdk.Msg)(nil),
+		&MsgOpenBeaconWindow{},
 		&MsgBeaconCommit{},
 		&MsgBeaconReveal{},
 	)

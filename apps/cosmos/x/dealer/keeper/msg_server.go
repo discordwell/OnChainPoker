@@ -104,8 +104,7 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	// Resolve the randomness source for this epoch. On production chain ids
 	// this requires a closed randomness-beacon window; devnet/local fall back
 	// to the caller-supplied rand_epoch or DevnetRandEpoch. See
-	// x/dealer/keeper/beacon_select.go (and beacon_select_beacon.go for the
-	// regen-tagged beacon path).
+	// x/dealer/keeper/beacon_select_beacon.go.
 	randBytes, err := m.selectRandEpochForSampling(ctx, epochID, req.RandEpoch)
 	if err != nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())

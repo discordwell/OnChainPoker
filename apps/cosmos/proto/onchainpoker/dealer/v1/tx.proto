@@ -39,6 +39,7 @@ service Msg {
   rpc DkgTimeout(MsgDkgTimeout) returns (MsgDkgTimeoutResponse);
 
   // Randomness-beacon commit-reveal (replaces devnet RandEpoch on prod chains).
+  rpc OpenBeaconWindow(MsgOpenBeaconWindow) returns (MsgOpenBeaconWindowResponse);
   rpc BeaconCommit(MsgBeaconCommit) returns (MsgBeaconCommitResponse);
   rpc BeaconReveal(MsgBeaconReveal) returns (MsgBeaconRevealResponse);
 
@@ -175,6 +176,44 @@ message MsgDkgTimeout {
 }
 
 message MsgDkgTimeoutResponse {}
+
+// MsgOpenBeaconWindow is sent by any bonded validator (or a governance
+// account via typical Cosmos SDK patterns) to open a commit-reveal beacon
+// window for an upcoming epoch. The commit window begins at the block in
+// which this message is processed; reveals open once the commit window
+// closes. See docs on BeaconState for the lifecycle and x/dealer/committee/
+// beacon.go for the pure helpers.
+//
+// Only one beacon window may be open at a time. Attempting to open a
+// second is rejected until `consumeBeaconForEpoch` clears the current
+// state (which happens during BeginEpoch or on fallback).
+message MsgOpenBeaconWindow {
+  option (cosmos.msg.v1.signer) = "caller";
+  option (gogoproto.goproto_getters) = false;
+
+  // Caller's bech32 account address. Must correspond to an active bonded
+  // validator.
+  string caller = 1 [(cosmos_proto.scalar) = "cosmos.AddressString"];
+
+  // Epoch this beacon will seed once finalized. Typically the next
+  // upcoming epoch_id; the chain enforces only that the currently-stored
+  // beacon state is cleared.
+  uint64 epoch_id = 2;
+
+  // Length of the commit window in blocks. Must be > 0; if 0, uses a
+  // localnet default (5 blocks).
+  uint64 commit_blocks = 3;
+
+  // Length of the reveal window in blocks, counted from the end of the
+  // commit window. Must be > 0; if 0, uses a localnet default (5 blocks).
+  uint64 reveal_blocks = 4;
+
+  // Minimum number of valid reveals required for a non-fallback final
+  // beacon output. If 0, defaults to 1.
+  uint32 threshold = 5;
+}
+
+message MsgOpenBeaconWindowResponse {}
 
 // MsgBeaconCommit is sent by a bonded validator during the beacon commit
 // window to register a hash-commit over its 32-byte random salt. See

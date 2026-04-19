@@ -31,7 +31,16 @@ type fakeDealerStakingKeeper struct {
 	bonded []stakingtypes.Validator
 }
 
-func (f fakeDealerStakingKeeper) Validator(_ context.Context, _ sdk.ValAddress) (stakingtypes.ValidatorI, error) {
+func (f fakeDealerStakingKeeper) Validator(_ context.Context, addr sdk.ValAddress) (stakingtypes.ValidatorI, error) {
+	// Look up into the bonded set so tests that exercise the slashing path
+	// (which calls SlashAndJailValidator → stakingKeeper.Validator) can
+	// resolve a validator by address. Tests that don't care continue to work
+	// because they either don't hit this path or pass bonded=nil.
+	for i := range f.bonded {
+		if f.bonded[i].GetOperator() == addr.String() {
+			return f.bonded[i], nil
+		}
+	}
 	return nil, nil
 }
 

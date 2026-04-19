@@ -122,6 +122,50 @@ export interface MsgDkgTimeoutResponse {
 }
 
 /**
+ * MsgOpenBeaconWindow is sent by any bonded validator (or a governance
+ * account via typical Cosmos SDK patterns) to open a commit-reveal beacon
+ * window for an upcoming epoch. The commit window begins at the block in
+ * which this message is processed; reveals open once the commit window
+ * closes. See docs on BeaconState for the lifecycle and x/dealer/committee/
+ * beacon.go for the pure helpers.
+ *
+ * Only one beacon window may be open at a time. Attempting to open a
+ * second is rejected until `consumeBeaconForEpoch` clears the current
+ * state (which happens during BeginEpoch or on fallback).
+ */
+export interface MsgOpenBeaconWindow {
+  /**
+   * Caller's bech32 account address. Must correspond to an active bonded
+   * validator.
+   */
+  caller: string;
+  /**
+   * Epoch this beacon will seed once finalized. Typically the next
+   * upcoming epoch_id; the chain enforces only that the currently-stored
+   * beacon state is cleared.
+   */
+  epochId: string;
+  /**
+   * Length of the commit window in blocks. Must be > 0; if 0, uses a
+   * localnet default (5 blocks).
+   */
+  commitBlocks: string;
+  /**
+   * Length of the reveal window in blocks, counted from the end of the
+   * commit window. Must be > 0; if 0, uses a localnet default (5 blocks).
+   */
+  revealBlocks: string;
+  /**
+   * Minimum number of valid reveals required for a non-fallback final
+   * beacon output. If 0, defaults to 1.
+   */
+  threshold: number;
+}
+
+export interface MsgOpenBeaconWindowResponse {
+}
+
+/**
  * MsgBeaconCommit is sent by a bonded validator during the beacon commit
  * window to register a hash-commit over its 32-byte random salt. See
  * x/dealer/committee/beacon.go for the exact H() used.
@@ -1571,6 +1615,185 @@ export const MsgDkgTimeoutResponse: MessageFns<MsgDkgTimeoutResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgDkgTimeoutResponse>, I>>(_: I): MsgDkgTimeoutResponse {
     const message = createBaseMsgDkgTimeoutResponse();
+    return message;
+  },
+};
+
+function createBaseMsgOpenBeaconWindow(): MsgOpenBeaconWindow {
+  return { caller: "", epochId: "0", commitBlocks: "0", revealBlocks: "0", threshold: 0 };
+}
+
+export const MsgOpenBeaconWindow: MessageFns<MsgOpenBeaconWindow> = {
+  encode(message: MsgOpenBeaconWindow, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.caller !== "") {
+      writer.uint32(10).string(message.caller);
+    }
+    if (message.epochId !== "0") {
+      writer.uint32(16).uint64(message.epochId);
+    }
+    if (message.commitBlocks !== "0") {
+      writer.uint32(24).uint64(message.commitBlocks);
+    }
+    if (message.revealBlocks !== "0") {
+      writer.uint32(32).uint64(message.revealBlocks);
+    }
+    if (message.threshold !== 0) {
+      writer.uint32(40).uint32(message.threshold);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgOpenBeaconWindow {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgOpenBeaconWindow();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.caller = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.commitBlocks = reader.uint64().toString();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.revealBlocks = reader.uint64().toString();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.threshold = reader.uint32();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgOpenBeaconWindow {
+    return {
+      caller: isSet(object.caller) ? globalThis.String(object.caller) : "",
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      commitBlocks: isSet(object.commitBlocks)
+        ? globalThis.String(object.commitBlocks)
+        : isSet(object.commit_blocks)
+        ? globalThis.String(object.commit_blocks)
+        : "0",
+      revealBlocks: isSet(object.revealBlocks)
+        ? globalThis.String(object.revealBlocks)
+        : isSet(object.reveal_blocks)
+        ? globalThis.String(object.reveal_blocks)
+        : "0",
+      threshold: isSet(object.threshold) ? globalThis.Number(object.threshold) : 0,
+    };
+  },
+
+  toJSON(message: MsgOpenBeaconWindow): unknown {
+    const obj: any = {};
+    if (message.caller !== "") {
+      obj.caller = message.caller;
+    }
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.commitBlocks !== "0") {
+      obj.commitBlocks = message.commitBlocks;
+    }
+    if (message.revealBlocks !== "0") {
+      obj.revealBlocks = message.revealBlocks;
+    }
+    if (message.threshold !== 0) {
+      obj.threshold = Math.round(message.threshold);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgOpenBeaconWindow>, I>>(base?: I): MsgOpenBeaconWindow {
+    return MsgOpenBeaconWindow.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgOpenBeaconWindow>, I>>(object: I): MsgOpenBeaconWindow {
+    const message = createBaseMsgOpenBeaconWindow();
+    message.caller = object.caller ?? "";
+    message.epochId = object.epochId ?? "0";
+    message.commitBlocks = object.commitBlocks ?? "0";
+    message.revealBlocks = object.revealBlocks ?? "0";
+    message.threshold = object.threshold ?? 0;
+    return message;
+  },
+};
+
+function createBaseMsgOpenBeaconWindowResponse(): MsgOpenBeaconWindowResponse {
+  return {};
+}
+
+export const MsgOpenBeaconWindowResponse: MessageFns<MsgOpenBeaconWindowResponse> = {
+  encode(_: MsgOpenBeaconWindowResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgOpenBeaconWindowResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgOpenBeaconWindowResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): MsgOpenBeaconWindowResponse {
+    return {};
+  },
+
+  toJSON(_: MsgOpenBeaconWindowResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgOpenBeaconWindowResponse>, I>>(base?: I): MsgOpenBeaconWindowResponse {
+    return MsgOpenBeaconWindowResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgOpenBeaconWindowResponse>, I>>(_: I): MsgOpenBeaconWindowResponse {
+    const message = createBaseMsgOpenBeaconWindowResponse();
     return message;
   },
 };

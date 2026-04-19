@@ -1,18 +1,13 @@
 // Package keeper: randomness-beacon commit-reveal integration.
 //
-// This file is gated behind the `dealer_beacon_regen` build tag because it
-// references protobuf-generated types (BeaconState, BeaconCommitEntry,
-// BeaconRevealEntry, MsgBeaconCommit, MsgBeaconReveal) that have been added
-// to apps/cosmos/proto/onchainpoker/dealer/v1/{tx,dealer}.proto but have NOT
-// yet had their .pb.go regenerated. Regenerate with:
+// This file contains the keeper wiring that makes the pure helpers in
+// x/dealer/committee/beacon.go reachable via on-chain messages. Flow:
 //
-//	cd apps/cosmos/proto && buf generate
-//
-// then drop the build tag (`sed -i '' '/^\/\/go:build/,/^$/d' beacon.go` or
-// by hand) to enable the beacon path.
-//
-// The pure helpers in x/dealer/committee/beacon.go are always compiled and
-// unit-tested regardless of this tag; only the keeper wiring is gated.
+//	OpenBeaconWindow → BeaconState written (commit/reveal windows set)
+//	BeaconCommit*N   → commits appended while h ∈ [open, commit_close]
+//	BeaconReveal*N   → reveals appended while h ∈ (commit_close, reveal_close]
+//	BeginEpoch       → consumeBeaconForEpoch finalizes and slashes no-show
+//	                   committers; result becomes rand_epoch.
 package keeper
 
 import (
@@ -57,6 +52,97 @@ func (k Keeper) SetBeaconState(ctx context.Context, bs *dealertypes.BeaconState)
 }
 
 // ---- Msg handlers ----
+
+// Defaults for the beacon window durations if the caller leaves them zero.
+// Mirrors the DKG phase defaults; tuned for localnet speed. Governance
+// should override these for production chains (via dedicated params in a
+// future PR, or by always passing explicit values here).
+const (
+	beaconCommitBlocksDefault uint64 = 5
+	beaconRevealBlocksDefault uint64 = 5
+	beaconMaxWindowBlocks     uint64 = 1_000_000
+)
+
+func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpenBeaconWindow) (*dealertypes.MsgOpenBeaconWindowResponse, error) {
+	if req == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Caller == "" {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("missing caller")
+	}
+	if _, err := sdk.AccAddressFromBech32(req.Caller); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid caller address")
+	}
+	if req.EpochId == 0 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("epoch_id must be > 0")
+	}
+	if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
+		return nil, err
+	}
+
+	// Only one beacon window may be open at a time.
+	existing, err := m.GetBeaconState(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("beacon window already open; consume the previous one before opening a new one")
+	}
+
+	// Resolve window durations.
+	commitBlocks := req.CommitBlocks
+	if commitBlocks == 0 {
+		commitBlocks = beaconCommitBlocksDefault
+	}
+	if commitBlocks > beaconMaxWindowBlocks {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("commit_blocks exceeds max of %d", beaconMaxWindowBlocks)
+	}
+	revealBlocks := req.RevealBlocks
+	if revealBlocks == 0 {
+		revealBlocks = beaconRevealBlocksDefault
+	}
+	if revealBlocks > beaconMaxWindowBlocks {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("reveal_blocks exceeds max of %d", beaconMaxWindowBlocks)
+	}
+	threshold := req.Threshold
+	if threshold == 0 {
+		threshold = 1
+	}
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	commitOpen := sdkCtx.BlockHeight()
+	commitClose, err := addInt64AndU64Checked(commitOpen, commitBlocks, "beacon commit_close_height")
+	if err != nil {
+		return nil, err
+	}
+	revealClose, err := addInt64AndU64Checked(commitClose, revealBlocks, "beacon reveal_close_height")
+	if err != nil {
+		return nil, err
+	}
+
+	bs := &dealertypes.BeaconState{
+		EpochId:           req.EpochId,
+		CommitOpenHeight:  commitOpen,
+		CommitCloseHeight: commitClose,
+		RevealCloseHeight: revealClose,
+		Threshold:         threshold,
+		Commits:           []dealertypes.BeaconCommitEntry{},
+		Reveals:           []dealertypes.BeaconRevealEntry{},
+	}
+	if err := m.SetBeaconState(ctx, bs); err != nil {
+		return nil, err
+	}
+
+	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+		dealertypes.EventTypeBeaconOpened,
+		sdk.NewAttribute("epochId", fmt.Sprintf("%d", bs.EpochId)),
+		sdk.NewAttribute("commitOpenHeight", fmt.Sprintf("%d", bs.CommitOpenHeight)),
+		sdk.NewAttribute("commitCloseHeight", fmt.Sprintf("%d", bs.CommitCloseHeight)),
+		sdk.NewAttribute("revealCloseHeight", fmt.Sprintf("%d", bs.RevealCloseHeight)),
+		sdk.NewAttribute("threshold", fmt.Sprintf("%d", bs.Threshold)),
+	))
+	return &dealertypes.MsgOpenBeaconWindowResponse{}, nil
+}
 
 func (m msgServer) BeaconCommit(ctx context.Context, req *dealertypes.MsgBeaconCommit) (*dealertypes.MsgBeaconCommitResponse, error) {
 	if req == nil {
