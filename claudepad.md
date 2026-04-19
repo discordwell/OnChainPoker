@@ -2,6 +2,13 @@
 
 ## Session Summaries
 
+### 2026-04-19T~UTC (latest) — Beacon: OpenBeaconWindow + Keeper Tests
+Closed the last two audit follow-ups from the post-merge review:
+- **`MsgOpenBeaconWindow`** — new RPC + keeper handler (`apps/cosmos/x/dealer/keeper/beacon.go`). Gates on active-bonded caller; rejects reopen while a window is live; localnet defaults (5/5 blocks, threshold=1). Emits `BeaconOpened` event. Previously `consumeBeaconForEpoch` was unreachable on any non-devnet chain id because nothing wrote `BeaconState` — only a doc-comment gestured at this message.
+- **24 keeper tests** — `msg_server_beacon_test.go` covering full beacon lifecycle (open/commit/reveal/consume). Catches the bug classes flagged by the original review: validator-address double-cast (now prevented by a non-bonded-rejected test), missing reveal-side auth gate (symmetric non-bonded test), devnet-vs-production gating, below-threshold fallback, committed-but-not-revealed slashing (inspects emitted events). Extended `fakeDealerStakingKeeper.Validator(...)` to look up into `bonded` so `SlashAndJailValidator` resolves correctly in tests — purely additive.
+- **Stale-comment cleanup** — removed the 15-line `dealer_beacon_regen` build-tag preambles from `beacon.go` and `codec_beacon.go` (tags dropped in 0983b2e), fixed the "no-op in default build" comment in `codec.go`, corrected reference to `beacon_select.go` → `beacon_select_beacon.go` in `msg_server.go`.
+- Commit `c2a3fc9`. `go test ./apps/cosmos/...` green.
+
 ### 2026-04-19T~UTC (later) — DKG v2 Follow-ups: Primitive + Chain + Daemon
 Landed the critical cryptographic fix from the audit — encrypted-share DKG replacing the plaintext reveal leak — across three commits:
 - **6689552** Go port of DkgEncShare NIZK primitive + cross-lang test vector in both `docs/test-vectors/ocp-crypto-v1.json` and the cosmos testdata mirror. TS and Go now byte-for-byte verify the same 160-byte proof.
