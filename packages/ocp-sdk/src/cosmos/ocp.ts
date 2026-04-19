@@ -15,6 +15,7 @@ import {
   MsgDkgCommit,
   MsgDkgComplaintInvalid,
   MsgDkgComplaintMissing,
+  MsgDkgEncryptedShare,
   MsgDkgShareReveal,
   MsgDkgTimeout,
   MsgFinalizeDeck,
@@ -43,6 +44,7 @@ export const OCP_TYPE_URLS = {
     dkgComplaintMissing: "/onchainpoker.dealer.v1.MsgDkgComplaintMissing",
     dkgComplaintInvalid: "/onchainpoker.dealer.v1.MsgDkgComplaintInvalid",
     dkgShareReveal: "/onchainpoker.dealer.v1.MsgDkgShareReveal",
+    dkgEncryptedShare: "/onchainpoker.dealer.v1.MsgDkgEncryptedShare",
     finalizeEpoch: "/onchainpoker.dealer.v1.MsgFinalizeEpoch",
     dkgTimeout: "/onchainpoker.dealer.v1.MsgDkgTimeout",
     initHand: "/onchainpoker.dealer.v1.MsgInitHand",
@@ -76,6 +78,7 @@ export function createOcpRegistry(): Registry {
   registry.register(OCP_TYPE_URLS.dealer.dkgComplaintMissing, MsgDkgComplaintMissing);
   registry.register(OCP_TYPE_URLS.dealer.dkgComplaintInvalid, MsgDkgComplaintInvalid);
   registry.register(OCP_TYPE_URLS.dealer.dkgShareReveal, MsgDkgShareReveal);
+  registry.register(OCP_TYPE_URLS.dealer.dkgEncryptedShare, MsgDkgEncryptedShare);
   registry.register(OCP_TYPE_URLS.dealer.finalizeEpoch, MsgFinalizeEpoch);
   registry.register(OCP_TYPE_URLS.dealer.dkgTimeout, MsgDkgTimeout);
   registry.register(OCP_TYPE_URLS.dealer.initHand, MsgInitHand);

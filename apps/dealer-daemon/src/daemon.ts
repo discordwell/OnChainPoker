@@ -6,6 +6,7 @@ import { log, logError } from "./log.js";
 import {
   handleDkgCommit,
   handleDkgComplaints,
+  handleDkgEncryptedShares,
   handleDkgReveals,
   handleDkgAggregate,
 } from "./handlers/dkg.js";
@@ -105,17 +106,41 @@ function expectedRevealPos(table: any): number | null {
   return null;
 }
 
-function parseMembersFromEpoch(epoch: any): Array<{ validator: string; index: number }> {
+type ParsedMember = { validator: string; index: number; ephemeralPubkey?: Uint8Array };
+
+function parseMembersFromEpoch(epoch: any): ParsedMember[] {
   const raw = epoch?.members ?? epoch?.Members ?? [];
   if (!Array.isArray(raw)) return [];
-  return raw
-    .map((m: any) => {
-      const validator = String(m?.validator ?? m?.Validator ?? m?.validatorId ?? "");
-      const index = asNumber(m?.index ?? m?.Index);
-      if (!validator || index === undefined) return null;
-      return { validator, index };
-    })
-    .filter((x: any): x is { validator: string; index: number } => x !== null);
+  const out: ParsedMember[] = [];
+  for (const m of raw) {
+    const validator = String(m?.validator ?? m?.Validator ?? m?.validatorId ?? "");
+    const index = asNumber(m?.index ?? m?.Index);
+    if (!validator || index === undefined) continue;
+    const ephRaw = m?.ephemeralPubkey ?? m?.ephemeral_pubkey ?? m?.EphemeralPubkey;
+    let ephemeralPubkey: Uint8Array | undefined;
+    if (ephRaw != null) {
+      if (ephRaw instanceof Uint8Array) {
+        ephemeralPubkey = ephRaw.length > 0 ? ephRaw : undefined;
+      } else if (Array.isArray(ephRaw)) {
+        ephemeralPubkey = ephRaw.length > 0 ? Uint8Array.from(ephRaw.map((x: unknown) => Number(x))) : undefined;
+      } else if (typeof ephRaw === "string" && ephRaw.length > 0) {
+        const s = ephRaw.startsWith("0x") ? ephRaw.slice(2) : ephRaw;
+        if (/^[0-9a-fA-F]+$/.test(s) && s.length === 64) {
+          const buf = new Uint8Array(32);
+          for (let i = 0; i < 32; i++) buf[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
+          ephemeralPubkey = buf;
+        } else {
+          const buf = Buffer.from(ephRaw, "base64");
+          if (buf.length > 0) ephemeralPubkey = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+        }
+      } else if (typeof ephRaw === "object" && (ephRaw as any).length != null) {
+        const arr = Object.values(ephRaw as Record<string, number>);
+        if (arr.length > 0) ephemeralPubkey = new Uint8Array(arr);
+      }
+    }
+    out.push({ validator, index, ephemeralPubkey });
+  }
+  return out;
 }
 
 export class DealerDaemon {
@@ -202,6 +227,19 @@ export class DealerDaemon {
         // Re-fetch DKG state after commit to pick up new commits/complaints
         const dkgAfterCommit = await this.client.getDealerDkg().catch(() => null);
         if (!dkgAfterCommit) return;
+
+        // DKG v2: publish one encrypted share per recipient that has already
+        // committed and posted an ephemeral pubkey. Runs in parallel with the
+        // legacy complaint-reveal path; the chain accepts both flows.
+        const membersAfterCommit = parseMembersFromEpoch(dkgAfterCommit);
+        await handleDkgEncryptedShares({
+          client: this.client,
+          config: this.config,
+          stateStore: this.stateStore,
+          epochId,
+          members: membersAfterCommit,
+          dkg: dkgAfterCommit,
+        }).catch((err) => logError("DKG encrypted-share error", err));
 
         // Phase 2: File "missing" complaints for all other members
         // (forces on-chain share reveals since there's no off-chain channel)

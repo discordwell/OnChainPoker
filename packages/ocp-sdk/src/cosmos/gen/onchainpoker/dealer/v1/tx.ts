@@ -31,6 +31,12 @@ export interface MsgDkgCommit {
   dealer: string;
   epochId: string;
   commitments: Uint8Array[];
+  /**
+   * DKG v2 only: the dealer's per-epoch ephemeral ElGamal/Ristretto255 public
+   * key pkR = skR*G used by other dealers to encrypt shares destined for this
+   * dealer. 32 bytes canonical, or empty on v1 chains. See docs/DKG-V2.md.
+   */
+  ephemeralPubkey: Uint8Array;
 }
 
 export interface MsgDkgCommitResponse {
@@ -65,6 +71,40 @@ export interface MsgDkgShareReveal {
 export interface MsgDkgShareRevealResponse {
 }
 
+/**
+ * MsgDkgEncryptedShare delivers one Feldman-consistent DKG share from a
+ * dealer to a specific recipient index, encrypted under the recipient's
+ * per-epoch ephemeral pubkey. Accepted by the chain only when the 160-byte
+ * NIZK (DkgEncShareProof, see apps/cosmos/internal/ocpcrypto/dkg_encshare.go)
+ * verifies against the dealer's previously-posted Feldman commitments at
+ * index `recipient_index` under `DealerMember.ephemeral_pubkey`. The
+ * plaintext scalar is AEAD-encrypted in `scalar_ct` and is recoverable only
+ * by the recipient holding `skR`. No share scalar ever appears in plaintext
+ * on-chain.
+ */
+export interface MsgDkgEncryptedShare {
+  dealer: string;
+  epochId: string;
+  recipientIndex: number;
+  /** 32-byte ElGamal ephemeral = r*G. */
+  u: Uint8Array;
+  /** 32-byte ElGamal ciphertext = s*G + r*pkR. */
+  v: Uint8Array;
+  /**
+   * 160-byte NIZK proof (DkgEncShareProof). Binds (u, v) to the Feldman
+   * commitments at index `recipient_index`.
+   */
+  proof: Uint8Array;
+  /**
+   * 48-byte AES-256-GCM ciphertext of the share scalar s (LE), AAD=proof.
+   * Recipient derives the AEAD key from skR*U = r*pkR.
+   */
+  scalarCt: Uint8Array;
+}
+
+export interface MsgDkgEncryptedShareResponse {
+}
+
 export interface MsgFinalizeEpoch {
   caller: string;
   epochId: string;
@@ -79,6 +119,36 @@ export interface MsgDkgTimeout {
 }
 
 export interface MsgDkgTimeoutResponse {
+}
+
+/**
+ * MsgBeaconCommit is sent by a bonded validator during the beacon commit
+ * window to register a hash-commit over its 32-byte random salt. See
+ * x/dealer/committee/beacon.go for the exact H() used.
+ */
+export interface MsgBeaconCommit {
+  validator: string;
+  epochId: string;
+  /** sha256 commit = H(domain || validator || epoch_id || salt). 32 bytes. */
+  commit: Uint8Array;
+}
+
+export interface MsgBeaconCommitResponse {
+}
+
+/**
+ * MsgBeaconReveal is sent by a bonded validator during the beacon reveal
+ * window. The salt must match the previously-committed hash; otherwise the
+ * validator is marked reveal-faulting and slashed at finalization.
+ */
+export interface MsgBeaconReveal {
+  validator: string;
+  epochId: string;
+  /** 32-byte salt that was committed to in MsgBeaconCommit. */
+  salt: Uint8Array;
+}
+
+export interface MsgBeaconRevealResponse {
 }
 
 export interface MsgInitHand {
@@ -427,7 +497,7 @@ export const MsgBeginEpochResponse: MessageFns<MsgBeginEpochResponse> = {
 };
 
 function createBaseMsgDkgCommit(): MsgDkgCommit {
-  return { dealer: "", epochId: "0", commitments: [] };
+  return { dealer: "", epochId: "0", commitments: [], ephemeralPubkey: new Uint8Array(0) };
 }
 
 export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
@@ -440,6 +510,9 @@ export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
     }
     for (const v of message.commitments) {
       writer.uint32(26).bytes(v!);
+    }
+    if (message.ephemeralPubkey.length !== 0) {
+      writer.uint32(34).bytes(message.ephemeralPubkey);
     }
     return writer;
   },
@@ -475,6 +548,14 @@ export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
           message.commitments.push(reader.bytes());
           continue;
         }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.ephemeralPubkey = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -495,6 +576,11 @@ export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
       commitments: globalThis.Array.isArray(object?.commitments)
         ? object.commitments.map((e: any) => bytesFromBase64(e))
         : [],
+      ephemeralPubkey: isSet(object.ephemeralPubkey)
+        ? bytesFromBase64(object.ephemeralPubkey)
+        : isSet(object.ephemeral_pubkey)
+        ? bytesFromBase64(object.ephemeral_pubkey)
+        : new Uint8Array(0),
     };
   },
 
@@ -509,6 +595,9 @@ export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
     if (message.commitments?.length) {
       obj.commitments = message.commitments.map((e) => base64FromBytes(e));
     }
+    if (message.ephemeralPubkey.length !== 0) {
+      obj.ephemeralPubkey = base64FromBytes(message.ephemeralPubkey);
+    }
     return obj;
   },
 
@@ -520,6 +609,7 @@ export const MsgDkgCommit: MessageFns<MsgDkgCommit> = {
     message.dealer = object.dealer ?? "";
     message.epochId = object.epochId ?? "0";
     message.commitments = object.commitments?.map((e) => e) || [];
+    message.ephemeralPubkey = object.ephemeralPubkey ?? new Uint8Array(0);
     return message;
   },
 };
@@ -1020,6 +1110,225 @@ export const MsgDkgShareRevealResponse: MessageFns<MsgDkgShareRevealResponse> = 
   },
 };
 
+function createBaseMsgDkgEncryptedShare(): MsgDkgEncryptedShare {
+  return {
+    dealer: "",
+    epochId: "0",
+    recipientIndex: 0,
+    u: new Uint8Array(0),
+    v: new Uint8Array(0),
+    proof: new Uint8Array(0),
+    scalarCt: new Uint8Array(0),
+  };
+}
+
+export const MsgDkgEncryptedShare: MessageFns<MsgDkgEncryptedShare> = {
+  encode(message: MsgDkgEncryptedShare, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dealer !== "") {
+      writer.uint32(10).string(message.dealer);
+    }
+    if (message.epochId !== "0") {
+      writer.uint32(16).uint64(message.epochId);
+    }
+    if (message.recipientIndex !== 0) {
+      writer.uint32(24).uint32(message.recipientIndex);
+    }
+    if (message.u.length !== 0) {
+      writer.uint32(34).bytes(message.u);
+    }
+    if (message.v.length !== 0) {
+      writer.uint32(42).bytes(message.v);
+    }
+    if (message.proof.length !== 0) {
+      writer.uint32(50).bytes(message.proof);
+    }
+    if (message.scalarCt.length !== 0) {
+      writer.uint32(58).bytes(message.scalarCt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgDkgEncryptedShare {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgDkgEncryptedShare();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.dealer = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.recipientIndex = reader.uint32();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.u = reader.bytes();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.v = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.proof = reader.bytes();
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.scalarCt = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgDkgEncryptedShare {
+    return {
+      dealer: isSet(object.dealer) ? globalThis.String(object.dealer) : "",
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      recipientIndex: isSet(object.recipientIndex)
+        ? globalThis.Number(object.recipientIndex)
+        : isSet(object.recipient_index)
+        ? globalThis.Number(object.recipient_index)
+        : 0,
+      u: isSet(object.u) ? bytesFromBase64(object.u) : new Uint8Array(0),
+      v: isSet(object.v) ? bytesFromBase64(object.v) : new Uint8Array(0),
+      proof: isSet(object.proof) ? bytesFromBase64(object.proof) : new Uint8Array(0),
+      scalarCt: isSet(object.scalarCt)
+        ? bytesFromBase64(object.scalarCt)
+        : isSet(object.scalar_ct)
+        ? bytesFromBase64(object.scalar_ct)
+        : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: MsgDkgEncryptedShare): unknown {
+    const obj: any = {};
+    if (message.dealer !== "") {
+      obj.dealer = message.dealer;
+    }
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.recipientIndex !== 0) {
+      obj.recipientIndex = Math.round(message.recipientIndex);
+    }
+    if (message.u.length !== 0) {
+      obj.u = base64FromBytes(message.u);
+    }
+    if (message.v.length !== 0) {
+      obj.v = base64FromBytes(message.v);
+    }
+    if (message.proof.length !== 0) {
+      obj.proof = base64FromBytes(message.proof);
+    }
+    if (message.scalarCt.length !== 0) {
+      obj.scalarCt = base64FromBytes(message.scalarCt);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgDkgEncryptedShare>, I>>(base?: I): MsgDkgEncryptedShare {
+    return MsgDkgEncryptedShare.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgDkgEncryptedShare>, I>>(object: I): MsgDkgEncryptedShare {
+    const message = createBaseMsgDkgEncryptedShare();
+    message.dealer = object.dealer ?? "";
+    message.epochId = object.epochId ?? "0";
+    message.recipientIndex = object.recipientIndex ?? 0;
+    message.u = object.u ?? new Uint8Array(0);
+    message.v = object.v ?? new Uint8Array(0);
+    message.proof = object.proof ?? new Uint8Array(0);
+    message.scalarCt = object.scalarCt ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseMsgDkgEncryptedShareResponse(): MsgDkgEncryptedShareResponse {
+  return {};
+}
+
+export const MsgDkgEncryptedShareResponse: MessageFns<MsgDkgEncryptedShareResponse> = {
+  encode(_: MsgDkgEncryptedShareResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgDkgEncryptedShareResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgDkgEncryptedShareResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): MsgDkgEncryptedShareResponse {
+    return {};
+  },
+
+  toJSON(_: MsgDkgEncryptedShareResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgDkgEncryptedShareResponse>, I>>(base?: I): MsgDkgEncryptedShareResponse {
+    return MsgDkgEncryptedShareResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgDkgEncryptedShareResponse>, I>>(_: I): MsgDkgEncryptedShareResponse {
+    const message = createBaseMsgDkgEncryptedShareResponse();
+    return message;
+  },
+};
+
 function createBaseMsgFinalizeEpoch(): MsgFinalizeEpoch {
   return { caller: "", epochId: "0" };
 }
@@ -1262,6 +1571,284 @@ export const MsgDkgTimeoutResponse: MessageFns<MsgDkgTimeoutResponse> = {
   },
   fromPartial<I extends Exact<DeepPartial<MsgDkgTimeoutResponse>, I>>(_: I): MsgDkgTimeoutResponse {
     const message = createBaseMsgDkgTimeoutResponse();
+    return message;
+  },
+};
+
+function createBaseMsgBeaconCommit(): MsgBeaconCommit {
+  return { validator: "", epochId: "0", commit: new Uint8Array(0) };
+}
+
+export const MsgBeaconCommit: MessageFns<MsgBeaconCommit> = {
+  encode(message: MsgBeaconCommit, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.validator !== "") {
+      writer.uint32(10).string(message.validator);
+    }
+    if (message.epochId !== "0") {
+      writer.uint32(16).uint64(message.epochId);
+    }
+    if (message.commit.length !== 0) {
+      writer.uint32(26).bytes(message.commit);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgBeaconCommit {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgBeaconCommit();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.validator = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.commit = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgBeaconCommit {
+    return {
+      validator: isSet(object.validator) ? globalThis.String(object.validator) : "",
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      commit: isSet(object.commit) ? bytesFromBase64(object.commit) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: MsgBeaconCommit): unknown {
+    const obj: any = {};
+    if (message.validator !== "") {
+      obj.validator = message.validator;
+    }
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.commit.length !== 0) {
+      obj.commit = base64FromBytes(message.commit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgBeaconCommit>, I>>(base?: I): MsgBeaconCommit {
+    return MsgBeaconCommit.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgBeaconCommit>, I>>(object: I): MsgBeaconCommit {
+    const message = createBaseMsgBeaconCommit();
+    message.validator = object.validator ?? "";
+    message.epochId = object.epochId ?? "0";
+    message.commit = object.commit ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseMsgBeaconCommitResponse(): MsgBeaconCommitResponse {
+  return {};
+}
+
+export const MsgBeaconCommitResponse: MessageFns<MsgBeaconCommitResponse> = {
+  encode(_: MsgBeaconCommitResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgBeaconCommitResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgBeaconCommitResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): MsgBeaconCommitResponse {
+    return {};
+  },
+
+  toJSON(_: MsgBeaconCommitResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgBeaconCommitResponse>, I>>(base?: I): MsgBeaconCommitResponse {
+    return MsgBeaconCommitResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgBeaconCommitResponse>, I>>(_: I): MsgBeaconCommitResponse {
+    const message = createBaseMsgBeaconCommitResponse();
+    return message;
+  },
+};
+
+function createBaseMsgBeaconReveal(): MsgBeaconReveal {
+  return { validator: "", epochId: "0", salt: new Uint8Array(0) };
+}
+
+export const MsgBeaconReveal: MessageFns<MsgBeaconReveal> = {
+  encode(message: MsgBeaconReveal, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.validator !== "") {
+      writer.uint32(10).string(message.validator);
+    }
+    if (message.epochId !== "0") {
+      writer.uint32(16).uint64(message.epochId);
+    }
+    if (message.salt.length !== 0) {
+      writer.uint32(26).bytes(message.salt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgBeaconReveal {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgBeaconReveal();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.validator = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.salt = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgBeaconReveal {
+    return {
+      validator: isSet(object.validator) ? globalThis.String(object.validator) : "",
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      salt: isSet(object.salt) ? bytesFromBase64(object.salt) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: MsgBeaconReveal): unknown {
+    const obj: any = {};
+    if (message.validator !== "") {
+      obj.validator = message.validator;
+    }
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.salt.length !== 0) {
+      obj.salt = base64FromBytes(message.salt);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgBeaconReveal>, I>>(base?: I): MsgBeaconReveal {
+    return MsgBeaconReveal.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgBeaconReveal>, I>>(object: I): MsgBeaconReveal {
+    const message = createBaseMsgBeaconReveal();
+    message.validator = object.validator ?? "";
+    message.epochId = object.epochId ?? "0";
+    message.salt = object.salt ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseMsgBeaconRevealResponse(): MsgBeaconRevealResponse {
+  return {};
+}
+
+export const MsgBeaconRevealResponse: MessageFns<MsgBeaconRevealResponse> = {
+  encode(_: MsgBeaconRevealResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgBeaconRevealResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgBeaconRevealResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): MsgBeaconRevealResponse {
+    return {};
+  },
+
+  toJSON(_: MsgBeaconRevealResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgBeaconRevealResponse>, I>>(base?: I): MsgBeaconRevealResponse {
+    return MsgBeaconRevealResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgBeaconRevealResponse>, I>>(_: I): MsgBeaconRevealResponse {
+    const message = createBaseMsgBeaconRevealResponse();
     return message;
   },
 };

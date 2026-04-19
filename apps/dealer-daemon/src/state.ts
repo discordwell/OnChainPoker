@@ -10,6 +10,12 @@ export interface EpochSecrets {
   polyCoeffs: string[];
   /** Aggregated secret share as bigint hex string */
   secretShare: string;
+  /**
+   * DKG v2: per-epoch ephemeral ElGamal secret key (bigint hex string, LE).
+   * Used to decrypt encrypted shares destined for this validator. Empty on
+   * v1 chains that have not yet been migrated.
+   */
+  ephemeralSk?: string;
 }
 
 export interface KdfOptions {

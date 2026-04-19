@@ -13,7 +13,15 @@ export interface GenesisState {
   nextEpochId: string;
   epoch: DealerEpoch | undefined;
   dkg: DealerDKG | undefined;
-  params: Params | undefined;
+  params:
+    | Params
+    | undefined;
+  /**
+   * Randomness-beacon commit-reveal state for the upcoming epoch (if any).
+   * NOTE: after editing this file, regenerate generated Go code with:
+   *   cd apps/cosmos/proto && buf generate
+   */
+  beacon: BeaconState | undefined;
 }
 
 /**
@@ -44,6 +52,15 @@ export interface DealerMember {
   consPubkey: Uint8Array;
   /** Consensus power at committee selection time (used for slashing distribution height/power). */
   power: string;
+  /**
+   * Per-epoch ephemeral ElGamal/Ristretto255 public key pkR_j = skR_j * G
+   * used by DKG v2 encrypted-share delivery (see docs/DKG-V2.md). The dealer
+   * daemon generates skR_j freshly at epoch begin and stores it locally;
+   * pkR_j is posted with MsgDkgCommit and consumed by other dealers when
+   * they submit MsgDkgEncryptedShare(...). 32 bytes (canonical ristretto
+   * encoding) or empty on pre-v2 chains.
+   */
+  ephemeralPubkey: Uint8Array;
 }
 
 export interface DealerEpoch {
@@ -66,6 +83,27 @@ export interface DealerEpoch {
 export interface DealerDKGCommit {
   dealer: string;
   commitments: Uint8Array[];
+}
+
+/**
+ * DealerDKGEncryptedShare is an on-chain record of a single (dealer,
+ * recipient) share delivery for DKG v2. Replaces the plaintext
+ * DealerDKGShareReveal flow. See docs/DKG-V2.md and
+ * apps/cosmos/internal/ocpcrypto/dkg_encshare.go for the NIZK and the
+ * scalar-AEAD primitives.
+ */
+export interface DealerDKGEncryptedShare {
+  dealer: string;
+  /** DealerMember.Index of the recipient */
+  recipientIndex: number;
+  /** 32-byte ElGamal ephemeral = r*G */
+  u: Uint8Array;
+  /** 32-byte ElGamal ciphertext = s*G + r*pkR */
+  v: Uint8Array;
+  /** 160-byte NIZK (DkgEncShareProof) */
+  proof: Uint8Array;
+  /** 48-byte scalar-AEAD ciphertext (32 + 16 tag) */
+  scalarCt: Uint8Array;
 }
 
 export interface DealerDKGComplaint {
@@ -98,6 +136,12 @@ export interface DealerDKG {
   complaints: DealerDKGComplaint[];
   reveals: DealerDKGShareReveal[];
   slashed: string[];
+  /**
+   * DKG v2 encrypted shares, sorted by (dealer, recipient_index). Populated
+   * by MsgDkgEncryptedShare. On v2 chains this replaces the plaintext reveal
+   * flow; on v1 chains it stays empty. See docs/DKG-V2.md.
+   */
+  encryptedShares: DealerDKGEncryptedShare[];
 }
 
 export interface DealerCiphertext {
@@ -130,6 +174,60 @@ export interface DealerReveal {
   cardId: number;
 }
 
+/**
+ * BeaconState tracks the commit-reveal randomness beacon for an upcoming
+ * epoch. It is written when the dealer module opens a beacon window and is
+ * consumed when that epoch is begun.
+ *
+ * Security: unlike DevnetRandEpoch (proposer-influenceable block hash mix),
+ * the beacon output is fixed by an adversary-agnostic mechanism: all commits
+ * must be posted before any salt is revealed.
+ */
+export interface BeaconState {
+  /** Epoch id this beacon will seed once the reveal window closes. */
+  epochId: string;
+  /** Block height at which the commit window opens / closes. */
+  commitOpenHeight: string;
+  commitCloseHeight: string;
+  /** Block height at which the reveal window closes. */
+  revealCloseHeight: string;
+  /**
+   * Minimum number of revealed salts required to produce a non-fallback
+   * beacon. If fewer reveals are received, the epoch falls back to devnet
+   * randomness (allowed only on devnet/local chain ids) and emits an event.
+   */
+  threshold: number;
+  /** Validator commits (sorted lexicographically by validator). */
+  commits: BeaconCommitEntry[];
+  /**
+   * Validator reveals (sorted lexicographically by validator). Only validators
+   * that committed may appear here.
+   */
+  reveals: BeaconRevealEntry[];
+  /**
+   * Finalized beacon output (32 bytes). Empty until the reveal window closes
+   * and the chain consumes the state to compute the final value.
+   */
+  final: Uint8Array;
+  /**
+   * True if finalization used the fallback (insufficient reveals or non-prod
+   * chain id). Auditable via FinalizeBeacon event.
+   */
+  fallback: boolean;
+}
+
+export interface BeaconCommitEntry {
+  validator: string;
+  /** 32-byte sha256 commit. */
+  commit: Uint8Array;
+}
+
+export interface BeaconRevealEntry {
+  validator: string;
+  /** 32-byte salt whose H() matched the stored commit. */
+  salt: Uint8Array;
+}
+
 export interface DealerHand {
   epochId: string;
   pkHand: Uint8Array;
@@ -144,10 +242,21 @@ export interface DealerHand {
   pubShares: DealerPubShare[];
   encShares: DealerEncShare[];
   reveals: DealerReveal[];
+  /**
+   * Per-hand init-time block entropy mixed into k_hand (v2 hand-derive).
+   * Captured at InitHand from sdkCtx.BlockHeight() and sdkCtx.BlockHeader().LastBlockId.Hash.
+   * Purpose: bound the retroactive-decryption window if the epoch secret later leaks —
+   * without these, k_hand is publicly recomputable from (epochId, tableId, handId) alone,
+   * so leaking the epoch secret decrypts every past hand in the epoch. Binding to
+   * per-hand block entropy that the attacker cannot grind after the fact raises the bar.
+   */
+  initHeight: string;
+  /** 32 bytes (LastBlockId.Hash at init time) */
+  initHashSalt: Uint8Array;
 }
 
 function createBaseGenesisState(): GenesisState {
-  return { nextEpochId: "0", epoch: undefined, dkg: undefined, params: undefined };
+  return { nextEpochId: "0", epoch: undefined, dkg: undefined, params: undefined, beacon: undefined };
 }
 
 export const GenesisState: MessageFns<GenesisState> = {
@@ -163,6 +272,9 @@ export const GenesisState: MessageFns<GenesisState> = {
     }
     if (message.params !== undefined) {
       Params.encode(message.params, writer.uint32(34).fork()).join();
+    }
+    if (message.beacon !== undefined) {
+      BeaconState.encode(message.beacon, writer.uint32(42).fork()).join();
     }
     return writer;
   },
@@ -206,6 +318,14 @@ export const GenesisState: MessageFns<GenesisState> = {
           message.params = Params.decode(reader, reader.uint32());
           continue;
         }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.beacon = BeaconState.decode(reader, reader.uint32());
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -225,6 +345,7 @@ export const GenesisState: MessageFns<GenesisState> = {
       epoch: isSet(object.epoch) ? DealerEpoch.fromJSON(object.epoch) : undefined,
       dkg: isSet(object.dkg) ? DealerDKG.fromJSON(object.dkg) : undefined,
       params: isSet(object.params) ? Params.fromJSON(object.params) : undefined,
+      beacon: isSet(object.beacon) ? BeaconState.fromJSON(object.beacon) : undefined,
     };
   },
 
@@ -242,6 +363,9 @@ export const GenesisState: MessageFns<GenesisState> = {
     if (message.params !== undefined) {
       obj.params = Params.toJSON(message.params);
     }
+    if (message.beacon !== undefined) {
+      obj.beacon = BeaconState.toJSON(message.beacon);
+    }
     return obj;
   },
 
@@ -257,6 +381,9 @@ export const GenesisState: MessageFns<GenesisState> = {
     message.dkg = (object.dkg !== undefined && object.dkg !== null) ? DealerDKG.fromPartial(object.dkg) : undefined;
     message.params = (object.params !== undefined && object.params !== null)
       ? Params.fromPartial(object.params)
+      : undefined;
+    message.beacon = (object.beacon !== undefined && object.beacon !== null)
+      ? BeaconState.fromPartial(object.beacon)
       : undefined;
     return message;
   },
@@ -387,7 +514,14 @@ export const Params: MessageFns<Params> = {
 };
 
 function createBaseDealerMember(): DealerMember {
-  return { validator: "", index: 0, pubShare: new Uint8Array(0), consPubkey: new Uint8Array(0), power: "0" };
+  return {
+    validator: "",
+    index: 0,
+    pubShare: new Uint8Array(0),
+    consPubkey: new Uint8Array(0),
+    power: "0",
+    ephemeralPubkey: new Uint8Array(0),
+  };
 }
 
 export const DealerMember: MessageFns<DealerMember> = {
@@ -406,6 +540,9 @@ export const DealerMember: MessageFns<DealerMember> = {
     }
     if (message.power !== "0") {
       writer.uint32(40).int64(message.power);
+    }
+    if (message.ephemeralPubkey.length !== 0) {
+      writer.uint32(50).bytes(message.ephemeralPubkey);
     }
     return writer;
   },
@@ -457,6 +594,14 @@ export const DealerMember: MessageFns<DealerMember> = {
           message.power = reader.int64().toString();
           continue;
         }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.ephemeralPubkey = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -481,6 +626,11 @@ export const DealerMember: MessageFns<DealerMember> = {
         ? bytesFromBase64(object.cons_pubkey)
         : new Uint8Array(0),
       power: isSet(object.power) ? globalThis.String(object.power) : "0",
+      ephemeralPubkey: isSet(object.ephemeralPubkey)
+        ? bytesFromBase64(object.ephemeralPubkey)
+        : isSet(object.ephemeral_pubkey)
+        ? bytesFromBase64(object.ephemeral_pubkey)
+        : new Uint8Array(0),
     };
   },
 
@@ -501,6 +651,9 @@ export const DealerMember: MessageFns<DealerMember> = {
     if (message.power !== "0") {
       obj.power = message.power;
     }
+    if (message.ephemeralPubkey.length !== 0) {
+      obj.ephemeralPubkey = base64FromBytes(message.ephemeralPubkey);
+    }
     return obj;
   },
 
@@ -514,6 +667,7 @@ export const DealerMember: MessageFns<DealerMember> = {
     message.pubShare = object.pubShare ?? new Uint8Array(0);
     message.consPubkey = object.consPubkey ?? new Uint8Array(0);
     message.power = object.power ?? "0";
+    message.ephemeralPubkey = object.ephemeralPubkey ?? new Uint8Array(0);
     return message;
   },
 };
@@ -780,6 +934,161 @@ export const DealerDKGCommit: MessageFns<DealerDKGCommit> = {
   },
 };
 
+function createBaseDealerDKGEncryptedShare(): DealerDKGEncryptedShare {
+  return {
+    dealer: "",
+    recipientIndex: 0,
+    u: new Uint8Array(0),
+    v: new Uint8Array(0),
+    proof: new Uint8Array(0),
+    scalarCt: new Uint8Array(0),
+  };
+}
+
+export const DealerDKGEncryptedShare: MessageFns<DealerDKGEncryptedShare> = {
+  encode(message: DealerDKGEncryptedShare, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.dealer !== "") {
+      writer.uint32(10).string(message.dealer);
+    }
+    if (message.recipientIndex !== 0) {
+      writer.uint32(16).uint32(message.recipientIndex);
+    }
+    if (message.u.length !== 0) {
+      writer.uint32(26).bytes(message.u);
+    }
+    if (message.v.length !== 0) {
+      writer.uint32(34).bytes(message.v);
+    }
+    if (message.proof.length !== 0) {
+      writer.uint32(42).bytes(message.proof);
+    }
+    if (message.scalarCt.length !== 0) {
+      writer.uint32(50).bytes(message.scalarCt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): DealerDKGEncryptedShare {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseDealerDKGEncryptedShare();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.dealer = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.recipientIndex = reader.uint32();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.u = reader.bytes();
+          continue;
+        }
+        case 4: {
+          if (tag !== 34) {
+            break;
+          }
+
+          message.v = reader.bytes();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.proof = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.scalarCt = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): DealerDKGEncryptedShare {
+    return {
+      dealer: isSet(object.dealer) ? globalThis.String(object.dealer) : "",
+      recipientIndex: isSet(object.recipientIndex)
+        ? globalThis.Number(object.recipientIndex)
+        : isSet(object.recipient_index)
+        ? globalThis.Number(object.recipient_index)
+        : 0,
+      u: isSet(object.u) ? bytesFromBase64(object.u) : new Uint8Array(0),
+      v: isSet(object.v) ? bytesFromBase64(object.v) : new Uint8Array(0),
+      proof: isSet(object.proof) ? bytesFromBase64(object.proof) : new Uint8Array(0),
+      scalarCt: isSet(object.scalarCt)
+        ? bytesFromBase64(object.scalarCt)
+        : isSet(object.scalar_ct)
+        ? bytesFromBase64(object.scalar_ct)
+        : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: DealerDKGEncryptedShare): unknown {
+    const obj: any = {};
+    if (message.dealer !== "") {
+      obj.dealer = message.dealer;
+    }
+    if (message.recipientIndex !== 0) {
+      obj.recipientIndex = Math.round(message.recipientIndex);
+    }
+    if (message.u.length !== 0) {
+      obj.u = base64FromBytes(message.u);
+    }
+    if (message.v.length !== 0) {
+      obj.v = base64FromBytes(message.v);
+    }
+    if (message.proof.length !== 0) {
+      obj.proof = base64FromBytes(message.proof);
+    }
+    if (message.scalarCt.length !== 0) {
+      obj.scalarCt = base64FromBytes(message.scalarCt);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<DealerDKGEncryptedShare>, I>>(base?: I): DealerDKGEncryptedShare {
+    return DealerDKGEncryptedShare.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<DealerDKGEncryptedShare>, I>>(object: I): DealerDKGEncryptedShare {
+    const message = createBaseDealerDKGEncryptedShare();
+    message.dealer = object.dealer ?? "";
+    message.recipientIndex = object.recipientIndex ?? 0;
+    message.u = object.u ?? new Uint8Array(0);
+    message.v = object.v ?? new Uint8Array(0);
+    message.proof = object.proof ?? new Uint8Array(0);
+    message.scalarCt = object.scalarCt ?? new Uint8Array(0);
+    return message;
+  },
+};
+
 function createBaseDealerDKGComplaint(): DealerDKGComplaint {
   return { epochId: "0", complainer: "", dealer: "", kind: "", shareMsg: new Uint8Array(0) };
 }
@@ -1039,6 +1348,7 @@ function createBaseDealerDKG(): DealerDKG {
     complaints: [],
     reveals: [],
     slashed: [],
+    encryptedShares: [],
   };
 }
 
@@ -1082,6 +1392,9 @@ export const DealerDKG: MessageFns<DealerDKG> = {
     }
     for (const v of message.slashed) {
       writer.uint32(106).string(v!);
+    }
+    for (const v of message.encryptedShares) {
+      DealerDKGEncryptedShare.encode(v!, writer.uint32(114).fork()).join();
     }
     return writer;
   },
@@ -1197,6 +1510,14 @@ export const DealerDKG: MessageFns<DealerDKG> = {
           message.slashed.push(reader.string());
           continue;
         }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.encryptedShares.push(DealerDKGEncryptedShare.decode(reader, reader.uint32()));
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1257,6 +1578,11 @@ export const DealerDKG: MessageFns<DealerDKG> = {
         ? object.reveals.map((e: any) => DealerDKGShareReveal.fromJSON(e))
         : [],
       slashed: globalThis.Array.isArray(object?.slashed) ? object.slashed.map((e: any) => globalThis.String(e)) : [],
+      encryptedShares: globalThis.Array.isArray(object?.encryptedShares)
+        ? object.encryptedShares.map((e: any) => DealerDKGEncryptedShare.fromJSON(e))
+        : globalThis.Array.isArray(object?.encrypted_shares)
+        ? object.encrypted_shares.map((e: any) => DealerDKGEncryptedShare.fromJSON(e))
+        : [],
     };
   },
 
@@ -1301,6 +1627,9 @@ export const DealerDKG: MessageFns<DealerDKG> = {
     if (message.slashed?.length) {
       obj.slashed = message.slashed;
     }
+    if (message.encryptedShares?.length) {
+      obj.encryptedShares = message.encryptedShares.map((e) => DealerDKGEncryptedShare.toJSON(e));
+    }
     return obj;
   },
 
@@ -1322,6 +1651,7 @@ export const DealerDKG: MessageFns<DealerDKG> = {
     message.complaints = object.complaints?.map((e) => DealerDKGComplaint.fromPartial(e)) || [];
     message.reveals = object.reveals?.map((e) => DealerDKGShareReveal.fromPartial(e)) || [];
     message.slashed = object.slashed?.map((e) => e) || [];
+    message.encryptedShares = object.encryptedShares?.map((e) => DealerDKGEncryptedShare.fromPartial(e)) || [];
     return message;
   },
 };
@@ -1761,6 +2091,376 @@ export const DealerReveal: MessageFns<DealerReveal> = {
   },
 };
 
+function createBaseBeaconState(): BeaconState {
+  return {
+    epochId: "0",
+    commitOpenHeight: "0",
+    commitCloseHeight: "0",
+    revealCloseHeight: "0",
+    threshold: 0,
+    commits: [],
+    reveals: [],
+    final: new Uint8Array(0),
+    fallback: false,
+  };
+}
+
+export const BeaconState: MessageFns<BeaconState> = {
+  encode(message: BeaconState, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.epochId !== "0") {
+      writer.uint32(8).uint64(message.epochId);
+    }
+    if (message.commitOpenHeight !== "0") {
+      writer.uint32(16).int64(message.commitOpenHeight);
+    }
+    if (message.commitCloseHeight !== "0") {
+      writer.uint32(24).int64(message.commitCloseHeight);
+    }
+    if (message.revealCloseHeight !== "0") {
+      writer.uint32(32).int64(message.revealCloseHeight);
+    }
+    if (message.threshold !== 0) {
+      writer.uint32(40).uint32(message.threshold);
+    }
+    for (const v of message.commits) {
+      BeaconCommitEntry.encode(v!, writer.uint32(50).fork()).join();
+    }
+    for (const v of message.reveals) {
+      BeaconRevealEntry.encode(v!, writer.uint32(58).fork()).join();
+    }
+    if (message.final.length !== 0) {
+      writer.uint32(66).bytes(message.final);
+    }
+    if (message.fallback !== false) {
+      writer.uint32(72).bool(message.fallback);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): BeaconState {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseBeaconState();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 8) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.commitOpenHeight = reader.int64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 24) {
+            break;
+          }
+
+          message.commitCloseHeight = reader.int64().toString();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.revealCloseHeight = reader.int64().toString();
+          continue;
+        }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.threshold = reader.uint32();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.commits.push(BeaconCommitEntry.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 7: {
+          if (tag !== 58) {
+            break;
+          }
+
+          message.reveals.push(BeaconRevealEntry.decode(reader, reader.uint32()));
+          continue;
+        }
+        case 8: {
+          if (tag !== 66) {
+            break;
+          }
+
+          message.final = reader.bytes();
+          continue;
+        }
+        case 9: {
+          if (tag !== 72) {
+            break;
+          }
+
+          message.fallback = reader.bool();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): BeaconState {
+    return {
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      commitOpenHeight: isSet(object.commitOpenHeight)
+        ? globalThis.String(object.commitOpenHeight)
+        : isSet(object.commit_open_height)
+        ? globalThis.String(object.commit_open_height)
+        : "0",
+      commitCloseHeight: isSet(object.commitCloseHeight)
+        ? globalThis.String(object.commitCloseHeight)
+        : isSet(object.commit_close_height)
+        ? globalThis.String(object.commit_close_height)
+        : "0",
+      revealCloseHeight: isSet(object.revealCloseHeight)
+        ? globalThis.String(object.revealCloseHeight)
+        : isSet(object.reveal_close_height)
+        ? globalThis.String(object.reveal_close_height)
+        : "0",
+      threshold: isSet(object.threshold) ? globalThis.Number(object.threshold) : 0,
+      commits: globalThis.Array.isArray(object?.commits)
+        ? object.commits.map((e: any) => BeaconCommitEntry.fromJSON(e))
+        : [],
+      reveals: globalThis.Array.isArray(object?.reveals)
+        ? object.reveals.map((e: any) => BeaconRevealEntry.fromJSON(e))
+        : [],
+      final: isSet(object.final) ? bytesFromBase64(object.final) : new Uint8Array(0),
+      fallback: isSet(object.fallback) ? globalThis.Boolean(object.fallback) : false,
+    };
+  },
+
+  toJSON(message: BeaconState): unknown {
+    const obj: any = {};
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.commitOpenHeight !== "0") {
+      obj.commitOpenHeight = message.commitOpenHeight;
+    }
+    if (message.commitCloseHeight !== "0") {
+      obj.commitCloseHeight = message.commitCloseHeight;
+    }
+    if (message.revealCloseHeight !== "0") {
+      obj.revealCloseHeight = message.revealCloseHeight;
+    }
+    if (message.threshold !== 0) {
+      obj.threshold = Math.round(message.threshold);
+    }
+    if (message.commits?.length) {
+      obj.commits = message.commits.map((e) => BeaconCommitEntry.toJSON(e));
+    }
+    if (message.reveals?.length) {
+      obj.reveals = message.reveals.map((e) => BeaconRevealEntry.toJSON(e));
+    }
+    if (message.final.length !== 0) {
+      obj.final = base64FromBytes(message.final);
+    }
+    if (message.fallback !== false) {
+      obj.fallback = message.fallback;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<BeaconState>, I>>(base?: I): BeaconState {
+    return BeaconState.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<BeaconState>, I>>(object: I): BeaconState {
+    const message = createBaseBeaconState();
+    message.epochId = object.epochId ?? "0";
+    message.commitOpenHeight = object.commitOpenHeight ?? "0";
+    message.commitCloseHeight = object.commitCloseHeight ?? "0";
+    message.revealCloseHeight = object.revealCloseHeight ?? "0";
+    message.threshold = object.threshold ?? 0;
+    message.commits = object.commits?.map((e) => BeaconCommitEntry.fromPartial(e)) || [];
+    message.reveals = object.reveals?.map((e) => BeaconRevealEntry.fromPartial(e)) || [];
+    message.final = object.final ?? new Uint8Array(0);
+    message.fallback = object.fallback ?? false;
+    return message;
+  },
+};
+
+function createBaseBeaconCommitEntry(): BeaconCommitEntry {
+  return { validator: "", commit: new Uint8Array(0) };
+}
+
+export const BeaconCommitEntry: MessageFns<BeaconCommitEntry> = {
+  encode(message: BeaconCommitEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.validator !== "") {
+      writer.uint32(10).string(message.validator);
+    }
+    if (message.commit.length !== 0) {
+      writer.uint32(18).bytes(message.commit);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): BeaconCommitEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseBeaconCommitEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.validator = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.commit = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): BeaconCommitEntry {
+    return {
+      validator: isSet(object.validator) ? globalThis.String(object.validator) : "",
+      commit: isSet(object.commit) ? bytesFromBase64(object.commit) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: BeaconCommitEntry): unknown {
+    const obj: any = {};
+    if (message.validator !== "") {
+      obj.validator = message.validator;
+    }
+    if (message.commit.length !== 0) {
+      obj.commit = base64FromBytes(message.commit);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<BeaconCommitEntry>, I>>(base?: I): BeaconCommitEntry {
+    return BeaconCommitEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<BeaconCommitEntry>, I>>(object: I): BeaconCommitEntry {
+    const message = createBaseBeaconCommitEntry();
+    message.validator = object.validator ?? "";
+    message.commit = object.commit ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseBeaconRevealEntry(): BeaconRevealEntry {
+  return { validator: "", salt: new Uint8Array(0) };
+}
+
+export const BeaconRevealEntry: MessageFns<BeaconRevealEntry> = {
+  encode(message: BeaconRevealEntry, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.validator !== "") {
+      writer.uint32(10).string(message.validator);
+    }
+    if (message.salt.length !== 0) {
+      writer.uint32(18).bytes(message.salt);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): BeaconRevealEntry {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseBeaconRevealEntry();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.validator = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 18) {
+            break;
+          }
+
+          message.salt = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): BeaconRevealEntry {
+    return {
+      validator: isSet(object.validator) ? globalThis.String(object.validator) : "",
+      salt: isSet(object.salt) ? bytesFromBase64(object.salt) : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: BeaconRevealEntry): unknown {
+    const obj: any = {};
+    if (message.validator !== "") {
+      obj.validator = message.validator;
+    }
+    if (message.salt.length !== 0) {
+      obj.salt = base64FromBytes(message.salt);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<BeaconRevealEntry>, I>>(base?: I): BeaconRevealEntry {
+    return BeaconRevealEntry.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<BeaconRevealEntry>, I>>(object: I): BeaconRevealEntry {
+    const message = createBaseBeaconRevealEntry();
+    message.validator = object.validator ?? "";
+    message.salt = object.salt ?? new Uint8Array(0);
+    return message;
+  },
+};
+
 function createBaseDealerHand(): DealerHand {
   return {
     epochId: "0",
@@ -1774,6 +2474,8 @@ function createBaseDealerHand(): DealerHand {
     pubShares: [],
     encShares: [],
     reveals: [],
+    initHeight: "0",
+    initHashSalt: new Uint8Array(0),
   };
 }
 
@@ -1811,6 +2513,12 @@ export const DealerHand: MessageFns<DealerHand> = {
     }
     for (const v of message.reveals) {
       DealerReveal.encode(v!, writer.uint32(90).fork()).join();
+    }
+    if (message.initHeight !== "0") {
+      writer.uint32(160).int64(message.initHeight);
+    }
+    if (message.initHashSalt.length !== 0) {
+      writer.uint32(170).bytes(message.initHashSalt);
     }
     return writer;
   },
@@ -1910,6 +2618,22 @@ export const DealerHand: MessageFns<DealerHand> = {
           message.reveals.push(DealerReveal.decode(reader, reader.uint32()));
           continue;
         }
+        case 20: {
+          if (tag !== 160) {
+            break;
+          }
+
+          message.initHeight = reader.int64().toString();
+          continue;
+        }
+        case 21: {
+          if (tag !== 170) {
+            break;
+          }
+
+          message.initHashSalt = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -1966,6 +2690,16 @@ export const DealerHand: MessageFns<DealerHand> = {
       reveals: globalThis.Array.isArray(object?.reveals)
         ? object.reveals.map((e: any) => DealerReveal.fromJSON(e))
         : [],
+      initHeight: isSet(object.initHeight)
+        ? globalThis.String(object.initHeight)
+        : isSet(object.init_height)
+        ? globalThis.String(object.init_height)
+        : "0",
+      initHashSalt: isSet(object.initHashSalt)
+        ? bytesFromBase64(object.initHashSalt)
+        : isSet(object.init_hash_salt)
+        ? bytesFromBase64(object.init_hash_salt)
+        : new Uint8Array(0),
     };
   },
 
@@ -2004,6 +2738,12 @@ export const DealerHand: MessageFns<DealerHand> = {
     if (message.reveals?.length) {
       obj.reveals = message.reveals.map((e) => DealerReveal.toJSON(e));
     }
+    if (message.initHeight !== "0") {
+      obj.initHeight = message.initHeight;
+    }
+    if (message.initHashSalt.length !== 0) {
+      obj.initHashSalt = base64FromBytes(message.initHashSalt);
+    }
     return obj;
   },
 
@@ -2023,6 +2763,8 @@ export const DealerHand: MessageFns<DealerHand> = {
     message.pubShares = object.pubShares?.map((e) => DealerPubShare.fromPartial(e)) || [];
     message.encShares = object.encShares?.map((e) => DealerEncShare.fromPartial(e)) || [];
     message.reveals = object.reveals?.map((e) => DealerReveal.fromPartial(e)) || [];
+    message.initHeight = object.initHeight ?? "0";
+    message.initHashSalt = object.initHashSalt ?? new Uint8Array(0);
     return message;
   },
 };

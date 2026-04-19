@@ -17,6 +17,7 @@ import type {
 import type {
   MsgBeginEpoch,
   MsgDkgCommit,
+  MsgDkgEncryptedShare,
   MsgDkgComplaintInvalid,
   MsgDkgComplaintMissing,
   MsgDkgShareReveal,
@@ -173,10 +174,28 @@ export type OcpCosmosClient = {
     finalizeBlocks?: UintLike;
     memo?: string;
   }) => Promise<DeliverTxResponse>;
-  dealerDkgCommit: (args: { dealer: string; epochId: UintLike; commitments: Uint8Array[]; memo?: string }) => Promise<DeliverTxResponse>;
+  dealerDkgCommit: (args: {
+    dealer: string;
+    epochId: UintLike;
+    commitments: Uint8Array[];
+    /** Optional per-epoch ephemeral Ristretto pubkey for DKG v2 encrypted-share delivery. */
+    ephemeralPubkey?: Uint8Array;
+    memo?: string;
+  }) => Promise<DeliverTxResponse>;
   dealerDkgComplaintMissing: (args: { complainer: string; epochId: UintLike; dealer: string; memo?: string }) => Promise<DeliverTxResponse>;
   dealerDkgComplaintInvalid: (args: { complainer: string; epochId: UintLike; dealer: string; shareMsg: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
   dealerDkgShareReveal: (args: { dealer: string; epochId: UintLike; to: string; share: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
+  /** DKG v2 encrypted-share delivery (replaces dkgShareReveal for v2 chains). */
+  dealerDkgEncryptedShare: (args: {
+    dealer: string;
+    epochId: UintLike;
+    recipientIndex: number;
+    u: Uint8Array;
+    v: Uint8Array;
+    proof: Uint8Array;
+    scalarCt: Uint8Array;
+    memo?: string;
+  }) => Promise<DeliverTxResponse>;
   dealerFinalizeEpoch: (args: { caller?: string; epochId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   dealerDkgTimeout: (args: { caller?: string; epochId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   dealerInitHand: (args: { caller?: string; tableId: UintLike; handId: UintLike; epochId: UintLike; deckSize?: number; memo?: string }) => Promise<DeliverTxResponse>;
@@ -383,9 +402,43 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     return signAndBroadcast([eo], a.memo);
   }
 
-  async function dealerDkgCommit(a: { dealer: string; epochId: UintLike; commitments: Uint8Array[]; memo?: string }): Promise<DeliverTxResponse> {
-    const msg: MsgDkgCommit = { dealer: a.dealer.trim(), epochId: toU64String(a.epochId, "epochId"), commitments: a.commitments };
+  async function dealerDkgCommit(a: {
+    dealer: string;
+    epochId: UintLike;
+    commitments: Uint8Array[];
+    ephemeralPubkey?: Uint8Array;
+    memo?: string;
+  }): Promise<DeliverTxResponse> {
+    const msg: MsgDkgCommit = {
+      dealer: a.dealer.trim(),
+      epochId: toU64String(a.epochId, "epochId"),
+      commitments: a.commitments,
+      ephemeralPubkey: a.ephemeralPubkey ?? new Uint8Array(0),
+    };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.dkgCommit, value: msg };
+    return signAndBroadcast([eo], a.memo);
+  }
+
+  async function dealerDkgEncryptedShare(a: {
+    dealer: string;
+    epochId: UintLike;
+    recipientIndex: number;
+    u: Uint8Array;
+    v: Uint8Array;
+    proof: Uint8Array;
+    scalarCt: Uint8Array;
+    memo?: string;
+  }): Promise<DeliverTxResponse> {
+    const msg: MsgDkgEncryptedShare = {
+      dealer: a.dealer.trim(),
+      epochId: toU64String(a.epochId, "epochId"),
+      recipientIndex: a.recipientIndex,
+      u: a.u,
+      v: a.v,
+      proof: a.proof,
+      scalarCt: a.scalarCt,
+    };
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.dkgEncryptedShare, value: msg };
     return signAndBroadcast([eo], a.memo);
   }
 
@@ -576,6 +629,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     dealerDkgComplaintMissing,
     dealerDkgComplaintInvalid,
     dealerDkgShareReveal,
+    dealerDkgEncryptedShare,
     dealerFinalizeEpoch,
     dealerDkgTimeout,
     dealerInitHand,
