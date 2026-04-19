@@ -1,4 +1,5 @@
-import { createCipheriv, createDecipheriv, createHash } from "node:crypto";
+import { gcm } from "@noble/ciphers/aes";
+import { sha256 } from "@noble/hashes/sha256";
 
 import type { GroupElement } from "../utils/group.js";
 import { groupElementToBytes, mulPoint } from "../utils/group.js";
@@ -28,24 +29,23 @@ import { concatBytes } from "../utils/bytes.js";
 // decryption fails, OR if `s*G` (decrypted scalar times G) does not match
 // the share point derived from (u, v) + skR, the recipient treats the
 // share as invalid and files a complaint.
+//
+// Implementation uses @noble/ciphers + @noble/hashes so the primitive is
+// usable in both Node (dealer daemon) and the browser (web client
+// recipient-side sanity checks). The Go mirror at
+// apps/cosmos/internal/ocpcrypto/dkg_scalar_aead.go produces identical
+// bytes — cross-language compatibility is enforced by the vectors tests.
 
 export const DKG_SCALAR_AEAD_KEY_DOMAIN = "ocp/v1/dkg/scalar-aead/v1";
 export const DKG_SCALAR_AEAD_CT_BYTES = 48; // 32 scalar + 16 GCM tag
 
 const AEAD_IV = new Uint8Array(12); // all zeros
 
-function u8(buf: Uint8Array | Buffer): Uint8Array {
-  return buf instanceof Uint8Array && !(buf instanceof Buffer)
-    ? buf
-    : new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-}
+const DOMAIN_BYTES = new TextEncoder().encode(DKG_SCALAR_AEAD_KEY_DOMAIN);
 
 function deriveAeadKey(dh: GroupElement): Uint8Array {
   const dhBytes = groupElementToBytes(dh);
-  const h = createHash("sha256");
-  h.update(Buffer.from(DKG_SCALAR_AEAD_KEY_DOMAIN, "utf8"));
-  h.update(Buffer.from(dhBytes));
-  return u8(h.digest());
+  return sha256(concatBytes(DOMAIN_BYTES, dhBytes));
 }
 
 /**
@@ -69,20 +69,13 @@ export function encryptShareScalar(params: {
   }
   const dh = mulPoint(pkR, r);
   const key = deriveAeadKey(dh);
-  const cipher = createCipheriv("aes-256-gcm", Buffer.from(key), Buffer.from(AEAD_IV));
-  cipher.setAAD(Buffer.from(proofBytes));
+  const cipher = gcm(key, AEAD_IV, proofBytes);
   const pt = scalarToBytes(s);
-  const ctBody = cipher.update(Buffer.from(pt));
-  const ctFinal = cipher.final();
-  const tag = cipher.getAuthTag();
-  const out = new Uint8Array(DKG_SCALAR_AEAD_CT_BYTES);
-  let off = 0;
-  out.set(ctBody, off);
-  off += ctBody.length;
-  out.set(ctFinal, off);
-  off += ctFinal.length;
-  out.set(tag, off);
-  return out;
+  const ct = cipher.encrypt(pt);
+  if (ct.length !== DKG_SCALAR_AEAD_CT_BYTES) {
+    throw new Error(`encryptShareScalar: unexpected ct length ${ct.length}`);
+  }
+  return ct;
 }
 
 /**
@@ -111,12 +104,8 @@ export function decryptShareScalar(params: {
   }
   const dh = mulPoint(u, skR);
   const key = deriveAeadKey(dh);
-  const decipher = createDecipheriv("aes-256-gcm", Buffer.from(key), Buffer.from(AEAD_IV));
-  decipher.setAAD(Buffer.from(proofBytes));
-  decipher.setAuthTag(Buffer.from(ct.subarray(32, 48)));
-  const ptBody = decipher.update(Buffer.from(ct.subarray(0, 32)));
-  const ptFinal = decipher.final(); // throws on bad tag
-  const pt = concatBytes(u8(ptBody), u8(ptFinal));
+  const cipher = gcm(key, AEAD_IV, proofBytes);
+  const pt = cipher.decrypt(ct); // throws on bad tag
   if (pt.length !== 32) {
     throw new Error("decryptShareScalar: unexpected plaintext length");
   }

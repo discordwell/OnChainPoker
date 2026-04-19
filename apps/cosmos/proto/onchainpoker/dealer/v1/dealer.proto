@@ -36,6 +36,19 @@ message Params {
 
   // Jail duration (in seconds) for objective per-hand dealer faults.
   uint64 jail_seconds_hand_dealer = 4;
+
+  // DkgVersion gates the plaintext MsgDkgShareReveal path:
+  //
+  //   1 (default): accept both MsgDkgShareReveal (plaintext) and
+  //       MsgDkgEncryptedShare (DKG v2). Daemons may migrate opportunistically.
+  //   2: reject MsgDkgShareReveal at the chain boundary; only encrypted-share
+  //       delivery is accepted. Governance should flip to v2 only after
+  //       confirming all dealers have upgraded to the v2 daemon (observable
+  //       via DealerMember.ephemeral_pubkey being populated for all members).
+  //
+  // See docs/DKG-V2.md §6 for the migration plan. Any value other than 1 or
+  // 2 is rejected by Params.Validate.
+  uint32 dkg_version = 5;
 }
 
 message DealerMember {

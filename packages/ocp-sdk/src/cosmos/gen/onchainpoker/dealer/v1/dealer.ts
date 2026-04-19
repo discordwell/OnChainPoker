@@ -39,6 +39,20 @@ export interface Params {
   jailSecondsDkg: string;
   /** Jail duration (in seconds) for objective per-hand dealer faults. */
   jailSecondsHandDealer: string;
+  /**
+   * DkgVersion gates the plaintext MsgDkgShareReveal path:
+   *
+   *   1 (default): accept both MsgDkgShareReveal (plaintext) and
+   *       MsgDkgEncryptedShare (DKG v2). Daemons may migrate opportunistically.
+   *   2: reject MsgDkgShareReveal at the chain boundary; only encrypted-share
+   *       delivery is accepted. Governance should flip to v2 only after
+   *       confirming all dealers have upgraded to the v2 daemon (observable
+   *       via DealerMember.ephemeral_pubkey being populated for all members).
+   *
+   * See docs/DKG-V2.md §6 for the migration plan. Any value other than 1 or
+   * 2 is rejected by Params.Validate.
+   */
+  dkgVersion: number;
 }
 
 export interface DealerMember {
@@ -390,7 +404,7 @@ export const GenesisState: MessageFns<GenesisState> = {
 };
 
 function createBaseParams(): Params {
-  return { slashBpsDkg: 0, slashBpsHandDealer: 0, jailSecondsDkg: "0", jailSecondsHandDealer: "0" };
+  return { slashBpsDkg: 0, slashBpsHandDealer: 0, jailSecondsDkg: "0", jailSecondsHandDealer: "0", dkgVersion: 0 };
 }
 
 export const Params: MessageFns<Params> = {
@@ -406,6 +420,9 @@ export const Params: MessageFns<Params> = {
     }
     if (message.jailSecondsHandDealer !== "0") {
       writer.uint32(32).uint64(message.jailSecondsHandDealer);
+    }
+    if (message.dkgVersion !== 0) {
+      writer.uint32(40).uint32(message.dkgVersion);
     }
     return writer;
   },
@@ -449,6 +466,14 @@ export const Params: MessageFns<Params> = {
           message.jailSecondsHandDealer = reader.uint64().toString();
           continue;
         }
+        case 5: {
+          if (tag !== 40) {
+            break;
+          }
+
+          message.dkgVersion = reader.uint32();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -480,6 +505,11 @@ export const Params: MessageFns<Params> = {
         : isSet(object.jail_seconds_hand_dealer)
         ? globalThis.String(object.jail_seconds_hand_dealer)
         : "0",
+      dkgVersion: isSet(object.dkgVersion)
+        ? globalThis.Number(object.dkgVersion)
+        : isSet(object.dkg_version)
+        ? globalThis.Number(object.dkg_version)
+        : 0,
     };
   },
 
@@ -497,6 +527,9 @@ export const Params: MessageFns<Params> = {
     if (message.jailSecondsHandDealer !== "0") {
       obj.jailSecondsHandDealer = message.jailSecondsHandDealer;
     }
+    if (message.dkgVersion !== 0) {
+      obj.dkgVersion = Math.round(message.dkgVersion);
+    }
     return obj;
   },
 
@@ -509,6 +542,7 @@ export const Params: MessageFns<Params> = {
     message.slashBpsHandDealer = object.slashBpsHandDealer ?? 0;
     message.jailSecondsDkg = object.jailSecondsDkg ?? "0";
     message.jailSecondsHandDealer = object.jailSecondsHandDealer ?? "0";
+    message.dkgVersion = object.dkgVersion ?? 0;
     return message;
   },
 };

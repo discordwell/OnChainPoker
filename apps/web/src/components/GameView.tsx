@@ -256,7 +256,7 @@ export function GameView({ g }: { g: GameState }) {
       {/* ─── Game Stage ─── */}
       <main className="game-stage">
         {g.playerTable.loading && g.playerWallet.status === "connected" && !g.playerTableForSelected && (
-          <p className="placeholder" className="abs-top">Loading table...</p>
+          <p className="placeholder abs-top">Loading table...</p>
         )}
         {g.playerTable.error && g.playerWallet.status === "connected" && (
           <p className="error-banner abs-top" style={{ maxWidth: 400 }}>{g.playerTable.error}</p>
@@ -283,7 +283,7 @@ export function GameView({ g }: { g: GameState }) {
               {g.tables.loading && !g.tables.data && <p className="placeholder">Loading tables...</p>}
               {g.filteredTableList.length > 0 && (
                 <>
-                  <p className="hint" className="mt-md">
+                  <p className="hint mt-md">
                     {g.playerWallet.status === "connected" ? "Select a table to join" : "Select a table to watch"}
                   </p>
                   <ul className="table-list">
@@ -322,8 +322,7 @@ export function GameView({ g }: { g: GameState }) {
               {g.playerWallet.status === "connected" && (
                 <button
                   type="button"
-                  className="topbar-btn"
-                  className="mt-md"
+                  className="topbar-btn mt-md"
                   onClick={() => g.setShowCreateTableModal(true)}
                 >
                   + Create Table
@@ -373,11 +372,11 @@ export function GameView({ g }: { g: GameState }) {
 
       {/* ─── Create Table Modal ─── */}
       {g.showCreateTableModal && (
-        <div className="onboard-overlay" className="modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) g.setShowCreateTableModal(false); }}>
+        <div className="onboard-overlay modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) g.setShowCreateTableModal(false); }}>
           <div className="onboard-card">
             <h2>Create Table</h2>
             {renderCreateTableForm()}
-            <button type="button" className="topbar-btn" className="mt-md" onClick={() => g.setShowCreateTableModal(false)}>
+            <button type="button" className="topbar-btn mt-md" onClick={() => g.setShowCreateTableModal(false)}>
               Cancel
             </button>
           </div>

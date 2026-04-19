@@ -655,6 +655,17 @@ func (m msgServer) DkgShareReveal(ctx context.Context, req *dealertypes.MsgDkgSh
 	if req == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
 	}
+
+	// DKG version gate: on v2 chains the plaintext reveal path is closed.
+	// Dealers must use MsgDkgEncryptedShare instead. See docs/DKG-V2.md.
+	params, err := m.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if params.DkgVersionOrDefault() >= dealertypes.DkgVersionV2 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("DkgShareReveal is disabled under DkgVersion >= 2; use MsgDkgEncryptedShare")
+	}
+
 	if req.Dealer == "" || req.To == "" {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("missing dealer/to")
 	}
