@@ -54,62 +54,73 @@ func (k Keeper) SetBeaconState(ctx context.Context, bs *dealertypes.BeaconState)
 // ---- Msg handlers ----
 
 // Defaults for the beacon window durations if the caller leaves them zero.
-// Mirrors the DKG phase defaults; tuned for localnet speed. Governance
-// should override these for production chains (via dedicated params in a
-// future PR, or by always passing explicit values here).
+// Chain-id-driven: devnet/local picks a fast-iteration cadence; production
+// picks windows long enough that geographically-distributed validators can
+// commit + reveal without racing block propagation latency.
+//
+// Production numbers (50/50 blocks ≈ 5 min each at 6-second blocks) are a
+// conservative starting point. Governance can move to module params in the
+// future; for now, non-devnet callers should pass explicit values to
+// OpenBeaconWindow if they want something different.
 const (
-	beaconCommitBlocksDefault uint64 = 5
-	beaconRevealBlocksDefault uint64 = 5
-	beaconMaxWindowBlocks     uint64 = 1_000_000
+	beaconCommitBlocksDevnet    uint64 = 5
+	beaconRevealBlocksDevnet    uint64 = 5
+	beaconCommitBlocksProd      uint64 = 50
+	beaconRevealBlocksProd      uint64 = 50
+	beaconMaxWindowBlocks       uint64 = 1_000_000
 )
 
-func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpenBeaconWindow) (*dealertypes.MsgOpenBeaconWindowResponse, error) {
-	if req == nil {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+// beaconDefaultWindows returns (commitBlocks, revealBlocks) defaults based
+// on the caller's chain id. Any chain id that contains "devnet" or "local"
+// gets the fast-iteration profile; everything else gets the production
+// profile.
+func beaconDefaultWindows(chainID string) (uint64, uint64) {
+	if committee.IsDevnetChainID(chainID) {
+		return beaconCommitBlocksDevnet, beaconRevealBlocksDevnet
 	}
-	if req.Caller == "" {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("missing caller")
-	}
-	if _, err := sdk.AccAddressFromBech32(req.Caller); err != nil {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid caller address")
-	}
-	if req.EpochId == 0 {
+	return beaconCommitBlocksProd, beaconRevealBlocksProd
+}
+
+// openBeacon is the core logic for opening a beacon window, shared by the
+// MsgOpenBeaconWindow handler and the BeginBlocker auto-open path. It does
+// NOT authenticate the caller (the msg handler does that separately); it
+// does check that no beacon is currently open.
+func (k Keeper) openBeacon(ctx context.Context, epochID uint64, commitBlocks, revealBlocks uint64, threshold uint32) (*dealertypes.BeaconState, error) {
+	if epochID == 0 {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("epoch_id must be > 0")
 	}
-	if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
-		return nil, err
-	}
-
-	// Only one beacon window may be open at a time.
-	existing, err := m.GetBeaconState(ctx)
+	existing, err := k.GetBeaconState(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if existing != nil {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("beacon window already open; consume the previous one before opening a new one")
+		// A previously-consumed beacon (Final field populated) is just an
+		// audit-log row; safe to overwrite with a fresh window. An
+		// unconsumed beacon blocks new opens — the caller must wait for
+		// consumeBeaconForEpoch to finalize it.
+		if len(existing.Final) == 0 {
+			return nil, dealertypes.ErrInvalidRequest.Wrap("beacon window already open; consume the previous one before opening a new one")
+		}
 	}
 
-	// Resolve window durations.
-	commitBlocks := req.CommitBlocks
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	commitDefault, revealDefault := beaconDefaultWindows(sdkCtx.ChainID())
 	if commitBlocks == 0 {
-		commitBlocks = beaconCommitBlocksDefault
+		commitBlocks = commitDefault
 	}
 	if commitBlocks > beaconMaxWindowBlocks {
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("commit_blocks exceeds max of %d", beaconMaxWindowBlocks)
 	}
-	revealBlocks := req.RevealBlocks
 	if revealBlocks == 0 {
-		revealBlocks = beaconRevealBlocksDefault
+		revealBlocks = revealDefault
 	}
 	if revealBlocks > beaconMaxWindowBlocks {
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("reveal_blocks exceeds max of %d", beaconMaxWindowBlocks)
 	}
-	threshold := req.Threshold
 	if threshold == 0 {
 		threshold = 1
 	}
 
-	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	commitOpen := sdkCtx.BlockHeight()
 	commitClose, err := addInt64AndU64Checked(commitOpen, commitBlocks, "beacon commit_close_height")
 	if err != nil {
@@ -121,7 +132,7 @@ func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpe
 	}
 
 	bs := &dealertypes.BeaconState{
-		EpochId:           req.EpochId,
+		EpochId:           epochID,
 		CommitOpenHeight:  commitOpen,
 		CommitCloseHeight: commitClose,
 		RevealCloseHeight: revealClose,
@@ -129,10 +140,87 @@ func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpe
 		Commits:           []dealertypes.BeaconCommitEntry{},
 		Reveals:           []dealertypes.BeaconRevealEntry{},
 	}
-	if err := m.SetBeaconState(ctx, bs); err != nil {
+	if err := k.SetBeaconState(ctx, bs); err != nil {
+		return nil, err
+	}
+	return bs, nil
+}
+
+// MaybeAutoOpenBeacon is invoked from the dealer module's BeginBlocker. It
+// opens a new beacon window for the next epoch when:
+//   - no beacon state is currently stored, and
+//   - no DKG is in flight (so we don't race with an active dealing cycle).
+//
+// Auto-open picks the pending NextEpochID; windows use the chain-id-driven
+// defaults. MsgOpenBeaconWindow remains available as a manual override for
+// bootstrapping, recovery, or tuning a specific window's durations.
+func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
+	bs, err := k.GetBeaconState(ctx)
+	if err != nil {
+		return err
+	}
+	// An unconsumed beacon (Final empty) is live — skip. A consumed beacon
+	// is an audit-log row from a previous epoch; openBeacon will overwrite.
+	if bs != nil && len(bs.Final) == 0 {
+		return nil
+	}
+	dkg, err := k.GetDKG(ctx)
+	if err != nil {
+		return err
+	}
+	if dkg != nil {
+		return nil // DKG in progress; beacon waits
+	}
+	nextEpoch, err := k.GetNextEpochID(ctx)
+	if err != nil {
+		return err
+	}
+	if nextEpoch == 0 {
+		return nil // defensive guard; GetNextEpochID returns 1 by default
+	}
+	// If the consumed beacon already targets NextEpochID, there's nothing
+	// new to do — the chain is between consume and DKG-start and the same
+	// epoch's seed is already recorded.
+	if bs != nil && bs.EpochId == nextEpoch {
+		return nil
+	}
+
+	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, 0)
+	if err != nil {
+		return err
+	}
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+		dealertypes.EventTypeBeaconOpened,
+		sdk.NewAttribute("epochId", fmt.Sprintf("%d", opened.EpochId)),
+		sdk.NewAttribute("commitOpenHeight", fmt.Sprintf("%d", opened.CommitOpenHeight)),
+		sdk.NewAttribute("commitCloseHeight", fmt.Sprintf("%d", opened.CommitCloseHeight)),
+		sdk.NewAttribute("revealCloseHeight", fmt.Sprintf("%d", opened.RevealCloseHeight)),
+		sdk.NewAttribute("threshold", fmt.Sprintf("%d", opened.Threshold)),
+		sdk.NewAttribute("origin", "auto"),
+	))
+	return nil
+}
+
+func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpenBeaconWindow) (*dealertypes.MsgOpenBeaconWindowResponse, error) {
+	if req == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Caller == "" {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("missing caller")
+	}
+	if _, err := sdk.AccAddressFromBech32(req.Caller); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid caller address")
+	}
+	if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
 		return nil, err
 	}
 
+	bs, err := m.openBeacon(ctx, req.EpochId, req.CommitBlocks, req.RevealBlocks, req.Threshold)
+	if err != nil {
+		return nil, err
+	}
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
 		dealertypes.EventTypeBeaconOpened,
 		sdk.NewAttribute("epochId", fmt.Sprintf("%d", bs.EpochId)),
@@ -140,6 +228,7 @@ func (m msgServer) OpenBeaconWindow(ctx context.Context, req *dealertypes.MsgOpe
 		sdk.NewAttribute("commitCloseHeight", fmt.Sprintf("%d", bs.CommitCloseHeight)),
 		sdk.NewAttribute("revealCloseHeight", fmt.Sprintf("%d", bs.RevealCloseHeight)),
 		sdk.NewAttribute("threshold", fmt.Sprintf("%d", bs.Threshold)),
+		sdk.NewAttribute("origin", "manual"),
 	))
 	return &dealertypes.MsgOpenBeaconWindowResponse{}, nil
 }

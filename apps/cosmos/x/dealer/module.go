@@ -31,6 +31,7 @@ var (
 	_ module.AppModuleBasic = AppModule{}
 	_ module.HasServices    = AppModule{}
 	_ module.HasGenesis     = AppModule{}
+	_ appmodule.HasBeginBlocker = AppModule{}
 
 	_ appmodule.AppModule = AppModule{}
 )
@@ -145,6 +146,20 @@ func (am AppModule) ExportGenesis(ctx sdk.Context, cdc codec.JSONCodec) json.Raw
 }
 
 func (AppModule) ConsensusVersion() uint64 { return ConsensusVersion }
+
+// BeginBlock auto-opens a randomness-beacon window for the next epoch when
+// the chain is idle (no beacon in flight and no DKG in progress). This
+// replaces the requirement that some off-chain operator manually submit a
+// MsgOpenBeaconWindow each epoch. MsgOpenBeaconWindow remains available for
+// bootstrapping, recovery, or specific tuning; see
+// x/dealer/keeper/beacon.go for the auto-open policy.
+//
+// BeginBlock is intentionally cheap on the hot path: the inner
+// MaybeAutoOpenBeacon short-circuits on its first store read when a beacon
+// is already open (the common case) and returns without allocating.
+func (am AppModule) BeginBlock(ctx context.Context) error {
+	return am.keeper.MaybeAutoOpenBeacon(ctx)
+}
 
 // ---- App Wiring Setup ----
 

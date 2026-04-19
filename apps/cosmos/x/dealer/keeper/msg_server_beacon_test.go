@@ -377,6 +377,143 @@ func TestBeaconReveal_NonBondedRejected(t *testing.T) {
 	require.ErrorContains(t, err, "active bonded")
 }
 
+// --- Chain-id-driven default windows ---------------------------------------
+
+func TestOpenBeaconWindow_DevnetDefaults(t *testing.T) {
+	acc, _, v := beaconValidator(t, 0x70)
+	// Devnet chain id → fast-iteration default (5/5).
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 42, []stakingtypes.Validator{v})
+
+	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
+		Caller: acc, EpochId: 9,
+	})
+	require.NoError(t, err)
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(42+5), bs.CommitCloseHeight)
+	require.Equal(t, int64(42+5+5), bs.RevealCloseHeight)
+}
+
+func TestOpenBeaconWindow_ProductionDefaults(t *testing.T) {
+	acc, _, v := beaconValidator(t, 0x71)
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 42, []stakingtypes.Validator{v})
+	// Override harness chainID to a non-devnet one so OpenBeaconWindow
+	// picks the production-scale defaults.
+	sdkCtx := sdk.UnwrapSDKContext(ctx).WithChainID("ocp-mainnet-1")
+	ctx = sdk.WrapSDKContext(sdkCtx)
+
+	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
+		Caller: acc, EpochId: 9,
+	})
+	require.NoError(t, err)
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(42+50), bs.CommitCloseHeight)
+	require.Equal(t, int64(42+50+50), bs.RevealCloseHeight)
+}
+
+// --- MaybeAutoOpenBeacon ---------------------------------------------------
+
+func TestMaybeAutoOpenBeacon_OpensWhenIdle(t *testing.T) {
+	_, _, v := beaconValidator(t, 0x72)
+	ctx, k, _, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+
+	// Seed NextEpochID so the auto-opener has a target.
+	require.NoError(t, k.SetNextEpochID(ctx, 3))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bs)
+	require.Equal(t, uint64(3), bs.EpochId)
+}
+
+func TestMaybeAutoOpenBeacon_SkipsWhenBeaconOpen(t *testing.T) {
+	acc, _, v := beaconValidator(t, 0x73)
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+	require.NoError(t, k.SetNextEpochID(ctx, 3))
+
+	openBeaconFixture(t, ctx, ms, acc, 5, 5, 5, 1)
+
+	// Auto-open should be a no-op — existing beacon is unconsumed.
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), bs.EpochId, "existing beacon preserved")
+}
+
+func TestMaybeAutoOpenBeacon_SkipsWhenDKGInFlight(t *testing.T) {
+	_, _, v := beaconValidator(t, 0x74)
+	ctx, k, _, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+	require.NoError(t, k.SetNextEpochID(ctx, 3))
+	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
+		EpochId: 2, Threshold: 1,
+	}))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.Nil(t, bs, "auto-open must not race a live DKG")
+}
+
+func TestMaybeAutoOpenBeacon_NoopWhenConsumedBeaconIsCurrent(t *testing.T) {
+	// If a consumed beacon is already recorded for NextEpochID, the chain
+	// is in the window between beacon-consume and DKG-start. Auto-open
+	// should not replace a seed that's already committed for this epoch.
+	_, _, v := beaconValidator(t, 0x75)
+	ctx, k, _, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+	require.NoError(t, k.SetNextEpochID(ctx, 3))
+
+	consumed := &dealertypes.BeaconState{
+		EpochId:           3,
+		CommitOpenHeight:  1,
+		CommitCloseHeight: 5,
+		RevealCloseHeight: 10,
+		Threshold:         1,
+		Final:             bytes.Repeat([]byte{0xbb}, 32),
+	}
+	require.NoError(t, k.SetBeaconState(ctx, consumed))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotEmpty(t, bs.Final, "existing-for-this-epoch consumed beacon preserved")
+}
+
+func TestMaybeAutoOpenBeacon_ReplacesConsumedBeacon(t *testing.T) {
+	// Once a beacon has been consumed (Final populated), auto-open must be
+	// able to overwrite it with a fresh window for the next epoch —
+	// otherwise the chain is stuck after the first epoch.
+	_, _, v := beaconValidator(t, 0x76)
+	ctx, k, _, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+	require.NoError(t, k.SetNextEpochID(ctx, 4))
+
+	// Simulate a previously-consumed beacon sitting in state.
+	consumed := &dealertypes.BeaconState{
+		EpochId:           3,
+		CommitOpenHeight:  1,
+		CommitCloseHeight: 5,
+		RevealCloseHeight: 10,
+		Threshold:         1,
+		Final:             bytes.Repeat([]byte{0xaa}, 32),
+	}
+	require.NoError(t, k.SetBeaconState(ctx, consumed))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bs)
+	require.Equal(t, uint64(4), bs.EpochId, "auto-open replaced consumed beacon")
+	require.Empty(t, bs.Final, "new beacon has no Final yet")
+}
+
 // --- consumeBeaconForEpoch -------------------------------------------------
 //
 // consumeBeaconForEpoch is unexported and called from selectRandEpoch. These
