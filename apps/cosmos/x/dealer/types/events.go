@@ -9,6 +9,7 @@ const (
 	EventTypeDKGCommitAccepted     = "DKGCommitAccepted"
 	EventTypeDKGComplaintAccepted  = "DKGComplaintAccepted"
 	EventTypeDKGShareRevealed      = "DKGShareRevealed"
+	EventTypeDKGEncryptedShare     = "DKGEncryptedShareAccepted"
 	EventTypeDKGTimeoutApplied     = "DKGTimeoutApplied"
 	EventTypeDealerHandInitialized = "DealerHandInitialized"
 

@@ -14,6 +14,8 @@ import {
 import { elgamalDecrypt, elgamalEncrypt } from "../src/elgamal.js";
 import { chaumPedersenVerify, decodeChaumPedersenProof } from "../src/proofs/chaumPedersen.js";
 import { decodeDkgEncShareProof, dkgEncShareVerify } from "../src/proofs/dkgEncShare.js";
+import { decryptShareScalar } from "../src/proofs/dkgScalarAead.js";
+import { mulBase, pointEq } from "../src/utils/group.js";
 
 type Vectors = {
   suite: string;
@@ -40,6 +42,8 @@ type Vectors = {
     uHex: string;
     vHex: string;
     proofHex: string;
+    scalarCtHex?: string;
+    scalarHexLE?: string;
   }>;
 };
 
@@ -94,6 +98,23 @@ describe("ocp-crypto vectors", () => {
       const vv = groupElementFromBytes(hexToBytes(v.vHex));
       const proof = decodeDkgEncShareProof(hexToBytes(v.proofHex));
       expect(dkgEncShareVerify({ commitments, j: v.j, pkR, u, v: vv, proof })).toBe(true);
+
+      // Scalar-AEAD round-trip (recipient skR is pinned to 9001 by the
+      // generator script; change both the vector and this constant if you
+      // regenerate with a different key).
+      if (v.scalarCtHex && v.scalarHexLE) {
+        const skR = 9001n;
+        // Use pointEq (not toEqual) — noble's internal projective coordinates
+        // can differ between two representations of the same group element.
+        expect(pointEq(mulBase(skR), pkR)).toBe(true);
+        const s = decryptShareScalar({
+          skR,
+          u,
+          proofBytes: hexToBytes(v.proofHex),
+          ct: hexToBytes(v.scalarCtHex),
+        });
+        expect(bytesToHex(scalarToBytes(s))).toBe(v.scalarHexLE.replace(/^0x/, ""));
+      }
     }
   });
 });

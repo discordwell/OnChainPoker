@@ -24,6 +24,8 @@ type dkgEncShareVec struct {
 	UHex           string   `json:"uHex"`
 	VHex           string   `json:"vHex"`
 	ProofHex       string   `json:"proofHex"`
+	ScalarCtHex    string   `json:"scalarCtHex"`
+	ScalarHexLE    string   `json:"scalarHexLE"`
 }
 
 type hashToScalarVec struct {
@@ -222,6 +224,33 @@ func TestVectors_DkgEncShare(t *testing.T) {
 		if !bytes.Equal(re, proofBytes) {
 			t.Fatalf("dkgEncShare vec[%d] encode(decode) not byte-stable: got=%s want=%s",
 				i, bytesToHex(re), bytesToHex(proofBytes))
+		}
+
+		// Cross-lang scalar-AEAD check: decrypt the TS-produced ciphertext
+		// with the Go recipient. (skR is not in the vector — it is the
+		// discrete log of pkR, fixed to 9001 by the generator script.)
+		if v.ScalarCtHex != "" {
+			scalarCt := mustHex(t, v.ScalarCtHex)
+			skR := ScalarFromUint64(9001)
+			// Sanity: skR matches the published pkR.
+			if !PointEq(MulBase(skR), pkR) {
+				t.Fatalf("dkgEncShare vec[%d] hardcoded skR does not match pkR; update vector gen", i)
+			}
+			s, err := DecryptShareScalar(skR, U, proofBytes, scalarCt)
+			if err != nil {
+				t.Fatalf("dkgEncShare vec[%d] AEAD decrypt: %v", i, err)
+			}
+			wantS := mustHex(t, v.ScalarHexLE)
+			if !bytes.Equal(s.Bytes(), wantS) {
+				t.Fatalf("dkgEncShare vec[%d] decrypted scalar mismatch: got=%s want=%s",
+					i, bytesToHex(s.Bytes()), bytesToHex(wantS))
+			}
+			// Consistency: s*G == V - skR*U.
+			sharePtFromScalar := MulBase(s)
+			sharePtFromElGamal := PointSub(V, MulPoint(U, skR))
+			if !PointEq(sharePtFromScalar, sharePtFromElGamal) {
+				t.Fatalf("dkgEncShare vec[%d] cross-lang share point mismatch", i)
+			}
 		}
 	}
 }

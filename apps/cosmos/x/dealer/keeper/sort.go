@@ -37,6 +37,18 @@ func sortDKGReveals(dkg *dealertypes.DealerDKG) {
 	})
 }
 
+func sortDKGEncryptedShares(dkg *dealertypes.DealerDKG) {
+	if dkg == nil {
+		return
+	}
+	sort.Slice(dkg.EncryptedShares, func(i, j int) bool {
+		if dkg.EncryptedShares[i].Dealer != dkg.EncryptedShares[j].Dealer {
+			return dkg.EncryptedShares[i].Dealer < dkg.EncryptedShares[j].Dealer
+		}
+		return dkg.EncryptedShares[i].RecipientIndex < dkg.EncryptedShares[j].RecipientIndex
+	})
+}
+
 func sortPubShares(h *dealertypes.DealerHand) {
 	if h == nil {
 		return

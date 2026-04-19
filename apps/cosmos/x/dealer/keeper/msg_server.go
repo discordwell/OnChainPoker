@@ -249,6 +249,28 @@ func (m msgServer) DkgCommit(ctx context.Context, req *dealertypes.MsgDkgCommit)
 		commitments = append(commitments, append([]byte(nil), c...))
 	}
 
+	// DKG v2: the dealer may attach its per-epoch ephemeral Ristretto255
+	// public key. On v1 chains this is absent (empty); on v2 chains the
+	// dealer daemon generates a fresh skR_j at epoch start and publishes
+	// pkR_j here so other dealers can encrypt shares to it. If supplied,
+	// validate canonical 32-byte encoding and attach to the member record.
+	if len(req.EphemeralPubkey) != 0 {
+		if len(req.EphemeralPubkey) != ocpcrypto.PointBytes {
+			return nil, dealertypes.ErrInvalidRequest.Wrap("ephemeral_pubkey must be 32 bytes")
+		}
+		if _, err := ocpcrypto.PointFromBytesCanonical(req.EphemeralPubkey); err != nil {
+			return nil, dealertypes.ErrInvalidRequest.Wrapf("ephemeral_pubkey invalid: %v", err)
+		}
+		// Record on the member in-place. Guaranteed non-nil because we
+		// checked findDKGMember above.
+		for i := range dkg.Members {
+			if dkg.Members[i].Validator == req.Dealer {
+				dkg.Members[i].EphemeralPubkey = append([]byte(nil), req.EphemeralPubkey...)
+				break
+			}
+		}
+	}
+
 	dkg.Commits = append(dkg.Commits, dealertypes.DealerDKGCommit{
 		Dealer:      req.Dealer,
 		Commitments: commitments,
@@ -266,6 +288,159 @@ func (m msgServer) DkgCommit(ctx context.Context, req *dealertypes.MsgDkgCommit)
 		sdk.NewAttribute("dealer", req.Dealer),
 	))
 	return &dealertypes.MsgDkgCommitResponse{}, nil
+}
+
+// DkgEncryptedShare (DKG v2): dealer publishes an encrypted share destined
+// for one specific recipient. See docs/DKG-V2.md and
+// apps/cosmos/internal/ocpcrypto/dkg_encshare.go for the NIZK statement.
+// The chain verifies:
+//
+//  1. Signer is the named dealer and the dealer is in dkg.Members.
+//  2. Epoch id matches the in-flight DKG.
+//  3. Posting is within the commit window (dealers may submit encrypted
+//     shares up through the complaint deadline to cover "missing" cures).
+//  4. The recipient is a committee member, different from the dealer.
+//  5. The dealer has previously committed (otherwise no commitments to bind
+//     the NIZK against).
+//  6. The recipient has published an ephemeral pubkey pkR.
+//  7. (u, v, proof, scalar_ct) are canonical and correctly sized.
+//  8. DkgEncShareVerify against the dealer's commitments passes.
+//
+// On success, the (dealer, recipient_index) pair is persisted in
+// dkg.EncryptedShares. Duplicates per (dealer, recipient_index) are rejected.
+// The scalar_ct is stored as-is; the chain cannot validate it without skR
+// (recipient-only), so AEAD soundness is enforced on the recipient side.
+func (m msgServer) DkgEncryptedShare(ctx context.Context, req *dealertypes.MsgDkgEncryptedShare) (*dealertypes.MsgDkgEncryptedShareResponse, error) {
+	if req == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Dealer == "" {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("missing dealer")
+	}
+	if _, err := sdk.ValAddressFromBech32(req.Dealer); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid dealer address")
+	}
+
+	dkg, err := m.GetDKG(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dkg == nil {
+		return nil, dealertypes.ErrNoDkgInFlight.Wrap("no dkg in progress")
+	}
+	if req.EpochId != dkg.EpochId {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("epoch_id mismatch")
+	}
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	// Allow late submissions up through the reveal deadline so a dealer can
+	// cure a missing-share complaint by posting the encrypted share late.
+	if sdkCtx.BlockHeight() > dkg.RevealDeadline {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("reveal deadline passed")
+	}
+
+	if findDKGMember(dkg, req.Dealer) == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("dealer not in committee")
+	}
+
+	// Recipient must be a committee member, different from the dealer.
+	var recipient *dealertypes.DealerMember
+	for i := range dkg.Members {
+		if dkg.Members[i].Index == req.RecipientIndex {
+			recipient = &dkg.Members[i]
+			break
+		}
+	}
+	if recipient == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("recipient_index not in committee")
+	}
+	if recipient.Validator == req.Dealer {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("dealer cannot address itself")
+	}
+	if len(recipient.EphemeralPubkey) == 0 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("recipient has no ephemeral_pubkey yet")
+	}
+	pkR, err := ocpcrypto.PointFromBytesCanonical(recipient.EphemeralPubkey)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("recipient ephemeral_pubkey invalid: %v", err)
+	}
+
+	commit := findDKGCommit(dkg, req.Dealer)
+	if commit == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("dealer has not committed")
+	}
+
+	// Validate sizes + canonical encoding of u, v, proof, scalar_ct.
+	if len(req.U) != ocpcrypto.PointBytes {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("u must be 32 bytes")
+	}
+	if len(req.V) != ocpcrypto.PointBytes {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("v must be 32 bytes")
+	}
+	if len(req.Proof) != 160 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("proof must be 160 bytes")
+	}
+	if len(req.ScalarCt) != ocpcrypto.DkgScalarAeadCtBytes {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("scalar_ct must be %d bytes", ocpcrypto.DkgScalarAeadCtBytes)
+	}
+	U, err := ocpcrypto.PointFromBytesCanonical(req.U)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("u invalid: %v", err)
+	}
+	V, err := ocpcrypto.PointFromBytesCanonical(req.V)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("v invalid: %v", err)
+	}
+	proof, err := ocpcrypto.DecodeDkgEncShareProof(req.Proof)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("proof invalid: %v", err)
+	}
+
+	// Decode the dealer's Feldman commitments to group elements.
+	commitments := make([]ocpcrypto.Point, 0, len(commit.Commitments))
+	for i, cb := range commit.Commitments {
+		cp, err := ocpcrypto.PointFromBytesCanonical(cb)
+		if err != nil {
+			return nil, dealertypes.ErrInvalidRequest.Wrapf("stored commitment[%d] invalid: %v", i, err)
+		}
+		commitments = append(commitments, cp)
+	}
+
+	ok, err := ocpcrypto.DkgEncShareVerify(commitments, req.RecipientIndex, pkR, U, V, proof)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid encrypted-share proof")
+	}
+
+	// Duplicate detection and canonical storage.
+	for _, es := range dkg.EncryptedShares {
+		if es.Dealer == req.Dealer && es.RecipientIndex == req.RecipientIndex {
+			return nil, dealertypes.ErrInvalidRequest.Wrap("encrypted share already submitted for this (dealer, recipient)")
+		}
+	}
+	dkg.EncryptedShares = append(dkg.EncryptedShares, dealertypes.DealerDKGEncryptedShare{
+		Dealer:         req.Dealer,
+		RecipientIndex: req.RecipientIndex,
+		U:              append([]byte(nil), req.U...),
+		V:              append([]byte(nil), req.V...),
+		Proof:          append([]byte(nil), req.Proof...),
+		ScalarCt:       append([]byte(nil), req.ScalarCt...),
+	})
+	sortDKGEncryptedShares(dkg)
+
+	if err := m.SetDKG(ctx, dkg); err != nil {
+		return nil, err
+	}
+
+	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+		dealertypes.EventTypeDKGEncryptedShare,
+		sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
+		sdk.NewAttribute("dealer", req.Dealer),
+		sdk.NewAttribute("recipientIndex", fmt.Sprintf("%d", req.RecipientIndex)),
+	))
+	return &dealertypes.MsgDkgEncryptedShareResponse{}, nil
 }
 
 func (m msgServer) DkgComplaintMissing(ctx context.Context, req *dealertypes.MsgDkgComplaintMissing) (*dealertypes.MsgDkgComplaintMissingResponse, error) {

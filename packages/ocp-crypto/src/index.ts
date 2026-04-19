@@ -62,3 +62,9 @@ export {
   encodeDkgEncShareProof,
   evalCommitments,
 } from "./proofs/dkgEncShare.js";
+export {
+  DKG_SCALAR_AEAD_KEY_DOMAIN,
+  DKG_SCALAR_AEAD_CT_BYTES,
+  encryptShareScalar,
+  decryptShareScalar,
+} from "./proofs/dkgScalarAead.js";

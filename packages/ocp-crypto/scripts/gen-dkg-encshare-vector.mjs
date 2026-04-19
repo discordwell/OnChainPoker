@@ -25,6 +25,7 @@ import {
   dkgEncShareProve,
   encodeDkgEncShareProof,
 } from "../dist/proofs/dkgEncShare.js";
+import { encryptShareScalar } from "../dist/proofs/dkgScalarAead.js";
 
 // Fixed polynomial f(x) = 100 + 200*x + 300*x^2 mod q.
 const coeffs = [100n, 200n, 300n];
@@ -65,6 +66,10 @@ const wr = 13n;
 const proof = dkgEncShareProve({ commitments, j, pkR, u: U, v: V, s, r, ws, wr });
 const proofBytes = encodeDkgEncShareProof(proof);
 
+// Hybrid AEAD scalar-delivery ciphertext: AES-256-GCM over s_bytes_LE with
+// AAD = proofBytes, IV = 0^12, key = SHA256(domain || r*pkR). 48 bytes.
+const scalarCt = encryptShareScalar({ pkR, r, s, proofBytes });
+
 const vector = {
   description: "DkgEncShare: f(x)=100+200*x+300*x^2 at j=2, skR=9001, r=42, ws=11, wr=13",
   commitmentsHex: commitments.map((c) => "0x" + bytesToHex(groupElementToBytes(c))),
@@ -73,6 +78,8 @@ const vector = {
   uHex: "0x" + bytesToHex(groupElementToBytes(U)),
   vHex: "0x" + bytesToHex(groupElementToBytes(V)),
   proofHex: "0x" + bytesToHex(proofBytes),
+  scalarCtHex: "0x" + bytesToHex(scalarCt),
+  scalarHexLE: "0x" + bytesToHex(scalarToBytes(s)),
 };
 
 console.log(JSON.stringify(vector, null, 2));

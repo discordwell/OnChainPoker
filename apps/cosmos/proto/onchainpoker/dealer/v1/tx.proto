@@ -25,7 +25,16 @@ service Msg {
   rpc DkgCommit(MsgDkgCommit) returns (MsgDkgCommitResponse);
   rpc DkgComplaintMissing(MsgDkgComplaintMissing) returns (MsgDkgComplaintMissingResponse);
   rpc DkgComplaintInvalid(MsgDkgComplaintInvalid) returns (MsgDkgComplaintInvalidResponse);
+  // DkgShareReveal is the LEGACY v1 plaintext reveal path. It remains
+  // accepted for backward compatibility with v1 chains; DKG v2 replaces it
+  // with MsgDkgEncryptedShare (see docs/DKG-V2.md).
   rpc DkgShareReveal(MsgDkgShareReveal) returns (MsgDkgShareRevealResponse);
+  // DKG v2: encrypted-share delivery. Replaces the plaintext DkgShareReveal
+  // once v2 is activated. The message carries an ElGamal ciphertext on the
+  // share point plus a 160-byte NIZK binding it to the dealer's Feldman
+  // commitments, plus an AES-GCM ciphertext of the share scalar bound to
+  // the NIZK via AAD.
+  rpc DkgEncryptedShare(MsgDkgEncryptedShare) returns (MsgDkgEncryptedShareResponse);
   rpc FinalizeEpoch(MsgFinalizeEpoch) returns (MsgFinalizeEpochResponse);
   rpc DkgTimeout(MsgDkgTimeout) returns (MsgDkgTimeoutResponse);
 
@@ -72,6 +81,11 @@ message MsgDkgCommit {
   string dealer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
   uint64 epoch_id = 2;
   repeated bytes commitments = 3;
+
+  // DKG v2 only: the dealer's per-epoch ephemeral ElGamal/Ristretto255 public
+  // key pkR = skR*G used by other dealers to encrypt shares destined for this
+  // dealer. 32 bytes canonical, or empty on v1 chains. See docs/DKG-V2.md.
+  bytes ephemeral_pubkey = 4;
 }
 
 message MsgDkgCommitResponse {}
@@ -110,6 +124,37 @@ message MsgDkgShareReveal {
 }
 
 message MsgDkgShareRevealResponse {}
+
+// MsgDkgEncryptedShare delivers one Feldman-consistent DKG share from a
+// dealer to a specific recipient index, encrypted under the recipient's
+// per-epoch ephemeral pubkey. Accepted by the chain only when the 160-byte
+// NIZK (DkgEncShareProof, see apps/cosmos/internal/ocpcrypto/dkg_encshare.go)
+// verifies against the dealer's previously-posted Feldman commitments at
+// index `recipient_index` under `DealerMember.ephemeral_pubkey`. The
+// plaintext scalar is AEAD-encrypted in `scalar_ct` and is recoverable only
+// by the recipient holding `skR`. No share scalar ever appears in plaintext
+// on-chain.
+message MsgDkgEncryptedShare {
+  option (cosmos.msg.v1.signer) = "dealer";
+  option (gogoproto.goproto_getters) = false;
+
+  string dealer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  uint32 recipient_index = 3;
+
+  // 32-byte ElGamal ephemeral = r*G.
+  bytes u = 4;
+  // 32-byte ElGamal ciphertext = s*G + r*pkR.
+  bytes v = 5;
+  // 160-byte NIZK proof (DkgEncShareProof). Binds (u, v) to the Feldman
+  // commitments at index `recipient_index`.
+  bytes proof = 6;
+  // 48-byte AES-256-GCM ciphertext of the share scalar s (LE), AAD=proof.
+  // Recipient derives the AEAD key from skR*U = r*pkR.
+  bytes scalar_ct = 7;
+}
+
+message MsgDkgEncryptedShareResponse {}
 
 message MsgFinalizeEpoch {
   option (cosmos.msg.v1.signer) = "caller";

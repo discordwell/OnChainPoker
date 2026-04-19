@@ -53,6 +53,14 @@ message DealerMember {
 
   // Consensus power at committee selection time (used for slashing distribution height/power).
   int64 power = 5;
+
+  // Per-epoch ephemeral ElGamal/Ristretto255 public key pkR_j = skR_j * G
+  // used by DKG v2 encrypted-share delivery (see docs/DKG-V2.md). The dealer
+  // daemon generates skR_j freshly at epoch begin and stores it locally;
+  // pkR_j is posted with MsgDkgCommit and consumed by other dealers when
+  // they submit MsgDkgEncryptedShare(...). 32 bytes (canonical ristretto
+  // encoding) or empty on pre-v2 chains.
+  bytes ephemeral_pubkey = 6;
 }
 
 message DealerEpoch {
@@ -78,6 +86,20 @@ message DealerEpoch {
 message DealerDKGCommit {
   string dealer = 1;
   repeated bytes commitments = 2;
+}
+
+// DealerDKGEncryptedShare is an on-chain record of a single (dealer,
+// recipient) share delivery for DKG v2. Replaces the plaintext
+// DealerDKGShareReveal flow. See docs/DKG-V2.md and
+// apps/cosmos/internal/ocpcrypto/dkg_encshare.go for the NIZK and the
+// scalar-AEAD primitives.
+message DealerDKGEncryptedShare {
+  string dealer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint32 recipient_index = 2; // DealerMember.Index of the recipient
+  bytes u = 3;                // 32-byte ElGamal ephemeral = r*G
+  bytes v = 4;                // 32-byte ElGamal ciphertext = s*G + r*pkR
+  bytes proof = 5;             // 160-byte NIZK (DkgEncShareProof)
+  bytes scalar_ct = 6;         // 48-byte scalar-AEAD ciphertext (32 + 16 tag)
 }
 
 message DealerDKGComplaint {
@@ -113,6 +135,11 @@ message DealerDKG {
   repeated DealerDKGComplaint complaints = 11 [(gogoproto.nullable) = false];
   repeated DealerDKGShareReveal reveals = 12 [(gogoproto.nullable) = false];
   repeated string slashed = 13;
+
+  // DKG v2 encrypted shares, sorted by (dealer, recipient_index). Populated
+  // by MsgDkgEncryptedShare. On v2 chains this replaces the plaintext reveal
+  // flow; on v1 chains it stays empty. See docs/DKG-V2.md.
+  repeated DealerDKGEncryptedShare encrypted_shares = 14 [(gogoproto.nullable) = false];
 }
 
 message DealerCiphertext {
