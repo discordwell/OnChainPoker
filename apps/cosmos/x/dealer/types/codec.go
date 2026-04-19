@@ -22,6 +22,10 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	legacy.RegisterAminoMsg(cdc, &MsgFinalizeEpoch{}, "ocp/dealer/FinalizeEpoch")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgTimeout{}, "ocp/dealer/DkgTimeout")
 
+	// Randomness-beacon messages (no-op in default build; real registration
+	// lives in codec_beacon.go under the `dealer_beacon_regen` build tag).
+	RegisterBeaconAminoCodec(cdc)
+
 	legacy.RegisterAminoMsg(cdc, &MsgInitHand{}, "ocp/dealer/InitHand")
 	legacy.RegisterAminoMsg(cdc, &MsgSubmitShuffle{}, "ocp/dealer/SubmitShuffle")
 	legacy.RegisterAminoMsg(cdc, &MsgFinalizeDeck{}, "ocp/dealer/FinalizeDeck")
@@ -49,6 +53,10 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 		&MsgFinalizeReveal{},
 		&MsgTimeout{},
 	)
+
+	// Randomness-beacon messages (no-op in default build; real registration
+	// lives in codec_beacon.go under the `dealer_beacon_regen` build tag).
+	RegisterBeaconInterfaces(registry)
 
 	msgservice.RegisterMsgServiceDesc(registry, &_Msg_serviceDesc)
 }

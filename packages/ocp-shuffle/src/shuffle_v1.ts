@@ -13,9 +13,54 @@ import { proveEqDlog, verifyEqDlog, decodeEqDlogProofFromReader, encodeEqDlogPro
 import { proveSwitch, verifySwitch, decodeSwitchProofFromReader, encodeSwitchProof } from "./switch_or.js";
 
 export const SHUFFLE_PROOF_V1_VERSION = 1;
+export const SHUFFLE_PROOF_V2_VERSION = 2;
+
+// Shuffle context wire format (canonical, shared byte-for-byte with Go):
+//
+//   ctx = u64le(tableId) || u64le(handId) || u16le(round) || u16le(shufflerLen) || shuffler_utf8
+//
+// All integers are little-endian unsigned. `shuffler` is the bech32 validator
+// operator address encoded as UTF-8 (no NUL). Example (tableId=1, handId=2,
+// round=3, shuffler="cosmosvaloper1foo"):
+//   01 00 00 00 00 00 00 00 | 02 00 00 00 00 00 00 00 | 03 00 | 11 00 | "cosmosvaloper1foo"
+//   = 8 + 8 + 2 + 2 + 17 = 37 bytes.
+//
+// Proof v2 byte layout:
+//   u8(version=2) || u16le(n) || u16le(rounds) || u16le(ctxLen) || ctx_bytes
+//     || <per-round: deck snapshot, switch proofs, single proofs> (identical to v1)
+//
+// The context is also bound into every inner Fiat-Shamir transcript (switch
+// and eqdlog) via tr.appendMessage("ctx", ctx) right after the domain
+// separator, so no proof verifies without the matching context value. v1
+// proofs/transcripts are unchanged (no ctx appended) for backward compat.
 
 const DOMAIN_REENC = "ocp/v1/shuffle/reenc-eqdlog";
 const G = basePoint();
+
+export function buildShuffleContext(params: {
+  tableId: bigint | number;
+  handId: bigint | number;
+  round: number;
+  shuffler: string;
+}): Uint8Array {
+  const { tableId, handId, round, shuffler } = params;
+  const tableIdBig = typeof tableId === "bigint" ? tableId : BigInt(tableId);
+  const handIdBig = typeof handId === "bigint" ? handId : BigInt(handId);
+  if (tableIdBig < 0n || tableIdBig > 0xffffffffffffffffn) throw new Error("buildShuffleContext: tableId out of range");
+  if (handIdBig < 0n || handIdBig > 0xffffffffffffffffn) throw new Error("buildShuffleContext: handId out of range");
+  if (!Number.isInteger(round) || round < 0 || round > 0xffff) throw new Error("buildShuffleContext: round out of range");
+  const shufflerBytes = new TextEncoder().encode(shuffler);
+  if (shufflerBytes.length > 0xffff) throw new Error("buildShuffleContext: shuffler too long");
+
+  const out = new Uint8Array(8 + 8 + 2 + 2 + shufflerBytes.length);
+  const dv = new DataView(out.buffer);
+  dv.setBigUint64(0, tableIdBig, true);
+  dv.setBigUint64(8, handIdBig, true);
+  dv.setUint16(16, round, true);
+  dv.setUint16(18, shufflerBytes.length, true);
+  out.set(shufflerBytes, 20);
+  return out;
+}
 
 function sampleNonzeroScalar(rng: ScalarRng): Scalar {
   while (true) {
@@ -66,19 +111,59 @@ function roundPairs(n: number, round: number): { pairs: Array<[number, number]>;
   return { pairs, singles };
 }
 
+// SECURITY: The CSPRNG seed must never be reused across shuffles. Reuse
+// causes identical Schnorr nonces to be paired with different Fiat-Shamir
+// challenges, allowing a verifier to recover re-encryption randomness rho
+// via rho = (z1 - z2) / (e1 - e2). This is why `seedUnsafeForTestsOnly`
+// exists only for tests; production must let the function use randomBytes(32).
 export function shuffleProveV1(pk: GroupElement, deckIn: ElGamalCiphertext[], opts: ShuffleProveOpts = {}): ShuffleProveResult {
   const n = deckIn.length;
   if (n < 2) throw new Error("shuffleProveV1: deck too small");
   const rounds = opts.rounds ?? n;
   if (!Number.isInteger(rounds) || rounds <= 0) throw new Error("shuffleProveV1: rounds must be > 0");
 
-  const seed = opts.seed ?? randomBytes(32);
+  let seed: Uint8Array;
+  if (opts.seedUnsafeForTestsOnly !== undefined) {
+    if (process.env.NODE_ENV !== "test" && process.env.OCP_ALLOW_UNSAFE_SEED !== "1") {
+      throw new Error(
+        "seedUnsafeForTestsOnly is a test hook; set NODE_ENV=test or OCP_ALLOW_UNSAFE_SEED=1 to enable",
+      );
+    }
+    console.warn(
+      "[ocp-shuffle] WARNING: deterministic seed override in use — never use in production; nonce reuse leaks permutation randomness",
+    );
+    seed = opts.seedUnsafeForTestsOnly;
+  } else {
+    seed = randomBytes(32);
+  }
   const rng = new DeterministicRng(seed);
+
+  // Resolve context: if caller passes it, emit v2 format; else legacy v1.
+  let context: Uint8Array | undefined = opts.context;
+  let version: number;
+  if (context !== undefined) {
+    if (context.length === 0) throw new Error("shuffleProveV1: context must be non-empty for v2");
+    version = SHUFFLE_PROOF_V2_VERSION;
+  } else {
+    version = SHUFFLE_PROOF_V1_VERSION;
+  }
 
   const perm = randomPermutation(rng, n);
   const items: Array<{ ct: ElGamalCiphertext; key: number }> = deckIn.map((ct, i) => ({ ct, key: perm[i]! }));
 
-  const header = concatBytes(new Uint8Array([SHUFFLE_PROOF_V1_VERSION]), u16ToBytesLE(n), u16ToBytesLE(rounds));
+  let header: Uint8Array;
+  if (version === SHUFFLE_PROOF_V2_VERSION) {
+    if (context!.length > 0xffff) throw new Error("shuffleProveV1: context too long (>65535 bytes)");
+    header = concatBytes(
+      new Uint8Array([SHUFFLE_PROOF_V2_VERSION]),
+      u16ToBytesLE(n),
+      u16ToBytesLE(rounds),
+      u16ToBytesLE(context!.length),
+      context!,
+    );
+  } else {
+    header = concatBytes(new Uint8Array([SHUFFLE_PROOF_V1_VERSION]), u16ToBytesLE(n), u16ToBytesLE(rounds));
+  }
   const proofChunks: Uint8Array[] = [header];
 
   for (let round = 0; round < rounds; round++) {
@@ -117,6 +202,7 @@ export function shuffleProveV1(pk: GroupElement, deckIn: ElGamalCiphertext[], op
         rho0: out0Res.rho,
         rho1: out1Res.rho,
         rng,
+        context,
       });
       switchProofs.push(encodeSwitchProof(sp));
 
@@ -142,7 +228,7 @@ export function shuffleProveV1(pk: GroupElement, deckIn: ElGamalCiphertext[], op
       const X = outCt.c1.subtract(inCt.c1);
       const Y = outCt.c2.subtract(inCt.c2);
 
-      const p = proveEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, x: rho, rng });
+      const p = proveEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, x: rho, rng, context });
       singleProofs.push(encodeEqDlogProofV1(p));
 
       deckOutRound[idx] = outCt;
@@ -167,13 +253,49 @@ export function shuffleProveV1(pk: GroupElement, deckIn: ElGamalCiphertext[], op
   return { deckOut, proofBytes: concatBytes(...proofChunks) };
 }
 
-export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], proofBytes: Uint8Array): ShuffleVerifyResult {
+// Verify a shuffle proof. `context` must be supplied when verifying a v2
+// proof (and must match byte-for-byte what the prover bound); it must be
+// omitted (undefined) when verifying a legacy v1 proof. Mismatches surface as
+// "unsupported version" or as inner-proof failures.
+export function shuffleVerifyV1(
+  pk: GroupElement,
+  deckIn: ElGamalCiphertext[],
+  proofBytes: Uint8Array,
+  context?: Uint8Array,
+): ShuffleVerifyResult {
   try {
     const rd = new Reader(proofBytes);
     const version = rd.takeU8();
-    if (version !== SHUFFLE_PROOF_V1_VERSION) return { ok: false, error: `unsupported version ${version}` };
+    let ctx: Uint8Array | undefined;
+    if (version === SHUFFLE_PROOF_V1_VERSION) {
+      if (context !== undefined) {
+        return { ok: false, error: "context supplied for v1 proof; v1 must omit context" };
+      }
+      ctx = undefined;
+    } else if (version === SHUFFLE_PROOF_V2_VERSION) {
+      if (context === undefined) {
+        return { ok: false, error: "context required for v2 proof" };
+      }
+      if (context.length === 0) {
+        return { ok: false, error: "context must be non-empty for v2" };
+      }
+      ctx = context;
+    } else {
+      return { ok: false, error: `unsupported version ${version}` };
+    }
     const n = rd.takeU16LE();
     const rounds = rd.takeU16LE();
+    if (version === SHUFFLE_PROOF_V2_VERSION) {
+      const ctxLen = rd.takeU16LE();
+      const ctxBytes = rd.take(ctxLen);
+      // Compare expected context (caller-supplied) vs embedded bytes.
+      if (ctxBytes.length !== ctx!.length) {
+        return { ok: false, error: "context length mismatch" };
+      }
+      for (let i = 0; i < ctxBytes.length; i++) {
+        if (ctxBytes[i] !== ctx![i]) return { ok: false, error: "context mismatch" };
+      }
+    }
     if (n !== deckIn.length) return { ok: false, error: `n mismatch: proof n=${n}, deck n=${deckIn.length}` };
     if (n < 2) return { ok: false, error: "deck too small" };
     if (rounds <= 0) return { ok: false, error: "rounds must be > 0" };
@@ -192,7 +314,7 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
       for (let i = start; i + 1 < n; i += 2) {
         const j = i + 1;
         const sp = decodeSwitchProofFromReader(rd);
-        const ok = verifySwitch({ pk, in0: cur[i]!, in1: cur[j]!, out0: next[i]!, out1: next[j]!, proof: sp });
+        const ok = verifySwitch({ pk, in0: cur[i]!, in1: cur[j]!, out0: next[i]!, out1: next[j]!, proof: sp, context: ctx });
         if (!ok) return { ok: false, error: `invalid switch proof at round=${round} pair=(${i},${j})` };
       }
 
@@ -205,7 +327,7 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
         }
         const X = next[idx]!.c1.subtract(cur[idx]!.c1);
         const Y = next[idx]!.c2.subtract(cur[idx]!.c2);
-        const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+        const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p, context: ctx });
         if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${idx}` };
       } else if (start === 1) {
         const singleIdx0 = 0;
@@ -216,7 +338,7 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
           }
           const X = next[singleIdx0]!.c1.subtract(cur[singleIdx0]!.c1);
           const Y = next[singleIdx0]!.c2.subtract(cur[singleIdx0]!.c2);
-          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p, context: ctx });
           if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${singleIdx0}` };
         }
 
@@ -228,7 +350,7 @@ export function shuffleVerifyV1(pk: GroupElement, deckIn: ElGamalCiphertext[], p
           }
           const X = next[singleIdxLast]!.c1.subtract(cur[singleIdxLast]!.c1);
           const Y = next[singleIdxLast]!.c2.subtract(cur[singleIdxLast]!.c2);
-          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p });
+          const ok = verifyEqDlog({ domain: DOMAIN_REENC, A: G, B: pk, X, Y, proof: p, context: ctx });
           if (!ok) return { ok: false, error: `invalid single proof at round=${round} idx=${singleIdxLast}` };
         }
       }

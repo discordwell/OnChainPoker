@@ -30,10 +30,22 @@ export class Transcript {
 
   challengeScalar(label: string): Scalar {
     const l = utf8(label);
+    // Compute the challenge digest against a clone so the persistent hash
+    // state remains unchanged while we derive this challenge.
     const c = this.h.clone();
     c.update(utf8("challenge"));
     updateLenBytes(c, l);
     const digest = c.digest();
+    // Fold the raw 64-byte challenge digest (pre-reduction) back into the
+    // persistent transcript state, tagged with "chal" and the challenge
+    // label, mirroring the framing used by appendMessage. This binds later
+    // challenges to earlier ones for multi-round protocols. For any
+    // single-challenge caller the value of `digest` above (and thus the
+    // returned scalar) is unchanged from the unfolded implementation, so
+    // the change is backward-compatible for every existing proof.
+    this.h.update(utf8("chal"));
+    updateLenBytes(this.h, l);
+    updateLenBytes(this.h, digest);
     return scalarFromBytesModOrder(digest);
   }
 }

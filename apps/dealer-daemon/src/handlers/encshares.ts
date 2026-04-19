@@ -44,6 +44,28 @@ function asNumber(v: unknown): number | undefined {
   return undefined;
 }
 
+function i64le(v: number | bigint): Uint8Array {
+  // Two's-complement little-endian encoding of a signed 64-bit integer,
+  // matching the Go-side i64le in x/dealer/keeper/logic.go.
+  const out = new Uint8Array(8);
+  let x = BigInt(v);
+  if (x < 0n) x += 1n << 64n;
+  for (let i = 0; i < 8; i++) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
+}
+
+function decodeSaltBytes(raw: unknown): Uint8Array {
+  if (raw instanceof Uint8Array) return raw;
+  if (Array.isArray(raw)) return Uint8Array.from(raw.map((x) => Number(x)));
+  if (typeof raw === "string" && raw.length > 0) {
+    return Uint8Array.from(Buffer.from(raw, "base64"));
+  }
+  throw new Error(`unsupported initHashSalt bytes value: ${typeof raw}`);
+}
+
 export async function handleEncShares(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
@@ -54,21 +76,13 @@ export async function handleEncShares(args: {
 }): Promise<void> {
   const { client, config, stateStore, tableId, handId, epochId } = args;
 
-  const secrets = stateStore.load(epochId);
+  const secrets = await stateStore.load(epochId);
   if (!secrets || secrets.secretShare === "0") {
     log(`EncShares: no secrets for epoch ${epochId}`);
     return;
   }
 
   const secretShare = BigInt(`0x${secrets.secretShare}`);
-  const handScalar = hashToScalar(
-    "ocp/v1/dealer/hand-derive",
-    u64le(epochId),
-    u64le(Number(tableId)),
-    u64le(Number(handId))
-  );
-  const xHand = scalarMul(secretShare, handScalar);
-  const yHand = mulBase(xHand);
 
   // Get the table to find player pubkeys and holePos (on table.hand.dealer)
   const table = await client.getTable(tableId);
@@ -88,12 +102,36 @@ export async function handleEncShares(args: {
     return;
   }
 
-  // Get the dealer hand state for the deck
+  // Get the dealer hand state for the deck + per-hand init entropy (v2 hand-derive).
   const dealerHand = await client.getDealerHand(tableId, handId);
   if (!dealerHand) {
     log(`EncShares: dealer hand not available for table ${tableId} hand ${handId}`);
     return;
   }
+
+  const initHeightRaw = dealerHand.initHeight ?? dealerHand.init_height;
+  const initSaltRaw = dealerHand.initHashSalt ?? dealerHand.init_hash_salt;
+  if (initHeightRaw === undefined || initSaltRaw === undefined) {
+    log(`EncShares: dealer hand missing initHeight/initHashSalt (pre-v2 chain state?)`);
+    return;
+  }
+  const initHeight = BigInt(initHeightRaw as string | number);
+  const initSalt = decodeSaltBytes(initSaltRaw);
+  if (initSalt.length !== 32) {
+    log(`EncShares: initHashSalt must be 32 bytes, got ${initSalt.length}`);
+    return;
+  }
+
+  const handScalar = hashToScalar(
+    "ocp/v1/dealer/hand-derive/v2",
+    u64le(epochId),
+    u64le(Number(tableId)),
+    u64le(Number(handId)),
+    i64le(initHeight),
+    initSalt
+  );
+  const xHand = scalarMul(secretShare, handScalar);
+  const yHand = mulBase(xHand);
 
   const rawDeck = dealerHand.deck ?? [];
   const deck = decodeDeck(rawDeck);

@@ -18,10 +18,10 @@ import type { EpochSecrets } from "../src/state.js";
 class StubStateStore {
   private map = new Map<number, EpochSecrets>();
 
-  save(s: EpochSecrets): void {
+  async save(s: EpochSecrets): Promise<void> {
     this.map.set(s.epochId, s);
   }
-  load(epochId: number): EpochSecrets | null {
+  async load(epochId: number): Promise<EpochSecrets | null> {
     return this.map.get(epochId) ?? null;
   }
   has(epochId: number): boolean {
@@ -145,7 +145,7 @@ describe("handleDkgAggregate", () => {
 
   it("returns true when already computed (secretShare != 0)", async () => {
     const store = new StubStateStore();
-    store.save({
+    await store.save({
       epochId: 1,
       validatorIndex: 1,
       polyCoeffs: ["a"],
@@ -166,7 +166,7 @@ describe("handleDkgAggregate", () => {
     const store = new StubStateStore();
     // Alice's polynomial: f(x) = 5 + 3x (secret=5, threshold=2)
     const alicePoly = [5n, 3n];
-    store.save({
+    await store.save({
       epochId: 1,
       validatorIndex: 1,
       polyCoeffs: alicePoly.map((c) => c.toString(16)),
@@ -196,7 +196,7 @@ describe("handleDkgAggregate", () => {
     });
 
     assert.equal(result, true);
-    const secrets = store.load(1);
+    const secrets = await store.load(1);
     assert.ok(secrets);
     // Aggregated = alicePoly(1) + bobShareToAlice = (5+3) + 9 = 17
     const expected = modQ(evalPoly(alicePoly, 1n) + bobShareToAlice);
@@ -206,7 +206,7 @@ describe("handleDkgAggregate", () => {
   it("parses hex string reveal shares", async () => {
     const store = new StubStateStore();
     const alicePoly = [10n, 20n];
-    store.save({
+    await store.save({
       epochId: 2,
       validatorIndex: 1,
       polyCoeffs: alicePoly.map((c) => c.toString(16)),
@@ -239,7 +239,7 @@ describe("handleDkgAggregate", () => {
   it("parses base64 reveal shares", async () => {
     const store = new StubStateStore();
     const alicePoly = [10n, 20n];
-    store.save({
+    await store.save({
       epochId: 3,
       validatorIndex: 1,
       polyCoeffs: alicePoly.map((c) => c.toString(16)),
@@ -271,7 +271,7 @@ describe("handleDkgAggregate", () => {
   it("skips slashed dealers", async () => {
     const store = new StubStateStore();
     const alicePoly = [5n, 3n];
-    store.save({
+    await store.save({
       epochId: 4,
       validatorIndex: 1,
       polyCoeffs: alicePoly.map((c) => c.toString(16)),
@@ -323,7 +323,7 @@ describe("handleDkgAggregate", () => {
       ];
 
       const store = new StubStateStore();
-      store.save({
+      await store.save({
         epochId: 10,
         validatorIndex: myIndex,
         polyCoeffs: polys[myIdx]!.map((c) => c.toString(16)),
@@ -353,7 +353,7 @@ describe("handleDkgAggregate", () => {
       assert.equal(result, true);
 
       // Verify the aggregated share
-      const secrets = store.load(10);
+      const secrets = await store.load(10);
       assert.ok(secrets);
       let expectedAgg = 0n;
       for (const poly of polys) {

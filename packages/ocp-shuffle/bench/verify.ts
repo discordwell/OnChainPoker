@@ -62,7 +62,7 @@ async function main() {
   const pk = mulBase(123n);
   const deckIn = makeDeck(pk, n);
 
-  const { proofBytes } = shuffleProveV1(pk, deckIn, { seed: new Uint8Array(32).fill(2), rounds });
+  const { proofBytes } = shuffleProveV1(pk, deckIn, { seedUnsafeForTestsOnly: new Uint8Array(32).fill(2), rounds });
 
   // Warmup
   const warm = shuffleVerifyV1(pk, deckIn, proofBytes);

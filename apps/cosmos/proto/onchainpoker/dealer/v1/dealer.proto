@@ -6,12 +6,18 @@ option go_package = "x/dealer/types";
 option (gogoproto.equal_all) = true;
 
 import "gogoproto/gogo.proto";
+import "cosmos_proto/cosmos.proto";
 
 message GenesisState {
   uint64 next_epoch_id = 1;
   DealerEpoch epoch = 2 [(gogoproto.nullable) = true];
   DealerDKG dkg = 3 [(gogoproto.nullable) = true];
   Params params = 4 [(gogoproto.nullable) = false];
+
+  // Randomness-beacon commit-reveal state for the upcoming epoch (if any).
+  // NOTE: after editing this file, regenerate generated Go code with:
+  //   cd apps/cosmos/proto && buf generate
+  BeaconState beacon = 5 [(gogoproto.nullable) = true];
 }
 
 // Params defines the x/dealer module parameters.
@@ -136,6 +142,57 @@ message DealerReveal {
   uint32 card_id = 2; // 0..51
 }
 
+// BeaconState tracks the commit-reveal randomness beacon for an upcoming
+// epoch. It is written when the dealer module opens a beacon window and is
+// consumed when that epoch is begun.
+//
+// Security: unlike DevnetRandEpoch (proposer-influenceable block hash mix),
+// the beacon output is fixed by an adversary-agnostic mechanism: all commits
+// must be posted before any salt is revealed.
+message BeaconState {
+  // Epoch id this beacon will seed once the reveal window closes.
+  uint64 epoch_id = 1;
+
+  // Block height at which the commit window opens / closes.
+  int64 commit_open_height = 2;
+  int64 commit_close_height = 3;
+
+  // Block height at which the reveal window closes.
+  int64 reveal_close_height = 4;
+
+  // Minimum number of revealed salts required to produce a non-fallback
+  // beacon. If fewer reveals are received, the epoch falls back to devnet
+  // randomness (allowed only on devnet/local chain ids) and emits an event.
+  uint32 threshold = 5;
+
+  // Validator commits (sorted lexicographically by validator).
+  repeated BeaconCommitEntry commits = 6 [(gogoproto.nullable) = false];
+
+  // Validator reveals (sorted lexicographically by validator). Only validators
+  // that committed may appear here.
+  repeated BeaconRevealEntry reveals = 7 [(gogoproto.nullable) = false];
+
+  // Finalized beacon output (32 bytes). Empty until the reveal window closes
+  // and the chain consumes the state to compute the final value.
+  bytes final = 8;
+
+  // True if finalization used the fallback (insufficient reveals or non-prod
+  // chain id). Auditable via FinalizeBeacon event.
+  bool fallback = 9;
+}
+
+message BeaconCommitEntry {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // 32-byte sha256 commit.
+  bytes commit = 2;
+}
+
+message BeaconRevealEntry {
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  // 32-byte salt whose H() matched the stored commit.
+  bytes salt = 2;
+}
+
 message DealerHand {
   uint64 epoch_id = 1;
   bytes pk_hand = 2;
@@ -152,4 +209,13 @@ message DealerHand {
   repeated DealerPubShare pub_shares = 9 [(gogoproto.nullable) = false];
   repeated DealerEncShare enc_shares = 10 [(gogoproto.nullable) = false];
   repeated DealerReveal reveals = 11 [(gogoproto.nullable) = false];
+
+  // Per-hand init-time block entropy mixed into k_hand (v2 hand-derive).
+  // Captured at InitHand from sdkCtx.BlockHeight() and sdkCtx.BlockHeader().LastBlockId.Hash.
+  // Purpose: bound the retroactive-decryption window if the epoch secret later leaks —
+  // without these, k_hand is publicly recomputable from (epochId, tableId, handId) alone,
+  // so leaking the epoch secret decrypts every past hand in the epoch. Binding to
+  // per-hand block entropy that the attacker cannot grind after the fact raises the bar.
+  int64 init_height = 20;
+  bytes init_hash_salt = 21; // 32 bytes (LastBlockId.Hash at init time)
 }

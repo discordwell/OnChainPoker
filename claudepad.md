@@ -2,6 +2,22 @@
 
 ## Session Summaries
 
+### 2026-04-19T~UTC — Cryptographic Audit + 10-Issue Fix Integration
+Full crypto audit of the dealer protocol, then 10 parallel opus sub-agents (one per finding) in isolated worktrees, manually merged back:
+- **Critical finding**: DKG reveals were publishing plaintext shares `f_i(j)` on-chain — every observer could Lagrange-interpolate the full epoch secret. Threshold trust was effectively null.
+- **Fix #1** (Agent 1 — ocp-crypto): New NIZK primitive `dkgEncShareProve`/`dkgEncShareVerify` at `packages/ocp-crypto/src/proofs/dkgEncShare.ts` (160-byte proof, domain `"ocp/v1/dkg/encshare"`). Proves ElGamal ciphertext `(U,V)` under recipient pk is consistent with Feldman commitments evaluated at recipient index. Design doc at `docs/DKG-V2.md` (not yet wired on-chain).
+- **Fix #2** (Agent 2): Moved `packages/dkg` (toy 61-bit Schnorr, default `seed="seed"`, `hmacToy`) → `deprecated/dkg-prototype/` with `DEPRECATED.md`. Removed from workspace scripts.
+- **Fix #3** (Agent 3): Commit-reveal randomness beacon replacing proposer-influenceable `DevnetRandEpoch` for committee selection. New proto msgs `MsgBeaconCommit`/`MsgBeaconReveal`, `BeaconState` object, `beacon.go` pure helpers (commit/reveal/final), keeper handlers, `selectRandEpochForSampling` gated to devnet chain ids. Fallback only on chain id matching `/devnet|local/i`.
+- **Fix #4** (Agent 4): Per-hand forward-secrecy hedge. `deriveHandScalar` v2 signature `(epochID, tableID, handID, initHeight int64, initSalt []byte)` with domain `"ocp/v1/dealer/hand-derive/v2"`. `DealerHand` proto gains `init_height=20` / `init_hash_salt=21`; `InitHand` captures `sdkCtx.BlockHeader().LastBlockId.Hash`; `SubmitEncShare`/`SubmitPubShare` read from `dh`. Daemon-side TS updated too.
+- **Fix #5** (Agent 5): argon2id KDF in `apps/dealer-daemon/src/state.ts` via `@node-rs/argon2` (memoryCost 64 MiB, timeCost 3, ~80ms on M4 Max). v2 file format `0x02 || salt(16) || iv(12) || tag(16) || ct`; v1 legacy auto-migrates on next save. Empty passphrase throws unless `DEALER_STATE_ALLOW_UNENCRYPTED=1`. `save`/`load` now async — all callers `await`ed.
+- **Fix #6** (Agent 6): Shuffle proof v2 binds `(tableId, handId, round, shuffler)` into every Fiat-Shamir transcript (TS + Go). Wire format: `u64le(tableId)||u64le(handId)||u16le(round)||u16le(shufflerLen)||shuffler_utf8`. `BuildShuffleContext` helper added in both languages. v1 path retained for backward compat.
+- **Fix #7** (Agent 7): `ShuffleProveOpts.seed` → `seedUnsafeForTestsOnly`; throws unless `NODE_ENV=test` or `OCP_ALLOW_UNSAFE_SEED=1`. Prevents nonce-reuse leakage (rho recovery via `(z1-z2)/(e1-e2)`). Production daemon now uses library's internal `randomBytes(32)`.
+- **Fix #8** (Agent 8): `dkgTranscriptRoot` replaced `json.Marshal` with canonical length-prefixed binary encoding (domain `"ocp/v1/dkg/transcript/v2"`). Defensive sort of all slices. 32 field-sensitivity subtests.
+- **Fix #9** (Agent 9): `Transcript.challengeScalar` folds challenge digest back into persistent state in both TS and Go. Structured so single-challenge callers produce byte-identical outputs (every existing proof still verifies — vectors unchanged).
+- **Fix #10** (Agent 10): `pointToCardID` O(1) map lookup via `init()`-populated `cardPointByBytes`. Benchmark: ~65-130x faster.
+- **Integration**: Manual 3-way merges on `logic.go` (agents 4+8+10), `msg_server.go` (3+4+6), `dealer.proto` (3+4), `encshares.ts`/`pubshares.ts` (4+5), `msg_server_overflow_test.go` (3+6). Installed `buf` + `protoc-gen-gogo` via `go install`; regen'd `.pb.go`; dropped `dealer_beacon_regen` build tags.
+- **Tests**: Go `apps/cosmos/...` + `apps/chain/...` green. `pnpm -r build` clean (13 projects). ocp-crypto 27/27, ocp-shuffle 21/21, dealer-daemon 26/26. Pre-existing coordinator `http-dealer-next` 2 failures unchanged (not touched by any agent).
+
 ### 2026-03-28T~UTC — Post-Launch Polish (Batches 1-4)
 Executed the full polish plan:
 - **Batch 1 (Quick Wins)**: Volume slider in sidebar Audio section, identicons in PixiJS seat sprites (cached per-address), collapsible hand history with `<details>`, inline style cleanup skipped (low priority).

@@ -34,8 +34,11 @@ func dlogDiff(inCt ocpcrypto.ElGamalCiphertext, outCt ocpcrypto.ElGamalCiphertex
 	return X, Y
 }
 
-func switchChallenge(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, t1 [4]ocpcrypto.Point, t2 [4]ocpcrypto.Point) (ocpcrypto.Scalar, error) {
+func switchChallenge(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, t1 [4]ocpcrypto.Point, t2 [4]ocpcrypto.Point, context []byte) (ocpcrypto.Scalar, error) {
 	tr := ocpcrypto.NewTranscript(domainSwitch)
+	if context != nil {
+		_ = tr.AppendMessage("ctx", context)
+	}
 	_ = tr.AppendMessage("pk", pk.Bytes())
 	_ = tr.AppendMessage("in0.c1", in0.C1.Bytes())
 	_ = tr.AppendMessage("in0.c2", in0.C2.Bytes())
@@ -54,7 +57,7 @@ func switchChallenge(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 oc
 	return tr.ChallengeScalar("e")
 }
 
-func proveSwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, swapped bool, rho0 ocpcrypto.Scalar, rho1 ocpcrypto.Scalar, rng scalarRng) (SwitchProof, error) {
+func proveSwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, swapped bool, rho0 ocpcrypto.Scalar, rho1 ocpcrypto.Scalar, rng scalarRng, context []byte) (SwitchProof, error) {
 	// Public relations:
 	// branch0:
 	//  rel0: out0 vs in0
@@ -119,7 +122,7 @@ func proveSwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcry
 	t1[realIdxs[1]] = ocpcrypto.MulPoint(G, w1)
 	t2[realIdxs[1]] = ocpcrypto.MulPoint(pk, w1)
 
-	e, err := switchChallenge(pk, in0, in1, out0, out1, t1, t2)
+	e, err := switchChallenge(pk, in0, in1, out0, out1, t1, t2, context)
 	if err != nil {
 		return SwitchProof{}, err
 	}
@@ -141,7 +144,7 @@ func proveSwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcry
 	return SwitchProof{E0: e0, T1: t1, T2: t2, Z: z}, nil
 }
 
-func verifySwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, proof SwitchProof) (bool, error) {
+func verifySwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcrypto.ElGamalCiphertext, out0 ocpcrypto.ElGamalCiphertext, out1 ocpcrypto.ElGamalCiphertext, proof SwitchProof, context []byte) (bool, error) {
 	// Enforce non-zero re-randomization: output c1 must not reuse either input c1 verbatim.
 	if ocpcrypto.PointEq(out0.C1, in0.C1) || ocpcrypto.PointEq(out0.C1, in1.C1) {
 		return false, nil
@@ -150,7 +153,7 @@ func verifySwitch(pk ocpcrypto.Point, in0 ocpcrypto.ElGamalCiphertext, in1 ocpcr
 		return false, nil
 	}
 
-	e, err := switchChallenge(pk, in0, in1, out0, out1, proof.T1, proof.T2)
+	e, err := switchChallenge(pk, in0, in1, out0, out1, proof.T1, proof.T2, context)
 	if err != nil {
 		return false, err
 	}

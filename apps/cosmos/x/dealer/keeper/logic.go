@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -21,10 +20,14 @@ import (
 )
 
 const (
-	handDeriveDomain = "ocp/v1/dealer/hand-derive"
-	deckInitDomain   = "ocp/v1/dealer/deck-init"
+	// handDeriveDomain is the legacy v1 domain separator. Superseded by
+	// handDeriveDomainV2 which binds per-hand block entropy into k_hand.
+	// Kept here only to document the rotation; no live code path uses it.
+	handDeriveDomain   = "ocp/v1/dealer/hand-derive"
+	handDeriveDomainV2 = "ocp/v1/dealer/hand-derive/v2"
+	deckInitDomain     = "ocp/v1/dealer/deck-init"
 
-	dkgTranscriptDomain = "ocp/v1/dkg/transcript"
+	dkgTranscriptDomain = "ocp/v1/dkg/transcript/v2"
 
 	dkgShareMsgMagicV1  = "OCP1"
 	dkgShareMsgDomainV1 = "ocp/dkg/sharemsg/v1"
@@ -57,8 +60,23 @@ func u16le(x uint16) []byte {
 	return b
 }
 
-func deriveHandScalar(epochID, tableID, handID uint64) (ocpcrypto.Scalar, error) {
-	return ocpcrypto.HashToScalar(handDeriveDomain, u64le(epochID), u64le(tableID), u64le(handID))
+// deriveHandScalar computes k_hand for a given hand, binding the per-hand block
+// entropy (initHeight, initSalt) captured at InitHand time. This mitigates
+// retroactive decryption if the epoch secret later leaks: an attacker must also
+// know the init-time block data, which they cannot influence after the hand is
+// initialized. initSalt must be exactly 32 bytes (the LastBlockId.Hash at init).
+func deriveHandScalar(epochID, tableID, handID uint64, initHeight int64, initSalt []byte) (ocpcrypto.Scalar, error) {
+	if len(initSalt) != 32 {
+		return ocpcrypto.Scalar{}, fmt.Errorf("deriveHandScalar: initSalt must be 32 bytes, got %d", len(initSalt))
+	}
+	return ocpcrypto.HashToScalar(
+		handDeriveDomainV2,
+		u64le(epochID),
+		u64le(tableID),
+		u64le(handID),
+		i64le(initHeight),
+		initSalt,
+	)
 }
 
 func hashToNonzeroScalar(domain string, msgs ...[]byte) (ocpcrypto.Scalar, error) {
@@ -90,14 +108,29 @@ func cardPoint(cardID int) ocpcrypto.Point {
 	return ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(uint64(cardID + 1)))
 }
 
+// cardPointByBytes maps the canonical 32-byte encoding of each valid card
+// point M_c = (c+1)*G (for c in [0, 52)) to its cardID. It is built eagerly
+// at package init so that pointToCardID runs in O(1) instead of scanning all
+// 52 card points on every board reveal / showdown (consensus-critical code).
+//
+// ocpcrypto.Point contains a non-comparable ristretto255.Element (slice-based
+// internals), so we key on the string form of its canonical encoding, which
+// Go's map compares byte-for-byte.
+var cardPointByBytes map[string]uint32
+
+func init() {
+	cardPointByBytes = make(map[string]uint32, 52)
+	for c := 0; c < 52; c++ {
+		cardPointByBytes[string(cardPoint(c).Bytes())] = uint32(c)
+	}
+}
+
 func pointToCardID(p ocpcrypto.Point, deckSize int) (uint32, error) {
 	if deckSize <= 0 || deckSize > 52 {
 		deckSize = 52
 	}
-	for c := 0; c < deckSize; c++ {
-		if ocpcrypto.PointEq(p, cardPoint(c)) {
-			return uint32(c), nil
-		}
+	if id, ok := cardPointByBytes[string(p.Bytes())]; ok && int(id) < deckSize {
+		return id, nil
 	}
 	return 0, fmt.Errorf("plaintext does not map to a known card id")
 }
@@ -319,45 +352,154 @@ func epochQualMembers(epoch *types.DealerEpoch) []types.DealerMember {
 
 // ---- Transcript root ----
 
+// dkgTranscriptRoot computes the canonical DKG epoch transcript root as
+// sha256( domain || encoding ), where `encoding` is a deterministic
+// length-prefixed binary serialization of the DealerDKG state.
+//
+// Format (all integers little-endian, all len-prefixed fields use u32le(len)||bytes):
+//
+//	u64le(epochId)
+//	u32le(threshold)
+//	u32le(len(members)) || for each member:
+//	    len-prefixed(validator) || u32le(index) || i64le(power) || len-prefixed(consPubkey)
+//	i64le(startHeight)
+//	i64le(commitDeadline)
+//	i64le(complaintDeadline)
+//	i64le(revealDeadline)
+//	i64le(finalizeDeadline)
+//	len-prefixed(randEpoch)
+//	u32le(len(commits)) || for each commit:
+//	    len-prefixed(dealer) || u32le(len(commitments)) || for each: len-prefixed(bytes)
+//	u32le(len(complaints)) || for each:
+//	    u64le(epochId) || len-prefixed(complainer) || len-prefixed(dealer) || len-prefixed(kind) || len-prefixed(shareMsg)
+//	u32le(len(reveals)) || for each:
+//	    u64le(epochId) || len-prefixed(dealer) || len-prefixed(to) || len-prefixed(share)
+//	u32le(len(slashed)) || for each: len-prefixed(valoper)
+//
+// PubShare is intentionally excluded because it is derived output populated
+// only at finalize; the transcript root commits to the inputs to that
+// derivation (Members identities + Commits), not the derived values.
+//
+// This function defensively sorts all slices so the root is independent of
+// caller-side ordering. Callers in msg_server.go already sort, so the sorts
+// here are no-ops on the canonical path.
 func dkgTranscriptRoot(dkg *types.DealerDKG) ([]byte, error) {
 	if dkg == nil {
 		return nil, fmt.Errorf("dkg is nil")
 	}
-	view := struct {
-		EpochID           uint64                       `json:"epochId"`
-		Threshold         uint32                       `json:"threshold"`
-		Members           []types.DealerMember         `json:"members"`
-		StartHeight       int64                        `json:"startHeight"`
-		CommitDeadline    int64                        `json:"commitDeadline"`
-		ComplaintDeadline int64                        `json:"complaintDeadline"`
-		RevealDeadline    int64                        `json:"revealDeadline"`
-		FinalizeDeadline  int64                        `json:"finalizeDeadline"`
-		RandEpoch         []byte                       `json:"randEpoch,omitempty"`
-		Commits           []types.DealerDKGCommit      `json:"commits,omitempty"`
-		Complaints        []types.DealerDKGComplaint   `json:"complaints,omitempty"`
-		Reveals           []types.DealerDKGShareReveal `json:"reveals,omitempty"`
-		Slashed           []string                     `json:"slashed,omitempty"`
-	}{
-		EpochID:           dkg.EpochId,
-		Threshold:         dkg.Threshold,
-		Members:           dkg.Members,
-		StartHeight:       dkg.StartHeight,
-		CommitDeadline:    dkg.CommitDeadline,
-		ComplaintDeadline: dkg.ComplaintDeadline,
-		RevealDeadline:    dkg.RevealDeadline,
-		FinalizeDeadline:  dkg.FinalizeDeadline,
-		RandEpoch:         dkg.RandEpoch,
-		Commits:           dkg.Commits,
-		Complaints:        dkg.Complaints,
-		Reveals:           dkg.Reveals,
-		Slashed:           dkg.Slashed,
+
+	// Defensive copies so we can sort without mutating the caller's slices.
+	members := append([]types.DealerMember(nil), dkg.Members...)
+	sort.Slice(members, func(i, j int) bool {
+		if members[i].Validator != members[j].Validator {
+			return members[i].Validator < members[j].Validator
+		}
+		return members[i].Index < members[j].Index
+	})
+	commits := append([]types.DealerDKGCommit(nil), dkg.Commits...)
+	sort.Slice(commits, func(i, j int) bool { return commits[i].Dealer < commits[j].Dealer })
+	complaints := append([]types.DealerDKGComplaint(nil), dkg.Complaints...)
+	sort.Slice(complaints, func(i, j int) bool {
+		if complaints[i].Dealer != complaints[j].Dealer {
+			return complaints[i].Dealer < complaints[j].Dealer
+		}
+		return complaints[i].Complainer < complaints[j].Complainer
+	})
+	reveals := append([]types.DealerDKGShareReveal(nil), dkg.Reveals...)
+	sort.Slice(reveals, func(i, j int) bool {
+		if reveals[i].Dealer != reveals[j].Dealer {
+			return reveals[i].Dealer < reveals[j].Dealer
+		}
+		return reveals[i].To < reveals[j].To
+	})
+	slashed := append([]string(nil), dkg.Slashed...)
+	sort.Strings(slashed)
+
+	var buf bytes.Buffer
+	// Scalars.
+	_, _ = buf.Write(u64le(dkg.EpochId))
+	_, _ = buf.Write(u32leLocal(dkg.Threshold))
+
+	// Members.
+	_, _ = buf.Write(u32leLocal(uint32(len(members))))
+	for _, mem := range members {
+		writeLenBytes(&buf, []byte(mem.Validator))
+		_, _ = buf.Write(u32leLocal(mem.Index))
+		_, _ = buf.Write(i64le(mem.Power))
+		writeLenBytes(&buf, mem.ConsPubkey)
 	}
-	b, err := json.Marshal(view)
-	if err != nil {
-		return nil, err
+
+	// Deadlines / start height.
+	_, _ = buf.Write(i64le(dkg.StartHeight))
+	_, _ = buf.Write(i64le(dkg.CommitDeadline))
+	_, _ = buf.Write(i64le(dkg.ComplaintDeadline))
+	_, _ = buf.Write(i64le(dkg.RevealDeadline))
+	_, _ = buf.Write(i64le(dkg.FinalizeDeadline))
+
+	// RandEpoch.
+	writeLenBytes(&buf, dkg.RandEpoch)
+
+	// Commits.
+	_, _ = buf.Write(u32leLocal(uint32(len(commits))))
+	for _, c := range commits {
+		writeLenBytes(&buf, []byte(c.Dealer))
+		_, _ = buf.Write(u32leLocal(uint32(len(c.Commitments))))
+		for _, cm := range c.Commitments {
+			writeLenBytes(&buf, cm)
+		}
 	}
-	sum := sha256.Sum256(append([]byte(dkgTranscriptDomain), b...))
-	return sum[:], nil
+
+	// Complaints.
+	_, _ = buf.Write(u32leLocal(uint32(len(complaints))))
+	for _, cp := range complaints {
+		_, _ = buf.Write(u64le(cp.EpochId))
+		writeLenBytes(&buf, []byte(cp.Complainer))
+		writeLenBytes(&buf, []byte(cp.Dealer))
+		writeLenBytes(&buf, []byte(cp.Kind))
+		writeLenBytes(&buf, cp.ShareMsg)
+	}
+
+	// Reveals.
+	_, _ = buf.Write(u32leLocal(uint32(len(reveals))))
+	for _, r := range reveals {
+		_, _ = buf.Write(u64le(r.EpochId))
+		writeLenBytes(&buf, []byte(r.Dealer))
+		writeLenBytes(&buf, []byte(r.To))
+		writeLenBytes(&buf, r.Share)
+	}
+
+	// Slashed.
+	_, _ = buf.Write(u32leLocal(uint32(len(slashed))))
+	for _, s := range slashed {
+		writeLenBytes(&buf, []byte(s))
+	}
+
+	h := sha256.New()
+	h.Write([]byte(dkgTranscriptDomain))
+	h.Write(buf.Bytes())
+	return h.Sum(nil), nil
+}
+
+// u32leLocal / i64le are local little-endian helpers. u64le already exists
+// above. We keep them package-local rather than pulling in ocpcrypto's
+// unexported helpers.
+func u32leLocal(x uint32) []byte {
+	b := make([]byte, 4)
+	binary.LittleEndian.PutUint32(b, x)
+	return b
+}
+
+func i64le(x int64) []byte {
+	b := make([]byte, 8)
+	binary.LittleEndian.PutUint64(b, uint64(x))
+	return b
+}
+
+// writeLenBytes writes u32le(len(p)) || p to buf, mirroring
+// ocpcrypto.updateLenBytes but targeting a bytes.Buffer.
+func writeLenBytes(buf *bytes.Buffer, p []byte) {
+	buf.Write(u32leLocal(uint32(len(p))))
+	buf.Write(p)
 }
 
 // ---- Hand helpers ----
@@ -536,7 +678,12 @@ func isHolePos(meta *pokertypes.DealerMeta, h *pokertypes.Hand, pos uint32) (sea
 
 // ---- Shuffle verification ----
 
-func verifyShuffle(pkHandBytes []byte, deckIn []types.DealerCiphertext, proofBytes []byte) ([]types.DealerCiphertext, string, error) {
+// verifyShuffle verifies a shuffle proof. `context` must be nil for legacy v1
+// proofs and non-nil for v2 proofs. Callers should pass the canonical context
+// bytes built via ocpshuffle.BuildShuffleContext(tableID, handID, round,
+// shuffler) so that the Fiat-Shamir transcripts bind full request context and
+// reject any cross-hand / cross-round replay.
+func verifyShuffle(pkHandBytes []byte, deckIn []types.DealerCiphertext, proofBytes []byte, context []byte) ([]types.DealerCiphertext, string, error) {
 	pkHand, err := ocpcrypto.PointFromBytesCanonical(pkHandBytes)
 	if err != nil {
 		return nil, "", fmt.Errorf("pkHand invalid: %w", err)
@@ -555,7 +702,7 @@ func verifyShuffle(pkHandBytes []byte, deckIn []types.DealerCiphertext, proofByt
 		in = append(in, ocpcrypto.ElGamalCiphertext{C1: c1, C2: c2})
 	}
 
-	vr := ocpshuffle.ShuffleVerifyV1(pkHand, in, proofBytes)
+	vr := ocpshuffle.ShuffleVerifyV1(pkHand, in, proofBytes, context)
 	if !vr.OK {
 		return nil, "", fmt.Errorf("shuffle verify failed: %s", vr.Error)
 	}

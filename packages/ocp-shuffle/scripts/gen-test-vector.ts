@@ -22,7 +22,7 @@ function main() {
   const pk = mulBase(123n);
   const deckIn = makeDeck(pk, n);
 
-  const { proofBytes } = shuffleProveV1(pk, deckIn, { seed, rounds });
+  const { proofBytes } = shuffleProveV1(pk, deckIn, { seedUnsafeForTestsOnly: seed, rounds });
   const vr = shuffleVerifyV1(pk, deckIn, proofBytes);
   if (!vr.ok) throw new Error(`self-check failed: ${vr.error}`);
 

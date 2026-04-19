@@ -69,7 +69,7 @@ export async function handleDkgCommit(args: {
   });
 
   // Store the polynomial now; we'll compute the aggregated share after reveals.
-  stateStore.save({
+  await stateStore.save({
     epochId,
     validatorIndex: myMember.index,
     polyCoeffs: polyCoeffs.map((c) => c.toString(16)),
@@ -154,7 +154,7 @@ export async function handleDkgReveals(args: {
 
   const myAddress = config.validatorAddress.toLowerCase();
 
-  const secrets = stateStore.load(epochId);
+  const secrets = await stateStore.load(epochId);
   if (!secrets) return; // haven't committed
 
   const polyCoeffs = secrets.polyCoeffs.map((c) => BigInt(`0x${c}`));
@@ -220,7 +220,7 @@ export async function handleDkgAggregate(args: {
 }): Promise<boolean> {
   const { stateStore, config, epochId, members, dkg } = args;
 
-  const secrets = stateStore.load(epochId);
+  const secrets = await stateStore.load(epochId);
   if (!secrets) return false;
   if (secrets.secretShare !== "0") return true; // already computed
 
@@ -312,7 +312,7 @@ export async function handleDkgAggregate(args: {
 
   // Clone before mutation to avoid corrupting cache if save() fails
   const updated = { ...secrets, secretShare: aggregated.toString(16) };
-  stateStore.save(updated);
+  await stateStore.save(updated);
   log(
     `DKG: computed aggregated secret share for epoch ${epochId} from ${revealCount + 1} contributions`
   );

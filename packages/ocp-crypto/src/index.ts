@@ -52,3 +52,13 @@ export {
   decodeEncShareProof,
   encodeEncShareProof,
 } from "./proofs/encShare.js";
+export {
+  type DkgEncShareProof,
+  DKG_ENC_SHARE_DOMAIN,
+  DKG_ENC_SHARE_PROOF_BYTES,
+  dkgEncShareProve,
+  dkgEncShareVerify,
+  decodeDkgEncShareProof,
+  encodeDkgEncShareProof,
+  evalCommitments,
+} from "./proofs/dkgEncShare.js";

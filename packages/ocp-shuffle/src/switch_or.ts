@@ -52,9 +52,11 @@ function switchChallenge(params: {
   out1: ElGamalCiphertext;
   t1: GroupElement[];
   t2: GroupElement[];
+  context?: Uint8Array;
 }): Scalar {
-  const { pk, in0, in1, out0, out1, t1, t2 } = params;
+  const { pk, in0, in1, out0, out1, t1, t2, context } = params;
   const tr = new Transcript(DOMAIN_SWITCH);
+  if (context !== undefined) tr.appendMessage("ctx", context);
   tr.appendMessage("pk", groupElementToBytes(pk));
   tr.appendMessage("in0.c1", groupElementToBytes(in0.c1));
   tr.appendMessage("in0.c2", groupElementToBytes(in0.c2));
@@ -79,8 +81,11 @@ export function proveSwitch(params: {
   rho0: Scalar;
   rho1: Scalar;
   rng: ScalarRng;
+  // Optional context (defense-in-depth binding). Undefined for v1 callers;
+  // v2 callers pass canonical context bytes. See shuffle_v1.ts for wire format.
+  context?: Uint8Array;
 }): SwitchProof {
-  const { pk, in0, in1, out0, out1, swapped, rho0, rho1, rng } = params;
+  const { pk, in0, in1, out0, out1, swapped, rho0, rho1, rng, context } = params;
 
   // Public relations:
   // branch0:
@@ -122,7 +127,7 @@ export function proveSwitch(params: {
   t1[realRelIdxs[1]!] = mulPoint(G, w1);
   t2[realRelIdxs[1]!] = mulPoint(pk, w1);
 
-  const e = switchChallenge({ pk, in0, in1, out0, out1, t1, t2 });
+  const e = switchChallenge({ pk, in0, in1, out0, out1, t1, t2, context });
 
   let e0: Scalar;
   let e1: Scalar;
@@ -153,14 +158,15 @@ export function verifySwitch(params: {
   out0: ElGamalCiphertext;
   out1: ElGamalCiphertext;
   proof: SwitchProof;
+  context?: Uint8Array;
 }): boolean {
-  const { pk, in0, in1, out0, out1, proof } = params;
+  const { pk, in0, in1, out0, out1, proof, context } = params;
 
   // Enforce non-zero re-randomization: output c1 must not reuse either input c1 verbatim.
   if (pointEq(out0.c1, in0.c1) || pointEq(out0.c1, in1.c1)) return false;
   if (pointEq(out1.c1, in0.c1) || pointEq(out1.c1, in1.c1)) return false;
 
-  const e = switchChallenge({ pk, in0, in1, out0, out1, t1: proof.t1, t2: proof.t2 });
+  const e = switchChallenge({ pk, in0, in1, out0, out1, t1: proof.t1, t2: proof.t2, context });
   const e1 = scalarSub(e, proof.e0);
 
   {

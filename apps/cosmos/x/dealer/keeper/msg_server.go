@@ -11,6 +11,7 @@ import (
 	sdk "github.com/cosmos/cosmos-sdk/types"
 
 	"onchainpoker/apps/cosmos/internal/ocpcrypto"
+	"onchainpoker/apps/cosmos/internal/ocpshuffle"
 	dealertypes "onchainpoker/apps/cosmos/x/dealer/types"
 	pokertypes "onchainpoker/apps/cosmos/x/poker/types"
 )
@@ -100,7 +101,16 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
 	}
 
-	members, randEpoch, err := sampleMembers(ctx, m.committeeStakingKeeper, epochID, req.RandEpoch, int(req.CommitteeSize))
+	// Resolve the randomness source for this epoch. On production chain ids
+	// this requires a closed randomness-beacon window; devnet/local fall back
+	// to the caller-supplied rand_epoch or DevnetRandEpoch. See
+	// x/dealer/keeper/beacon_select.go (and beacon_select_beacon.go for the
+	// regen-tagged beacon path).
+	randBytes, err := m.selectRandEpochForSampling(ctx, epochID, req.RandEpoch)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap(err.Error())
+	}
+	members, randEpoch, err := sampleMembers(ctx, m.committeeStakingKeeper, epochID, randBytes, int(req.CommitteeSize))
 	if err != nil {
 		return nil, err
 	}
@@ -753,7 +763,21 @@ func (m msgServer) InitHand(ctx context.Context, req *dealertypes.MsgInitHand) (
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("invalid deck_size %d", deckSize)
 	}
 
-	k, err := deriveHandScalar(epoch.EpochId, t.Id, h.HandId)
+	// Capture per-hand init-time block entropy to mix into k_hand (v2 hand-derive).
+	// Without per-hand entropy, leaking the epoch secret would retroactively decrypt
+	// every hand in the epoch. LastBlockId.Hash is already fixed at init time, so a
+	// future attacker cannot grind it after the fact.
+	sdkCtxInit := sdk.UnwrapSDKContext(ctx)
+	initHeight := sdkCtxInit.BlockHeight()
+	initSalt := append([]byte(nil), sdkCtxInit.BlockHeader().LastBlockId.Hash...)
+	if len(initSalt) != 32 {
+		// Genesis / empty prior block hash: pad to 32 zero bytes deterministically.
+		padded := make([]byte, 32)
+		copy(padded, initSalt)
+		initSalt = padded
+	}
+
+	k, err := deriveHandScalar(epoch.EpochId, t.Id, h.HandId, initHeight, initSalt)
 	if err != nil {
 		return nil, err
 	}
@@ -801,6 +825,9 @@ func (m msgServer) InitHand(ctx context.Context, req *dealertypes.MsgInitHand) (
 		PubShares:          []dealertypes.DealerPubShare{},
 		EncShares:          []dealertypes.DealerEncShare{},
 		Reveals:            []dealertypes.DealerReveal{},
+		// Per-hand block entropy (proto fields 20/21). Requires proto regen.
+		InitHeight:   initHeight,
+		InitHashSalt: initSalt,
 	}
 
 	// Update poker meta.
@@ -908,7 +935,14 @@ func (m msgServer) SubmitShuffle(ctx context.Context, req *dealertypes.MsgSubmit
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("unexpected shuffler: expected %s got %s", expectID, req.Shuffler)
 	}
 
-	deckOut, proofHash, err := verifyShuffle(dh.PkHand, dh.Deck, req.ProofShuffle)
+	// Build canonical context bytes (must match what the prover bound into
+	// the Fiat-Shamir transcript). Shared byte-for-byte with the TS prover.
+	shuffleCtx, err := ocpshuffle.BuildShuffleContext(req.TableId, req.HandId, uint16(req.Round), req.Shuffler)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("failed to build shuffle context: %s", err.Error())
+	}
+
+	deckOut, proofHash, err := verifyShuffle(dh.PkHand, dh.Deck, req.ProofShuffle, shuffleCtx)
 	if err != nil {
 		return nil, err
 	}
@@ -1060,7 +1094,7 @@ func (m msgServer) SubmitEncShare(ctx context.Context, req *dealertypes.MsgSubmi
 		}
 	}
 
-	k, err := deriveHandScalar(dh.EpochId, t.Id, h.HandId)
+	k, err := deriveHandScalar(dh.EpochId, t.Id, h.HandId, dh.InitHeight, dh.InitHashSalt)
 	if err != nil {
 		return nil, err
 	}
@@ -1226,7 +1260,7 @@ func (m msgServer) SubmitPubShare(ctx context.Context, req *dealertypes.MsgSubmi
 		}
 	}
 
-	k, err := deriveHandScalar(dh.EpochId, t.Id, h.HandId)
+	k, err := deriveHandScalar(dh.EpochId, t.Id, h.HandId, dh.InitHeight, dh.InitHashSalt)
 	if err != nil {
 		return nil, err
 	}

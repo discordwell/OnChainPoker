@@ -69,3 +69,10 @@ CLAUDE.md
 
 # Local runtime artifacts
 .tmp/
+
+# Local scratch
+buildplan.md
+architecture-deep-dive.ts
+
+# Claude Code worktrees and session artifacts
+.claude/

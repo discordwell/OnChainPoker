@@ -25,6 +25,11 @@ export type EqDlogProof = {
 
 // Prove knowledge of x such that:
 //   X = x*A and Y = x*B
+//
+// Optional `context`: if provided (non-undefined), it's bound into the
+// Fiat-Shamir transcript via `appendMessage("ctx", context)` right after the
+// domain separator. Callers from the v1 shuffle path must omit it (pass
+// undefined) for backward compatibility; v2 callers pass non-empty bytes.
 export function proveEqDlog(params: {
   domain: string;
   A: GroupElement;
@@ -33,14 +38,16 @@ export function proveEqDlog(params: {
   Y: GroupElement;
   x: Scalar;
   rng: ScalarRng;
+  context?: Uint8Array;
 }): EqDlogProof {
-  const { domain, A, B, X, Y, x, rng } = params;
+  const { domain, A, B, X, Y, x, rng, context } = params;
 
   const w = rng.nextScalar();
   const t1 = mulPoint(A, w);
   const t2 = mulPoint(B, w);
 
   const tr = new Transcript(domain);
+  if (context !== undefined) tr.appendMessage("ctx", context);
   tr.appendMessage("A", groupElementToBytes(A));
   tr.appendMessage("B", groupElementToBytes(B));
   tr.appendMessage("X", groupElementToBytes(X));
@@ -60,11 +67,13 @@ export function verifyEqDlog(params: {
   X: GroupElement;
   Y: GroupElement;
   proof: EqDlogProof;
+  context?: Uint8Array;
 }): boolean {
-  const { domain, A, B, X, Y, proof } = params;
+  const { domain, A, B, X, Y, proof, context } = params;
   const { t1, t2, z } = proof;
 
   const tr = new Transcript(domain);
+  if (context !== undefined) tr.appendMessage("ctx", context);
   tr.appendMessage("A", groupElementToBytes(A));
   tr.appendMessage("B", groupElementToBytes(B));
   tr.appendMessage("X", groupElementToBytes(X));

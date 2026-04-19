@@ -1,9 +1,5 @@
-import { randomBytes } from "node:crypto";
-import {
-  groupElementFromBytes,
-  groupElementToBytes,
-} from "@onchainpoker/ocp-crypto";
-import { shuffleProveV1 } from "@onchainpoker/ocp-shuffle";
+import { groupElementFromBytes } from "@onchainpoker/ocp-crypto";
+import { shuffleProveV1, buildShuffleContext } from "@onchainpoker/ocp-shuffle";
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import { log } from "../log.js";
@@ -59,10 +55,21 @@ export async function handleShuffle(args: {
   const rawDeck = dealerHand.deck ?? [];
   const deck = decodeDeck(rawDeck);
 
-  const seed = randomBytes(32);
+  // Bind full context (tableId, handId, round, shuffler) into the Fiat-Shamir
+  // transcript of every inner proof. Emits a v2 proof; the Go verifier must
+  // rebuild the same context bytes byte-for-byte.
+  const context = buildShuffleContext({
+    tableId: BigInt(tableId),
+    handId: BigInt(handId),
+    round,
+    shuffler: config.validatorAddress,
+  });
+
+  // SECURITY: do NOT pass a seed; shuffleProveV1 uses randomBytes(32) internally.
+  // Reusing seeds across shuffles leaks re-encryption randomness rho.
   const { proofBytes } = shuffleProveV1(pkHand, deck, {
     rounds: config.shuffleRounds,
-    seed,
+    context,
   });
 
   log(`Shuffle: submitting proof for round ${round}`);

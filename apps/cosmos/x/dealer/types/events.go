@@ -22,4 +22,11 @@ const (
 
 	// ValidatorSlashed is also emitted by other modules; keep the legacy name for tooling.
 	EventTypeValidatorSlashed = "ValidatorSlashed"
+
+	// Randomness beacon events.
+	EventTypeBeaconOpened    = "BeaconOpened"
+	EventTypeBeaconCommitted = "BeaconCommitted"
+	EventTypeBeaconRevealed  = "BeaconRevealed"
+	EventTypeBeaconFinalized = "BeaconFinalized"
+	EventTypeBeaconFallback  = "BeaconFallback"
 )

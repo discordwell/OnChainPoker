@@ -32,7 +32,7 @@ import {
   groupElementFromBytes,
   groupElementToBytes,
 } from "../packages/ocp-crypto/dist/index.js";
-import { shuffleProveV1 } from "../packages/ocp-shuffle/dist/index.js";
+import { shuffleProveV1, buildShuffleContext } from "../packages/ocp-shuffle/dist/index.js";
 import {
   chaumPedersenProve,
   encodeChaumPedersenProof,
@@ -431,11 +431,12 @@ async function waitFor(label, getter, testFn, { timeoutMs = 60_000, intervalMs =
   throw new Error(`timeout waiting for ${label}`);
 }
 
-function randomDeckProof(pkHand, deck) {
-  const seed = randomBytes(32);
+function randomDeckProof(pkHand, deck, opts = {}) {
+  // SECURITY: do not pass a seed; the prover generates randomBytes(32) internally.
+  // Context bytes (v2) must match what the chain's verifyShuffle will rebuild.
   return shuffleProveV1(pkHand, deck, {
     rounds: SHUFFLE_ROUNDS,
-    seed,
+    context: opts.context,
   });
 }
 
@@ -632,9 +633,15 @@ async function main() {
     if (!state) throw new Error("dealer hand unavailable during shuffle");
     const deck = decodeDeck(pick(state, "deck"));
 
-    const { proofBytes } = randomDeckProof(pkHandChain, deck);
     const shuffler = epochMembers[(step - 1) % epochMembers.length]?.validator;
     if (!shuffler) throw new Error(`missing shuffler for step=${step}`);
+    const ctx = buildShuffleContext({
+      tableId: BigInt(tableId),
+      handId: BigInt(handId),
+      round: step,
+      shuffler,
+    });
+    const { proofBytes } = randomDeckProof(pkHandChain, deck, { context: ctx });
     const shufflerClient = validatorByVal.get(normalizeString(shuffler));
     if (!shufflerClient) throw new Error(`missing validator signer for shuffler ${shuffler}`);
 

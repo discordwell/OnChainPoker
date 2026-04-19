@@ -105,7 +105,14 @@ func newDealerMsgServerForOverflowTests(t *testing.T, blockTime time.Time, block
 	key := storetypes.NewKVStoreKey(dealertypes.StoreKey)
 	storeService := runtime.NewKVStoreService(key)
 	testCtx := testutil.DefaultContextWithDB(t, key, storetypes.NewTransientStoreKey("transient_test"))
-	sdkCtx := testCtx.Ctx.WithEventManager(sdk.NewEventManager()).WithBlockTime(blockTime).WithBlockHeight(blockHeight)
+	// Tests exercise the legacy devnet RandEpoch path; set an explicit devnet
+	// chain id so selectRandEpoch permits the fallback. Production chain ids
+	// (anything not containing "devnet"/"local") would be refused here.
+	sdkCtx := testCtx.Ctx.
+		WithEventManager(sdk.NewEventManager()).
+		WithBlockTime(blockTime).
+		WithBlockHeight(blockHeight).
+		WithChainID("ocp-devnet-1")
 	ctx := sdk.WrapSDKContext(sdkCtx)
 
 	ir := codectypes.NewInterfaceRegistry()
@@ -370,9 +377,12 @@ func TestSubmitShuffle_HugeTimeoutOverflowDoesNotMutateState(t *testing.T) {
 		})
 	}
 
+	shuffleCtx, err := ocpshuffle.BuildShuffleContext(1, 1, 1, valoper)
+	require.NoError(t, err)
 	proof, err := ocpshuffle.ShuffleProveV1(pkHand, deckIn, ocpshuffle.ShuffleProveOpts{
-		Seed:   bytes.Repeat([]byte{0x5a}, 32),
-		Rounds: 2,
+		Seed:    bytes.Repeat([]byte{0x5a}, 32),
+		Rounds:  2,
+		Context: shuffleCtx,
 	})
 	require.NoError(t, err)
 

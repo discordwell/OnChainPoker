@@ -1,7 +1,9 @@
 package ocpshuffle
 
 import (
+	"bytes"
 	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 
 	"onchainpoker/apps/cosmos/internal/ocpcrypto"
@@ -9,8 +11,38 @@ import (
 
 const (
 	ShuffleProofV1Version = 1
+	ShuffleProofV2Version = 2
 	domainReencEqDlog     = "ocp/v1/shuffle/reenc-eqdlog"
 )
+
+// BuildShuffleContext builds canonical shuffle context bytes. The format is
+// shared byte-for-byte with the TS prover (see packages/ocp-shuffle/src/
+// shuffle_v1.ts for the definition):
+//
+//   ctx = u64le(tableId) || u64le(handId) || u16le(round) ||
+//         u16le(shufflerLen) || shuffler_utf8
+//
+// All integers are little-endian unsigned. `shuffler` is the bech32 validator
+// operator address encoded as UTF-8 (no NUL). shufflerLen must fit u16.
+func BuildShuffleContext(tableID uint64, handID uint64, round uint16, shuffler string) ([]byte, error) {
+	shufflerBytes := []byte(shuffler)
+	if len(shufflerBytes) > 0xffff {
+		return nil, fmt.Errorf("BuildShuffleContext: shuffler too long")
+	}
+	out := make([]byte, 0, 8+8+2+2+len(shufflerBytes))
+	var buf [8]byte
+	binary.LittleEndian.PutUint64(buf[:], tableID)
+	out = append(out, buf[:]...)
+	binary.LittleEndian.PutUint64(buf[:], handID)
+	out = append(out, buf[:]...)
+	var u [2]byte
+	binary.LittleEndian.PutUint16(u[:], round)
+	out = append(out, u[:]...)
+	binary.LittleEndian.PutUint16(u[:], uint16(len(shufflerBytes)))
+	out = append(out, u[:]...)
+	out = append(out, shufflerBytes...)
+	return out, nil
+}
 
 func sampleNonzeroScalar(rng scalarRng) (ocpcrypto.Scalar, error) {
 	for {
@@ -102,6 +134,22 @@ func ShuffleProveV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, op
 		return ShuffleProveResult{}, err
 	}
 
+	// Resolve context: if caller passes it, emit v2 format; else legacy v1.
+	var context []byte
+	var version byte
+	if opts.Context != nil {
+		if len(opts.Context) == 0 {
+			return ShuffleProveResult{}, fmt.Errorf("shuffleProveV1: context must be non-empty for v2")
+		}
+		if len(opts.Context) > 0xffff {
+			return ShuffleProveResult{}, fmt.Errorf("shuffleProveV1: context too long (>65535 bytes)")
+		}
+		context = opts.Context
+		version = ShuffleProofV2Version
+	} else {
+		version = ShuffleProofV1Version
+	}
+
 	perm, err := randomPermutation(rng, n)
 	if err != nil {
 		return ShuffleProveResult{}, err
@@ -115,10 +163,20 @@ func ShuffleProveV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, op
 		items[i] = item{ct: deckIn[i], key: perm[i]}
 	}
 
-	header := make([]byte, 0, 5)
-	header = append(header, byte(ShuffleProofV1Version))
-	header = append(header, u16ToBytesLE(uint16(n))...)
-	header = append(header, u16ToBytesLE(uint16(rounds))...)
+	var header []byte
+	if version == ShuffleProofV2Version {
+		header = make([]byte, 0, 1+2+2+2+len(context))
+		header = append(header, version)
+		header = append(header, u16ToBytesLE(uint16(n))...)
+		header = append(header, u16ToBytesLE(uint16(rounds))...)
+		header = append(header, u16ToBytesLE(uint16(len(context)))...)
+		header = append(header, context...)
+	} else {
+		header = make([]byte, 0, 5)
+		header = append(header, byte(ShuffleProofV1Version))
+		header = append(header, u16ToBytesLE(uint16(n))...)
+		header = append(header, u16ToBytesLE(uint16(rounds))...)
+	}
 	proofChunks := [][]byte{header}
 
 	for round := 0; round < rounds; round++ {
@@ -159,7 +217,7 @@ func ShuffleProveV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, op
 				return ShuffleProveResult{}, err
 			}
 
-			sp, err := proveSwitch(pk, left0, left1, out0, out1, swap, rho0, rho1, rng)
+			sp, err := proveSwitch(pk, left0, left1, out0, out1, swap, rho0, rho1, rng, context)
 			if err != nil {
 				return ShuffleProveResult{}, err
 			}
@@ -187,7 +245,7 @@ func ShuffleProveV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, op
 			X := ocpcrypto.PointSub(outCt.C1, inCt.C1)
 			Y := ocpcrypto.PointSub(outCt.C2, inCt.C2)
 
-			p, err := proveEqDlog(domainReencEqDlog, G, pk, X, Y, rho, rng)
+			p, err := proveEqDlog(domainReencEqDlog, G, pk, X, Y, rho, rng, context)
 			if err != nil {
 				return ShuffleProveResult{}, err
 			}
@@ -229,13 +287,33 @@ func concat(chunks ...[]byte) []byte {
 	return out
 }
 
-func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, proofBytes []byte) ShuffleVerifyResult {
+// ShuffleVerifyV1 verifies a v1 or v2 shuffle proof.
+//
+// For v1 proofs, pass context=nil.
+// For v2 proofs, context must be non-nil and byte-for-byte equal to what the
+// prover bound; mismatches yield OK=false with an error.
+func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, proofBytes []byte, context []byte) ShuffleVerifyResult {
 	rd := newReader(proofBytes)
 	version, err := rd.takeU8()
 	if err != nil {
 		return ShuffleVerifyResult{OK: false, Error: err.Error()}
 	}
-	if version != ShuffleProofV1Version {
+	var ctx []byte
+	switch version {
+	case ShuffleProofV1Version:
+		if context != nil {
+			return ShuffleVerifyResult{OK: false, Error: "context supplied for v1 proof; v1 must omit context"}
+		}
+		ctx = nil
+	case ShuffleProofV2Version:
+		if context == nil {
+			return ShuffleVerifyResult{OK: false, Error: "context required for v2 proof"}
+		}
+		if len(context) == 0 {
+			return ShuffleVerifyResult{OK: false, Error: "context must be non-empty for v2"}
+		}
+		ctx = context
+	default:
 		return ShuffleVerifyResult{OK: false, Error: fmt.Sprintf("unsupported version %d", version)}
 	}
 	nU16, err := rd.takeU16LE()
@@ -245,6 +323,19 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 	roundsU16, err := rd.takeU16LE()
 	if err != nil {
 		return ShuffleVerifyResult{OK: false, Error: err.Error()}
+	}
+	if version == ShuffleProofV2Version {
+		ctxLen, err := rd.takeU16LE()
+		if err != nil {
+			return ShuffleVerifyResult{OK: false, Error: err.Error()}
+		}
+		ctxBytes, err := rd.take(int(ctxLen))
+		if err != nil {
+			return ShuffleVerifyResult{OK: false, Error: err.Error()}
+		}
+		if !bytes.Equal(ctxBytes, ctx) {
+			return ShuffleVerifyResult{OK: false, Error: "context mismatch"}
+		}
 	}
 	n := int(nU16)
 	rounds := int(roundsU16)
@@ -284,7 +375,7 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 			if err != nil {
 				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}
-			ok, err := verifySwitch(pk, cur[i], cur[i+1], next[i], next[i+1], sp)
+			ok, err := verifySwitch(pk, cur[i], cur[i+1], next[i], next[i+1], sp, ctx)
 			if err != nil {
 				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}
@@ -310,7 +401,7 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 			}
 			X := ocpcrypto.PointSub(next[idx].C1, cur[idx].C1)
 			Y := ocpcrypto.PointSub(next[idx].C2, cur[idx].C2)
-			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p, ctx)
 			if err != nil {
 				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}
@@ -328,7 +419,7 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 			}
 			X := ocpcrypto.PointSub(next[idxFirst].C1, cur[idxFirst].C1)
 			Y := ocpcrypto.PointSub(next[idxFirst].C2, cur[idxFirst].C2)
-			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			ok, err := verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p, ctx)
 			if err != nil {
 				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}
@@ -346,7 +437,7 @@ func ShuffleVerifyV1(pk ocpcrypto.Point, deckIn []ocpcrypto.ElGamalCiphertext, p
 			}
 			X = ocpcrypto.PointSub(next[idxLast].C1, cur[idxLast].C1)
 			Y = ocpcrypto.PointSub(next[idxLast].C2, cur[idxLast].C2)
-			ok, err = verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p)
+			ok, err = verifyEqDlog(domainReencEqDlog, G, pk, X, Y, p, ctx)
 			if err != nil {
 				return ShuffleVerifyResult{OK: false, Error: err.Error()}
 			}

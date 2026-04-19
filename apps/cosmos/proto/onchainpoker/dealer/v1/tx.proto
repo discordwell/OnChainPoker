@@ -12,6 +12,12 @@ import "cosmos_proto/cosmos.proto";
 import "onchainpoker/dealer/v1/dealer.proto";
 
 // Msg defines the x/dealer Msg service.
+//
+// NOTE: After editing this file, regenerate generated Go code with:
+//   cd apps/cosmos/proto && buf generate
+// (the BeaconCommit / BeaconReveal RPCs below require this regen before the
+//  module can build — see x/dealer/committee/beacon.go for the pure helpers
+//  the keeper integration depends on.)
 service Msg {
   option (cosmos.msg.v1.service) = true;
 
@@ -22,6 +28,10 @@ service Msg {
   rpc DkgShareReveal(MsgDkgShareReveal) returns (MsgDkgShareRevealResponse);
   rpc FinalizeEpoch(MsgFinalizeEpoch) returns (MsgFinalizeEpochResponse);
   rpc DkgTimeout(MsgDkgTimeout) returns (MsgDkgTimeoutResponse);
+
+  // Randomness-beacon commit-reveal (replaces devnet RandEpoch on prod chains).
+  rpc BeaconCommit(MsgBeaconCommit) returns (MsgBeaconCommitResponse);
+  rpc BeaconReveal(MsgBeaconReveal) returns (MsgBeaconRevealResponse);
 
   rpc InitHand(MsgInitHand) returns (MsgInitHandResponse);
   rpc SubmitShuffle(MsgSubmitShuffle) returns (MsgSubmitShuffleResponse);
@@ -120,6 +130,36 @@ message MsgDkgTimeout {
 }
 
 message MsgDkgTimeoutResponse {}
+
+// MsgBeaconCommit is sent by a bonded validator during the beacon commit
+// window to register a hash-commit over its 32-byte random salt. See
+// x/dealer/committee/beacon.go for the exact H() used.
+message MsgBeaconCommit {
+  option (cosmos.msg.v1.signer) = "validator";
+  option (gogoproto.goproto_getters) = false;
+
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  // sha256 commit = H(domain || validator || epoch_id || salt). 32 bytes.
+  bytes commit = 3;
+}
+
+message MsgBeaconCommitResponse {}
+
+// MsgBeaconReveal is sent by a bonded validator during the beacon reveal
+// window. The salt must match the previously-committed hash; otherwise the
+// validator is marked reveal-faulting and slashed at finalization.
+message MsgBeaconReveal {
+  option (cosmos.msg.v1.signer) = "validator";
+  option (gogoproto.goproto_getters) = false;
+
+  string validator = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  // 32-byte salt that was committed to in MsgBeaconCommit.
+  bytes salt = 3;
+}
+
+message MsgBeaconRevealResponse {}
 
 message MsgInitHand {
   option (cosmos.msg.v1.signer) = "caller";

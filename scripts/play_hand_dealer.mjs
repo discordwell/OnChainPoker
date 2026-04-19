@@ -26,7 +26,7 @@ import {
   encShareProve,
   encodeEncShareProof,
 } from "../packages/ocp-crypto/dist/index.js";
-import { shuffleProveV1 } from "../packages/ocp-shuffle/dist/index.js";
+import { shuffleProveV1, buildShuffleContext } from "../packages/ocp-shuffle/dist/index.js";
 
 const RPC = process.env.OCP_RPC ?? "http://127.0.0.1:26657";
 const OCP_E2E_MODE = process.env.OCP_E2E_MODE === "1";
@@ -480,10 +480,17 @@ async function main() {
       c2: groupElementFromBytes(unb64(ct.c2)),
     }));
 
-    const seed = randomBytes(32);
-    const { proofBytes } = shuffleProveV1(pkHand, deckIn, { rounds: shuffleRounds, seed });
     const shuffler = committee[(step - 1) % committee.length];
     if (!shuffler) throw new Error("missing shuffler");
+    // Bind (tableId, handId, round, shuffler) into the Fiat-Shamir transcript (v2).
+    const shuffleCtx = buildShuffleContext({
+      tableId: BigInt(tableId),
+      handId: BigInt(handId),
+      round: step,
+      shuffler: shuffler.id,
+    });
+    // SECURITY: do not pass a seed; the prover generates randomBytes(32) internally.
+    const { proofBytes } = shuffleProveV1(pkHand, deckIn, { rounds: shuffleRounds, context: shuffleCtx });
 
     await ocp.broadcastTxEnvelope(
       signedEnv({

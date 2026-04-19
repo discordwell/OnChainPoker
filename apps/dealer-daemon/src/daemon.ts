@@ -258,7 +258,7 @@ export class DealerDaemon {
     const epochMembers = parseMembersFromEpoch(epoch);
 
     // Verify our secret share was computed during DKG (should already be set)
-    const secrets = this.stateStore.load(epochId);
+    const secrets = await this.stateStore.load(epochId);
     if (secrets && secrets.secretShare === "0") {
       log(`WARNING: epoch ${epochId} finalized but secret share not computed — DKG may have been incomplete`);
     }

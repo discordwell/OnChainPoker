@@ -13,6 +13,10 @@ var (
 	DKGKey         = []byte{0x03} // DealerDKG
 	ParamsKey      = []byte{0x04} // Params
 
+	// BeaconStateKey stores the active randomness-beacon commit-reveal state
+	// for the upcoming epoch (see x/dealer/committee/beacon.go).
+	BeaconStateKey = []byte{0x05} // BeaconState
+
 	HandKeyPrefix = []byte{0x10} // HandKeyPrefix || u64be(tableID) || u64be(handID)
 )
 

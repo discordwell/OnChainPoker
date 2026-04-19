@@ -14,7 +14,11 @@ type EqDlogProof struct {
 
 // Prove knowledge of x such that:
 //   X = x*A and Y = x*B
-func proveEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypto.Point, Y ocpcrypto.Point, x ocpcrypto.Scalar, rng scalarRng) (EqDlogProof, error) {
+//
+// If `context` is non-nil, it's bound into the Fiat-Shamir transcript via
+// AppendMessage("ctx", context) right after the domain separator. Pass nil
+// for legacy v1 callers (no ctx binding); pass non-empty bytes for v2.
+func proveEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypto.Point, Y ocpcrypto.Point, x ocpcrypto.Scalar, rng scalarRng, context []byte) (EqDlogProof, error) {
 	w, err := rng.NextScalar()
 	if err != nil {
 		return EqDlogProof{}, err
@@ -23,6 +27,9 @@ func proveEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypt
 	t2 := ocpcrypto.MulPoint(B, w)
 
 	tr := ocpcrypto.NewTranscript(domain)
+	if context != nil {
+		_ = tr.AppendMessage("ctx", context)
+	}
 	_ = tr.AppendMessage("A", A.Bytes())
 	_ = tr.AppendMessage("B", B.Bytes())
 	_ = tr.AppendMessage("X", X.Bytes())
@@ -38,8 +45,11 @@ func proveEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypt
 	return EqDlogProof{T1: t1, T2: t2, Z: z}, nil
 }
 
-func verifyEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypto.Point, Y ocpcrypto.Point, proof EqDlogProof) (bool, error) {
+func verifyEqDlog(domain string, A ocpcrypto.Point, B ocpcrypto.Point, X ocpcrypto.Point, Y ocpcrypto.Point, proof EqDlogProof, context []byte) (bool, error) {
 	tr := ocpcrypto.NewTranscript(domain)
+	if context != nil {
+		_ = tr.AppendMessage("ctx", context)
+	}
 	_ = tr.AppendMessage("A", A.Bytes())
 	_ = tr.AppendMessage("B", B.Bytes())
 	_ = tr.AppendMessage("X", X.Bytes())
