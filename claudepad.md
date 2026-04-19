@@ -2,6 +2,16 @@
 
 ## Session Summaries
 
+### 2026-04-19T~UTC (later) — DKG v2 Follow-ups: Primitive + Chain + Daemon
+Landed the critical cryptographic fix from the audit — encrypted-share DKG replacing the plaintext reveal leak — across three commits:
+- **6689552** Go port of DkgEncShare NIZK primitive + cross-lang test vector in both `docs/test-vectors/ocp-crypto-v1.json` and the cosmos testdata mirror. TS and Go now byte-for-byte verify the same 160-byte proof.
+- **0983b2e** Hybrid scalar-AEAD primitive (AES-256-GCM, key=SHA256(domain||r·pkR), iv=0^12, AAD=proof bytes, 48-byte ct) resolving the scalar-witness gap from DKG-V2.md §4. Proto additions (`MsgDkgEncryptedShare`, `DealerDKGEncryptedShare`, `DealerMember.ephemeral_pubkey`, `MsgDkgCommit.ephemeral_pubkey`). Keeper handler validates NIZK + stores ct. Fix to pre-commit code review: `BeaconCommit` address double-cast and `BeaconReveal` missing auth gate.
+- **01347c9** Dealer daemon wired: `handleDkgCommit` now generates per-epoch ElGamal keypair and publishes pkR. New `handleDkgEncryptedShares` submits one proof+ct per recipient. `collectEncryptedShareScalars` decrypts incoming shares + AEAD + consistency-checks `s·G==v−skR·u`. `handleDkgAggregate` prefers encrypted scalars, falls back to plaintext reveals for any dealer still on v1. SDK client gains `dealerDkgEncryptedShare` method.
+
+Status: both flows coexist. Chain accepts `MsgDkgShareReveal` and `MsgDkgEncryptedShare`. Once all daemons publish encrypted shares, the reveal path is idle in practice. Remaining: `params.DkgVersion` governance switch to hard-deprecate reveals at an epoch boundary — separate PR.
+
+Follow-up #2 (align `apps/chain/internal/app/dealer.go`) closed **without porting**: the app is explicitly labeled legacy/devnet-only in its own README, gated behind `OCP_CHAIN_PROFILE=devnet`, and enforced as such by `scripts/check-runtime-target.sh`. Aligning it with cosmos-tree security fixes was ruled low-value given zero production exposure. Verified `apps/chain` still builds + all its tests still pass (untouched by the session).
+
 ### 2026-04-19T~UTC — Cryptographic Audit + 10-Issue Fix Integration
 Full crypto audit of the dealer protocol, then 10 parallel opus sub-agents (one per finding) in isolated worktrees, manually merged back:
 - **Critical finding**: DKG reveals were publishing plaintext shares `f_i(j)` on-chain — every observer could Lagrange-interpolate the full epoch secret. Threshold trust was effectively null.
