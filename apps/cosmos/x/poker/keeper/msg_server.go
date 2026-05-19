@@ -419,6 +419,12 @@ func (m msgServer) Tick(ctx context.Context, req *types.MsgTick) (*types.MsgTick
 	if req == nil {
 		return nil, types.ErrInvalidRequest.Wrap("nil request")
 	}
+	if req.Caller == "" {
+		return nil, types.ErrInvalidRequest.Wrap("missing caller")
+	}
+	if _, err := sdk.AccAddressFromBech32(req.Caller); err != nil {
+		return nil, types.ErrInvalidRequest.Wrap("invalid caller address")
+	}
 	t, err := m.GetTable(ctx, req.TableId)
 	if err != nil {
 		return nil, err
@@ -439,6 +445,12 @@ func (m msgServer) Tick(ctx context.Context, req *types.MsgTick) (*types.MsgTick
 
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	nowUnix := sdkCtx.BlockTime().Unix()
+
+	// Pre-deadline ticks are seated-only; post-deadline ticks are permissionless to unstick AFK seats.
+	deadlinePassed := h.ActionDeadline != 0 && nowUnix >= int64(h.ActionDeadline)
+	if !deadlinePassed && seatOfPlayer(t, req.Caller) < 0 {
+		return nil, types.ErrInvalidRequest.Wrap("caller not authorized: must be seated before action deadline")
+	}
 
 	// Defensive: older saved states may not have the deadline initialized.
 	if h.ActionDeadline == 0 {

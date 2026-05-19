@@ -912,6 +912,12 @@ func (m msgServer) InitHand(ctx context.Context, req *dealertypes.MsgInitHand) (
 	if t == nil || t.Hand == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("no active hand")
 	}
+	// Gamemaster (table creator) bypass; otherwise require an active bonded validator.
+	if req.Caller != t.Creator {
+		if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
+			return nil, err
+		}
+	}
 	h := t.Hand
 	if h.HandId != req.HandId {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("hand_id mismatch")

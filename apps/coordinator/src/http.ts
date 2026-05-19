@@ -246,6 +246,16 @@ export function createHttpApp(opts: {
     return res.json(faucet.getStatus());
   });
 
+  const SAFE_FAUCET_ERROR_PREFIXES = [
+    "invalid address",
+    "address required",
+    "address rate limited",
+    "IP rate limited",
+    "faucet is busy",
+    "faucet not enabled",
+    "faucet not initialized",
+  ];
+
   app.post("/v1/faucet", async (req, res) => {
     if (!faucet) return res.status(404).json({ error: "faucet not enabled" });
 
@@ -262,7 +272,17 @@ export function createHttpApp(opts: {
       if (status === 429) {
         res.setHeader("Retry-After", String(err.retryAfter ?? 60));
       }
-      return res.status(status).json({ error: err?.message ?? "faucet error" });
+      const rawMsg = typeof err?.message === "string" ? err.message : "";
+      if (status === 500) {
+        console.error("[faucet] drip error:", err);
+        return res.status(500).json({ error: "faucet error" });
+      }
+      const safe = SAFE_FAUCET_ERROR_PREFIXES.some((p) => rawMsg.startsWith(p));
+      if (!safe) {
+        console.error("[faucet] unexpected drip error:", err);
+        return res.status(status).json({ error: "faucet error" });
+      }
+      return res.status(status).json({ error: rawMsg });
     }
   });
 

@@ -4,6 +4,54 @@ import {
   connectOcpCosmosSigningClient,
 } from "@onchainpoker/ocp-sdk/cosmos";
 
+const BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+function bech32Polymod(values: number[]): number {
+  const GEN = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3];
+  let chk = 1;
+  for (const v of values) {
+    const b = chk >>> 25;
+    chk = ((chk & 0x1ffffff) << 5) ^ v;
+    for (let i = 0; i < 5; i++) {
+      if ((b >> i) & 1) chk ^= GEN[i]!;
+    }
+  }
+  return chk;
+}
+
+function bech32HrpExpand(hrp: string): number[] {
+  const ret: number[] = [];
+  for (let i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) >> 5);
+  ret.push(0);
+  for (let i = 0; i < hrp.length; i++) ret.push(hrp.charCodeAt(i) & 31);
+  return ret;
+}
+
+function decodeBech32Prefix(address: string): string | null {
+  if (typeof address !== "string" || address.length < 8 || address.length > 90) return null;
+  let hasLower = false;
+  let hasUpper = false;
+  for (let i = 0; i < address.length; i++) {
+    const c = address.charCodeAt(i);
+    if (c < 33 || c > 126) return null;
+    if (c >= 97 && c <= 122) hasLower = true;
+    else if (c >= 65 && c <= 90) hasUpper = true;
+  }
+  if (hasLower && hasUpper) return null;
+  const addr = address.toLowerCase();
+  const sep = addr.lastIndexOf("1");
+  if (sep < 1 || sep + 7 > addr.length) return null;
+  const hrp = addr.slice(0, sep);
+  const data: number[] = [];
+  for (let i = sep + 1; i < addr.length; i++) {
+    const idx = BECH32_CHARSET.indexOf(addr[i]!);
+    if (idx === -1) return null;
+    data.push(idx);
+  }
+  if (bech32Polymod(bech32HrpExpand(hrp).concat(data)) !== 1) return null;
+  return hrp;
+}
+
 export type FaucetStatus = {
   enabled: boolean;
   address: string;
@@ -60,31 +108,33 @@ export class FaucetService {
   async drip(address: string, clientIp: string): Promise<FaucetDripResult> {
     if (!this.signing) throw new Error("faucet not initialized");
 
-    // Validate address has expected bech32 prefix
-    const expectedPrefix = this.config.bech32Prefix;
-    if (!address.startsWith(expectedPrefix + "1") || address.length < expectedPrefix.length + 7) {
-      const error = new Error(`invalid address: must start with ${expectedPrefix}1`);
+    const now = Date.now();
+
+    // Per-IP spam cooldown applied to every entered request (including bogus addresses) to
+    // prevent attackers from hammering the faucet with malformed inputs that bypass downstream gates.
+    const spamIpCooldownMs = Math.min(this.config.ipCooldownMs, 60_000);
+    const ipExpiry = this.ipCooldowns.get(clientIp);
+    if (ipExpiry && now < ipExpiry) {
+      const waitSecs = Math.ceil((ipExpiry - now) / 1000);
+      const err = new Error(`IP rate limited — try again in ${waitSecs}s`);
+      (err as any).status = 429;
+      (err as any).retryAfter = waitSecs;
+      throw err;
+    }
+    this.ipCooldowns.set(clientIp, now + spamIpCooldownMs);
+
+    const decodedPrefix = decodeBech32Prefix(address);
+    if (decodedPrefix !== this.config.bech32Prefix) {
+      const error = new Error("invalid address");
       (error as any).status = 400;
       throw error;
     }
-
-    const now = Date.now();
 
     // Address cooldown
     const addrExpiry = this.addressCooldowns.get(address);
     if (addrExpiry && now < addrExpiry) {
       const waitSecs = Math.ceil((addrExpiry - now) / 1000);
       const err = new Error(`address rate limited — try again in ${waitSecs}s`);
-      (err as any).status = 429;
-      (err as any).retryAfter = waitSecs;
-      throw err;
-    }
-
-    // IP cooldown
-    const ipExpiry = this.ipCooldowns.get(clientIp);
-    if (ipExpiry && now < ipExpiry) {
-      const waitSecs = Math.ceil((ipExpiry - now) / 1000);
-      const err = new Error(`IP rate limited — try again in ${waitSecs}s`);
       (err as any).status = 429;
       (err as any).retryAfter = waitSecs;
       throw err;

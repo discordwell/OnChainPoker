@@ -1,4 +1,5 @@
 import type http from "node:http";
+import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import type { ChainEvent } from "./types.js";
 import type { CoordinatorStore } from "./store.js";
@@ -6,7 +7,12 @@ import type { CoordinatorStore } from "./store.js";
 type ClientState = {
   subs: Set<string>;
   lastChatMs?: number;
+  identity: string;
+  ip: string;
 };
+
+const TABLE_ID_RE = /^[a-zA-Z0-9_-]{1,32}$/;
+const IP_CHAT_LIMIT_PER_MIN = 30;
 
 function safeJsonParse(raw: string): unknown {
   try {
@@ -40,9 +46,15 @@ export function createWsHub(opts: {
   });
 
   const clients = new Map<WebSocket, ClientState>();
+  const ipChatBuckets = new Map<string, { minute: number; count: number }>();
 
-  wss.on("connection", (ws) => {
-    const state: ClientState = { subs: new Set() };
+  wss.on("connection", (ws, req) => {
+    const identity = `anon-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
+    // Mirror http.ts getClientId: honor X-Forwarded-For first hop so the per-IP cap fires behind nginx.
+    const xff = req.headers["x-forwarded-for"];
+    const xffFirst = typeof xff === "string" ? xff.split(",")[0]?.trim() : Array.isArray(xff) ? xff[0]?.split(",")[0]?.trim() : null;
+    const ip = xffFirst || req.socket.remoteAddress || "unknown";
+    const state: ClientState = { subs: new Set(), identity, ip };
     clients.set(ws, state);
 
     sendJson(ws, {
@@ -72,7 +84,7 @@ export function createWsHub(opts: {
           sendJson(ws, { type: "subscribed", topic: "global" });
           return;
         }
-        if (anyMsg.topic === "table" && typeof anyMsg.tableId === "string" && anyMsg.tableId) {
+        if (anyMsg.topic === "table" && typeof anyMsg.tableId === "string" && TABLE_ID_RE.test(anyMsg.tableId)) {
           state.subs.add(`table:${anyMsg.tableId}`);
           sendJson(ws, { type: "subscribed", topic: "table", tableId: anyMsg.tableId });
           return;
@@ -87,7 +99,7 @@ export function createWsHub(opts: {
           sendJson(ws, { type: "unsubscribed", topic: "global" });
           return;
         }
-        if (anyMsg.topic === "table" && typeof anyMsg.tableId === "string" && anyMsg.tableId) {
+        if (anyMsg.topic === "table" && typeof anyMsg.tableId === "string" && TABLE_ID_RE.test(anyMsg.tableId)) {
           state.subs.delete(`table:${anyMsg.tableId}`);
           sendJson(ws, { type: "unsubscribed", topic: "table", tableId: anyMsg.tableId });
           return;
@@ -99,9 +111,8 @@ export function createWsHub(opts: {
       if (anyMsg.type === "table_chat") {
         const tableId = typeof anyMsg.tableId === "string" ? anyMsg.tableId : "";
         const text = typeof anyMsg.text === "string" ? anyMsg.text.slice(0, 200) : "";
-        const sender = typeof anyMsg.sender === "string" ? anyMsg.sender : "";
-        if (!tableId || !text || !sender) {
-          sendJson(ws, { type: "error", error: "table_chat requires tableId, text, sender" });
+        if (!tableId || !text) {
+          sendJson(ws, { type: "error", error: "table_chat requires tableId, text" });
           return;
         }
         if (!state.subs.has(`table:${tableId}`)) {
@@ -113,8 +124,20 @@ export function createWsHub(opts: {
           sendJson(ws, { type: "error", error: "chat rate limited (1 msg/sec)" });
           return;
         }
+        // per-IP bucket prevents multi-connection bypass of per-WS rate limit
+        const minuteKey = Math.floor(now / 60_000);
+        const bucket = ipChatBuckets.get(state.ip);
+        if (bucket && bucket.minute === minuteKey) {
+          if (bucket.count >= IP_CHAT_LIMIT_PER_MIN) {
+            sendJson(ws, { type: "error", error: "chat rate limited (per-ip)" });
+            return;
+          }
+          bucket.count += 1;
+        } else {
+          ipChatBuckets.set(state.ip, { minute: minuteKey, count: 1 });
+        }
         state.lastChatMs = now;
-        const chatMsg = { sender, text, timeMs: now };
+        const chatMsg = { sender: state.identity, text, timeMs: now };
         opts.store.addChatMessage(tableId, chatMsg);
         broadcastToTopic(`table:${tableId}`, { type: "table_chat", tableId, ...chatMsg });
         return;
