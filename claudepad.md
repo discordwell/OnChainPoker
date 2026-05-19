@@ -2,7 +2,37 @@
 
 ## Session Summaries
 
-### 2026-05-19T~UTC (latest) — 3-Validator Rollout Attempt + Beacon Protocol Gap
+### 2026-05-19T~UTC (latest) — Threshold≥2 Operational + Five Medium Findings Closed
+Continued from the partial rollout earlier. Closed the beacon protocol gap; chain successfully advanced to epoch 42 with `threshold=2, members=3`. Architecture claim "no single validator can see unrevealed cards" is now TRUE on the live testnet.
+
+**Beacon stuck-recovery (the actual fix):**
+- `f658ecb` height-gated MaybeAutoOpenBeacon + openBeacon to allow overwriting truly-stuck beacons. Initial naive form had a bug: it overwrote ANY unconsumed beacon whose reveal window had expired, including beacons that had collected enough reveals and were just waiting for BeginEpoch to consume them. Symptom: the beacon for epoch 42 cycled forever (open / 3 commits / window expires / overwrite / repeat).
+- `b2393b1` second fix: only consider a beacon "stuck" (overwrite-eligible) when `len(Reveals) < Threshold`. Beacons with enough reveals are "consumable" — leave them alone for BeginEpoch.
+- Gate is `beaconStuckRecoveryHeight = 1_036_000` so historical replay matches old app-hashes. Chain crossed gate ~10:43 UTC. New beacon for epoch 42 opened with windows `[1036000-1036050, 1036050-1036100]` initially, then cycled once (the buggy first version) before stabilizing on `[1036101-1036151, 1036151-1036201]` after the second fix landed.
+- BeginEpoch fired manually at h=1036205 (just past reveal_close=1036201). Daemons did DKG commit + encrypted-share + complaint-resolution. Finalized at h~1036240. pk_epoch = `iLbmDQcrZicYdNy0NfF4J/UH3DR0Zk2zpzanIse8x2g=`. All 3 members carry distinct `pub_share` + `ephemeral_pubkey` (DKG-v2 path engaged).
+
+**Five medium-severity findings closed (`f50c21d`):**
+- Finding 2 — `IsDevnetChainID` substring → anchored regex `^[a-z0-9]+-(devnet|localnet|local)(-[a-z0-9]+)*$`. Blocks "bare DEVNET" + "ocp-mainnet-local-fork" + "mydevnet-foo" tricks. Live chain id "onchainpoker-testnet-1" correctly rejected (unchanged).
+- Finding 4 — `MsgStartHand` griefing → 5-block inter-hand cooldown stamped to a new keeper-internal kv prefix `0x03` (no proto change). Defeats blind-drain-AFK-opponent.
+- Finding 5 — `settleKnownShowdown` silent pot-burn → refund pro-rata across `EligibleSeats` when no eligible reveals; lone-revealer fast-path added; `PotRefunded` event emitted.
+- Finding 6 — folded player can't `Leave` mid-hand → one-line guard relaxation; folded seats can leave (their commits are already debited).
+- Finding 7 — `MsgCreateTable` unbounded params → caps: Label/Password 64, ActionTimeout 600s, DealerTimeout 1800s, BuyIn 1M CHIPS.
+- Finding 8 — `chatByTable` unbounded map keys → `table_chat` rejects with "unknown table" when `store.getTable(tableId)` is null; defense-in-depth check in `store.addChatMessage` too.
+
+Findings 1 (DkgEncryptedShare AEAD complaint path) and 3 (MsgSit plaintext password salt) DEFERRED — both require proto additions and buf/protoc-gen-gogo regen. Worth a focused future session.
+
+**Post-rollout wet-test reproductions:** all earlier security fixes still hold — faucet bogus-address returns "invalid address" + IP-cooldown; RPC blocklist /dump_consensus_state etc return 404; WS chat sender server-derives to `anon-XXXX` (the spoofed `ocp1FAKE_IMPOSTOR_SHOULD_BE_IGNORED` ignored).
+
+**Live state:** epoch 42 active, t=2 / n=3, chain at h≈1036250, all 3 validators signing. Coordinator + dealer daemons all up. Threshold cryptography genuinely threshold-protected now.
+
+**Tests green throughout:** Go `apps/cosmos/...` ok. Coordinator `pnpm test` 42/44 pass (the 2 pre-existing http-dealer-next failures unchanged).
+
+**Server housekeeping items still pending:**
+- `/root/ocp-new-validator-mnemonics.txt` — root-readable backup of validator1/2 mnemonics (also embedded in dealer-1/2.env files)
+- `/opt/ocp/bin/ocpd.{prev,with-consumable-fix,pre-stuck-fix}` rollback binaries — can prune
+- `tx_index.db` still 3.7GB/node; you blocked `tx_search` at Caddy so it indexes for nothing. Setting `indexer = "null"` in config.toml and restarting would slowly reclaim that.
+
+### 2026-05-19T~UTC — 3-Validator Rollout Attempt + Beacon Protocol Gap
 Continued the security wet-test pass. Attempted to take the live testnet from `threshold=1, members=[1 validator]` to `threshold=2, members=[3 validators]` per the plan in `~/.claude/plans/mutable-humming-orbit.md`. Got most of the way; hit a real protocol gap that couldn't be unstuck in this session without more careful chain surgery. Left chain alive at epoch 41/t=1 with 3 bonded validators ready to participate once the gap is closed.
 
 **What landed (good, deployed):**
