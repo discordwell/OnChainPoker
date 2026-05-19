@@ -68,6 +68,15 @@ const (
 	beaconCommitBlocksProd      uint64 = 50
 	beaconRevealBlocksProd      uint64 = 50
 	beaconMaxWindowBlocks       uint64 = 1_000_000
+
+	// beaconStuckRecoveryHeight is the upgrade gate that activates
+	// expired-unconsumed-beacon overwrite. Below it, openBeacon and
+	// MaybeAutoOpenBeacon use the original behavior so historical block
+	// replay produces matching app-hashes. At/above it, a beacon whose
+	// reveal window has passed without finalization is treated as stuck
+	// and may be overwritten. Picked > current live testnet height with
+	// safe deploy margin.
+	beaconStuckRecoveryHeight int64 = 1_036_000
 )
 
 // beaconDefaultWindows returns (commitBlocks, revealBlocks) defaults based
@@ -93,12 +102,12 @@ func (k Keeper) openBeacon(ctx context.Context, epochID uint64, commitBlocks, re
 	if err != nil {
 		return nil, err
 	}
-	if existing != nil {
-		// A previously-consumed beacon (Final field populated) is just an
-		// audit-log row; safe to overwrite with a fresh window. An
-		// unconsumed beacon blocks new opens — the caller must wait for
-		// consumeBeaconForEpoch to finalize it.
-		if len(existing.Final) == 0 {
+	if existing != nil && len(existing.Final) == 0 {
+		sdkCtx := sdk.UnwrapSDKContext(ctx)
+		// Live: still within the reveal window. Post-upgrade also overwrites
+		// stuck beacons whose reveal window has passed without finalization.
+		live := sdkCtx.BlockHeight() < beaconStuckRecoveryHeight || sdkCtx.BlockHeight() <= existing.RevealCloseHeight
+		if live {
 			return nil, dealertypes.ErrInvalidRequest.Wrap("beacon window already open; consume the previous one before opening a new one")
 		}
 	}
@@ -159,10 +168,15 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// An unconsumed beacon (Final empty) is live — skip. A consumed beacon
-	// is an audit-log row from a previous epoch; openBeacon will overwrite.
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	curHeight := sdkCtx.BlockHeight()
 	if bs != nil && len(bs.Final) == 0 {
-		return nil
+		// Pre-upgrade: any unconsumed beacon blocks reopen.
+		// Post-upgrade: still block while reveal window is open; allow
+		// overwrite only once the window has expired (stuck recovery).
+		if curHeight < beaconStuckRecoveryHeight || curHeight <= bs.RevealCloseHeight {
+			return nil
+		}
 	}
 	dkg, err := k.GetDKG(ctx)
 	if err != nil {
@@ -178,18 +192,22 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	if nextEpoch == 0 {
 		return nil // defensive guard; GetNextEpochID returns 1 by default
 	}
-	// If the consumed beacon already targets NextEpochID, there's nothing
-	// new to do — the chain is between consume and DKG-start and the same
-	// epoch's seed is already recorded.
+	// Pre-upgrade: skip if any beacon (consumed or not) already targets this
+	// epoch. Post-upgrade: only skip if it's a consumed audit-log row, since
+	// a stuck unconsumed one must be replaceable.
 	if bs != nil && bs.EpochId == nextEpoch {
-		return nil
+		if curHeight < beaconStuckRecoveryHeight || len(bs.Final) > 0 {
+			return nil
+		}
 	}
 
 	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, 2)
 	if err != nil {
-		return err
+		// BeginBlock errors during replay are fatal. Recovery failures here
+		// must not crash the chain; log and try again next block.
+		k.Logger(ctx).Error("MaybeAutoOpenBeacon: openBeacon failed", "err", err)
+		return nil
 	}
-	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
 		dealertypes.EventTypeBeaconOpened,
 		sdk.NewAttribute("epochId", fmt.Sprintf("%d", opened.EpochId)),
