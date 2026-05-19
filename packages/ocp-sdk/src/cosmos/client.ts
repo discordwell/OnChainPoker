@@ -15,6 +15,8 @@ import type {
   MsgTick
 } from "./gen/onchainpoker/poker/v1/tx.js";
 import type {
+  MsgBeaconCommit,
+  MsgBeaconReveal,
   MsgBeginEpoch,
   MsgDkgCommit,
   MsgDkgEncryptedShare,
@@ -214,6 +216,8 @@ export type OcpCosmosClient = {
   }) => Promise<DeliverTxResponse>;
   dealerFinalizeReveal: (args: { caller?: string; tableId: UintLike; handId: UintLike; pos: number; memo?: string }) => Promise<DeliverTxResponse>;
   dealerTimeout: (args: { caller?: string; tableId: UintLike; handId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
+  dealerBeaconCommit: (args: { validator: string; epochId: UintLike; commit: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
+  dealerBeaconReveal: (args: { validator: string; epochId: UintLike; salt: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
 };
 
 export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
@@ -605,6 +609,26 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     return signAndBroadcast([eo], a.memo);
   }
 
+  async function dealerBeaconCommit(a: { validator: string; epochId: UintLike; commit: Uint8Array; memo?: string }): Promise<DeliverTxResponse> {
+    const msg: MsgBeaconCommit = {
+      validator: a.validator.trim(),
+      epochId: toU64String(a.epochId, "epochId"),
+      commit: a.commit
+    };
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.beaconCommit, value: msg };
+    return signAndBroadcast([eo], a.memo);
+  }
+
+  async function dealerBeaconReveal(a: { validator: string; epochId: UintLike; salt: Uint8Array; memo?: string }): Promise<DeliverTxResponse> {
+    const msg: MsgBeaconReveal = {
+      validator: a.validator.trim(),
+      epochId: toU64String(a.epochId, "epochId"),
+      salt: a.salt
+    };
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.beaconReveal, value: msg };
+    return signAndBroadcast([eo], a.memo);
+  }
+
   return {
     signing,
     lcd,
@@ -638,6 +662,8 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     dealerSubmitPubShare,
     dealerSubmitEncShare,
     dealerFinalizeReveal,
-    dealerTimeout
+    dealerTimeout,
+    dealerBeaconCommit,
+    dealerBeaconReveal
   };
 }

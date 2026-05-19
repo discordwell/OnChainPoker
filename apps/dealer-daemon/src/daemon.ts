@@ -13,6 +13,7 @@ import {
 import { handleShuffle } from "./handlers/shuffle.js";
 import { handleEncShares } from "./handlers/encshares.js";
 import { handlePubShare } from "./handlers/pubshares.js";
+import { maybeBeaconParticipate } from "./handlers/beacon.js";
 import {
   maybeBeginEpoch,
   maybeFinalizeEpoch,
@@ -202,6 +203,10 @@ export class DealerDaemon {
     // 1. Check epoch/DKG state
     const epoch = await this.client.getDealerEpoch().catch(() => null);
     const dkg = await this.client.getDealerDkg().catch(() => null);
+
+    // Beacon participation runs every cycle so the chain can finalize an
+    // unpredictable rand_epoch before BeginEpoch is attempted.
+    await maybeBeaconParticipate({ client: this.client, config: this.config });
 
     if (!epoch && !dkg) {
       // No epoch and no DKG — try to begin one

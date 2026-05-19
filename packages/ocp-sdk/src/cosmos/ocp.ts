@@ -11,6 +11,8 @@ import {
   MsgTick
 } from "./gen/onchainpoker/poker/v1/tx.js";
 import {
+  MsgBeaconCommit,
+  MsgBeaconReveal,
   MsgBeginEpoch,
   MsgDkgCommit,
   MsgDkgComplaintInvalid,
@@ -22,6 +24,7 @@ import {
   MsgFinalizeEpoch,
   MsgFinalizeReveal,
   MsgInitHand,
+  MsgOpenBeaconWindow,
   MsgSubmitEncShare,
   MsgSubmitPubShare,
   MsgSubmitShuffle,
@@ -53,7 +56,10 @@ export const OCP_TYPE_URLS = {
     submitPubShare: "/onchainpoker.dealer.v1.MsgSubmitPubShare",
     submitEncShare: "/onchainpoker.dealer.v1.MsgSubmitEncShare",
     finalizeReveal: "/onchainpoker.dealer.v1.MsgFinalizeReveal",
-    timeout: "/onchainpoker.dealer.v1.MsgTimeout"
+    timeout: "/onchainpoker.dealer.v1.MsgTimeout",
+    openBeaconWindow: "/onchainpoker.dealer.v1.MsgOpenBeaconWindow",
+    beaconCommit: "/onchainpoker.dealer.v1.MsgBeaconCommit",
+    beaconReveal: "/onchainpoker.dealer.v1.MsgBeaconReveal"
   }
 } as const;
 
@@ -88,6 +94,9 @@ export function createOcpRegistry(): Registry {
   registry.register(OCP_TYPE_URLS.dealer.submitEncShare, MsgSubmitEncShare);
   registry.register(OCP_TYPE_URLS.dealer.finalizeReveal, MsgFinalizeReveal);
   registry.register(OCP_TYPE_URLS.dealer.timeout, MsgTimeout);
+  registry.register(OCP_TYPE_URLS.dealer.openBeaconWindow, MsgOpenBeaconWindow);
+  registry.register(OCP_TYPE_URLS.dealer.beaconCommit, MsgBeaconCommit);
+  registry.register(OCP_TYPE_URLS.dealer.beaconReveal, MsgBeaconReveal);
 
   return registry;
 }
