@@ -183,8 +183,10 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	}
 	// If the consumed beacon already targets NextEpochID, there's nothing
 	// new to do — the chain is between consume and DKG-start and the same
-	// epoch's seed is already recorded.
-	if bs != nil && bs.EpochId == nextEpoch {
+	// epoch's seed is already recorded. An expired-unconsumed beacon for
+	// the same epoch must be replaced (caught by the live-window guard
+	// above), so this only skips truly consumed beacons.
+	if bs != nil && len(bs.Final) > 0 && bs.EpochId == nextEpoch {
 		return nil
 	}
 
