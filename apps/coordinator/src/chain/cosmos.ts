@@ -132,11 +132,12 @@ function pokerTableToTableInfo(v: any, nowMs = Date.now()): TableInfo {
 
   const label = asString(v?.label ?? v?.table?.label) || undefined;
   const passwordHash = asString(params.passwordHash ?? params.password_hash) || undefined;
+  const passwordSalt = asString(params.passwordSalt ?? params.password_salt) || undefined;
 
   return {
     tableId: asString(v?.tableId ?? v?.table?.tableId ?? v?.id ?? v?.table?.id),
     label,
-    params: { maxPlayers, smallBlind, bigBlind, minBuyIn, maxBuyIn, passwordHash },
+    params: { maxPlayers, smallBlind, bigBlind, minBuyIn, maxBuyIn, passwordHash, passwordSalt },
     status: status === "open" && (v?.hand ?? v?.table?.hand) ? "in_hand" : status,
     updatedAtMs: nowMs
   };

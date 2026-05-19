@@ -146,8 +146,17 @@ export interface TableParams {
   dealerTimeoutSecs: string;
   playerBond: string;
   rakeBps: number;
-  /** SHA-256 hash; empty = no password required */
+  /**
+   * 32-byte SHA256(password_salt || password) commitment. Empty = no password.
+   * Pre-v2 legacy tables store SHA256(password) here with password_salt empty;
+   * the client computes the proof against whichever salt is on-chain.
+   */
   passwordHash: Uint8Array;
+  /**
+   * 32 random bytes for tables created after the v2 password rollout; empty
+   * for legacy tables. Public — clients read it to compute password_proof.
+   */
+  passwordSalt: Uint8Array;
 }
 
 export interface Seat {
@@ -314,6 +323,7 @@ function createBaseTableParams(): TableParams {
     playerBond: "0",
     rakeBps: 0,
     passwordHash: new Uint8Array(0),
+    passwordSalt: new Uint8Array(0),
   };
 }
 
@@ -348,6 +358,9 @@ export const TableParams: MessageFns<TableParams> = {
     }
     if (message.passwordHash.length !== 0) {
       writer.uint32(82).bytes(message.passwordHash);
+    }
+    if (message.passwordSalt.length !== 0) {
+      writer.uint32(90).bytes(message.passwordSalt);
     }
     return writer;
   },
@@ -439,6 +452,14 @@ export const TableParams: MessageFns<TableParams> = {
           message.passwordHash = reader.bytes();
           continue;
         }
+        case 11: {
+          if (tag !== 90) {
+            break;
+          }
+
+          message.passwordSalt = reader.bytes();
+          continue;
+        }
       }
       if ((tag & 7) === 4 || tag === 0) {
         break;
@@ -500,6 +521,11 @@ export const TableParams: MessageFns<TableParams> = {
         : isSet(object.password_hash)
         ? bytesFromBase64(object.password_hash)
         : new Uint8Array(0),
+      passwordSalt: isSet(object.passwordSalt)
+        ? bytesFromBase64(object.passwordSalt)
+        : isSet(object.password_salt)
+        ? bytesFromBase64(object.password_salt)
+        : new Uint8Array(0),
     };
   },
 
@@ -535,6 +561,9 @@ export const TableParams: MessageFns<TableParams> = {
     if (message.passwordHash.length !== 0) {
       obj.passwordHash = base64FromBytes(message.passwordHash);
     }
+    if (message.passwordSalt.length !== 0) {
+      obj.passwordSalt = base64FromBytes(message.passwordSalt);
+    }
     return obj;
   },
 
@@ -553,6 +582,7 @@ export const TableParams: MessageFns<TableParams> = {
     message.playerBond = object.playerBond ?? "0";
     message.rakeBps = object.rakeBps ?? 0;
     message.passwordHash = object.passwordHash ?? new Uint8Array(0);
+    message.passwordSalt = object.passwordSalt ?? new Uint8Array(0);
     return message;
   },
 };

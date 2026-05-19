@@ -182,11 +182,28 @@ export class PokerBot {
 
     log(`Sitting with buy-in ${buyIn} (seat auto-assigned)`);
 
+    let passwordProof: Uint8Array | undefined;
+    if (this.config.password) {
+      // Mirror the web client: compute SHA256(salt || password) where salt
+      // is the table's params.password_salt (base64). Legacy tables omit the
+      // salt and the digest reduces to SHA256(password).
+      const saltB64: string = g(params, "passwordSalt", "password_salt") ?? "";
+      const saltBytes = saltB64
+        ? Uint8Array.from(Buffer.from(saltB64, "base64"))
+        : new Uint8Array(0);
+      const pwBytes = new TextEncoder().encode(this.config.password);
+      const buf = new Uint8Array(saltBytes.length + pwBytes.length);
+      buf.set(saltBytes, 0);
+      buf.set(pwBytes, saltBytes.length);
+      const digest = await crypto.subtle.digest("SHA-256", buf);
+      passwordProof = new Uint8Array(digest);
+    }
+
     await this.client.pokerSit({
       tableId: this.config.tableId,
       buyIn,
       pkPlayer: this.pkBytes,
-      password: this.config.password || undefined,
+      passwordProof,
     });
 
     // Re-fetch to find our assigned seat.

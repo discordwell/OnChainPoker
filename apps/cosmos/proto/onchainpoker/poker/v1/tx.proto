@@ -40,7 +40,13 @@ message MsgCreateTable {
 
   uint32 max_players = 10; // default 9
   string label = 11;
-  string password = 12; // plaintext; keeper hashes before storage
+  reserved 12;
+  reserved "password";
+  // 32-byte commitment computed client-side as SHA256(password_salt || password).
+  // Empty = table has no password. Plaintext password never crosses the wire.
+  bytes password_commitment = 13;
+  // 32 random bytes for new tables; empty if password_commitment is empty.
+  bytes password_salt = 14;
 }
 
 message MsgCreateTableResponse {
@@ -57,7 +63,11 @@ message MsgSit {
   uint64 buy_in = 4;
 
   bytes pk_player = 5; // 32-byte ristretto point (required for dealer mode)
-  string password = 6; // plaintext; validated against table password_hash
+  reserved 6;
+  reserved "password";
+  // 32-byte proof computed client-side as SHA256(table.password_salt || password).
+  // Required iff the table has a non-empty password_hash; chain compares bytes.
+  bytes password_proof = 7;
 }
 
 message MsgSitResponse {

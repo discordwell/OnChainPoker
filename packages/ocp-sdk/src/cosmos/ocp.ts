@@ -15,6 +15,7 @@ import {
   MsgBeaconReveal,
   MsgBeginEpoch,
   MsgDkgCommit,
+  MsgDkgComplaintAEADBad,
   MsgDkgComplaintInvalid,
   MsgDkgComplaintMissing,
   MsgDkgEncryptedShare,
@@ -46,6 +47,7 @@ export const OCP_TYPE_URLS = {
     dkgCommit: "/onchainpoker.dealer.v1.MsgDkgCommit",
     dkgComplaintMissing: "/onchainpoker.dealer.v1.MsgDkgComplaintMissing",
     dkgComplaintInvalid: "/onchainpoker.dealer.v1.MsgDkgComplaintInvalid",
+    dkgComplaintAEADBad: "/onchainpoker.dealer.v1.MsgDkgComplaintAEADBad",
     dkgShareReveal: "/onchainpoker.dealer.v1.MsgDkgShareReveal",
     dkgEncryptedShare: "/onchainpoker.dealer.v1.MsgDkgEncryptedShare",
     finalizeEpoch: "/onchainpoker.dealer.v1.MsgFinalizeEpoch",
@@ -83,6 +85,7 @@ export function createOcpRegistry(): Registry {
   registry.register(OCP_TYPE_URLS.dealer.dkgCommit, MsgDkgCommit);
   registry.register(OCP_TYPE_URLS.dealer.dkgComplaintMissing, MsgDkgComplaintMissing);
   registry.register(OCP_TYPE_URLS.dealer.dkgComplaintInvalid, MsgDkgComplaintInvalid);
+  registry.register(OCP_TYPE_URLS.dealer.dkgComplaintAEADBad, MsgDkgComplaintAEADBad);
   registry.register(OCP_TYPE_URLS.dealer.dkgShareReveal, MsgDkgShareReveal);
   registry.register(OCP_TYPE_URLS.dealer.dkgEncryptedShare, MsgDkgEncryptedShare);
   registry.register(OCP_TYPE_URLS.dealer.finalizeEpoch, MsgFinalizeEpoch);

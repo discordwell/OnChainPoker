@@ -50,6 +50,43 @@ func deriveScalarAeadKey(dh Point) []byte {
 	return h.Sum(nil)
 }
 
+// DkgScalarAeadOpen runs the recipient-side AEAD decryption using a
+// previously-derived DH point (dh = skR*U = r*pkR). The chain-side complaint
+// handler uses this to verify a complainant's claim of AEAD failure or
+// scalar-point mismatch without requiring skR to be revealed.
+//
+// Returns the decoded share scalar on success. The error distinguishes
+// "AEAD tag mismatch" (gcm.Open failure) from "scalar decode failure"
+// (plaintext is the wrong length or non-canonical) — both are dealer-side
+// faults that the caller may slash for.
+func DkgScalarAeadOpen(dh Point, ct []byte, proofBytes []byte) (Scalar, error) {
+	if len(ct) != DkgScalarAeadCtBytes {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: ct must be %d bytes, got %d", DkgScalarAeadCtBytes, len(ct))
+	}
+	if proofBytes == nil {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: proofBytes must be non-nil")
+	}
+	key := deriveScalarAeadKey(dh)
+
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: new cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: new gcm: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	pt, err := gcm.Open(nil, nonce, ct, proofBytes)
+	if err != nil {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: AEAD decrypt failed: %w", err)
+	}
+	if len(pt) != ScalarBytes {
+		return Scalar{}, fmt.Errorf("dkgScalarAead: unexpected plaintext length %d", len(pt))
+	}
+	return ScalarFromBytesCanonical(pt)
+}
+
 // EncryptShareScalar AEAD-encrypts the share scalar s under a key derived
 // from dh = r * pkR. The 160-byte encoded NIZK proof is bound as AAD so that
 // the scalar ct is cryptographically tied to the NIZK-verified statement.

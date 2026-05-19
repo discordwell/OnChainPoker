@@ -648,6 +648,217 @@ func (m msgServer) DkgComplaintInvalid(ctx context.Context, req *dealertypes.Msg
 	return &dealertypes.MsgDkgComplaintInvalidResponse{}, nil
 }
 
+// DkgComplaintAEADBad lets a recipient surface a malformed scalar_ct in a
+// dealer's MsgDkgEncryptedShare. The complainer publishes dh = skR*U plus a
+// Chaum-Pedersen DLEQ proof that binds dh to the on-chain (pkR, U). The
+// chain then independently verifies the AEAD opening: a tag failure or a
+// decrypted-scalar/share-point mismatch slashes the dealer; a complaint
+// where everything actually checks out slashes the complainer for griefing.
+// This is the on-chain remedy prescribed by the docstring at
+// apps/cosmos/internal/ocpcrypto/dkg_scalar_aead.go:33-36.
+func (m msgServer) DkgComplaintAEADBad(ctx context.Context, req *dealertypes.MsgDkgComplaintAEADBad) (*dealertypes.MsgDkgComplaintAEADBadResponse, error) {
+	if req == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")
+	}
+	if req.Complainer == "" || req.Dealer == "" {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("missing complainer/dealer")
+	}
+	if req.Complainer == req.Dealer {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complainer and dealer must differ")
+	}
+	if _, err := sdk.ValAddressFromBech32(req.Complainer); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid complainer address")
+	}
+	if _, err := sdk.ValAddressFromBech32(req.Dealer); err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid dealer address")
+	}
+	if len(req.DhShare) != ocpcrypto.PointBytes {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("dh_share must be %d bytes", ocpcrypto.PointBytes)
+	}
+	if len(req.DleqProof) != 96 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("dleq_proof must be 96 bytes")
+	}
+
+	dkg, err := m.GetDKG(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if dkg == nil {
+		return nil, dealertypes.ErrNoDkgInFlight.Wrap("no dkg in progress")
+	}
+	if req.EpochId != dkg.EpochId {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("epoch_id mismatch")
+	}
+
+	sdkCtx := sdk.UnwrapSDKContext(ctx)
+	h := sdkCtx.BlockHeight()
+	if h < dkg.CommitDeadline {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complaints not yet allowed")
+	}
+	if h > dkg.ComplaintDeadline {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complaint deadline passed")
+	}
+
+	complainerMem := findDKGMember(dkg, req.Complainer)
+	if complainerMem == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complainer not in committee")
+	}
+	dealerMem := findDKGMember(dkg, req.Dealer)
+	if dealerMem == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("dealer not in committee")
+	}
+	if req.RecipientIndex != complainerMem.Index {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("recipient_index must equal complainer's committee index")
+	}
+	if findDKGComplaint(dkg, req.Complainer, req.Dealer) != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complaint already filed")
+	}
+
+	// Locate the (dealer, recipient) encrypted-share record.
+	var es *dealertypes.DealerDKGEncryptedShare
+	for i := range dkg.EncryptedShares {
+		if dkg.EncryptedShares[i].Dealer == req.Dealer && dkg.EncryptedShares[i].RecipientIndex == req.RecipientIndex {
+			es = &dkg.EncryptedShares[i]
+			break
+		}
+	}
+	if es == nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("no encrypted share from dealer to this recipient")
+	}
+
+	// Decode the on-chain points + the complainant's evidence.
+	if len(complainerMem.EphemeralPubkey) != ocpcrypto.PointBytes {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("complainer has no ephemeral_pubkey")
+	}
+	pkR, err := ocpcrypto.PointFromBytesCanonical(complainerMem.EphemeralPubkey)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("complainer ephemeral_pubkey invalid: %v", err)
+	}
+	U, err := ocpcrypto.PointFromBytesCanonical(es.U)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("stored u invalid: %v", err)
+	}
+	V, err := ocpcrypto.PointFromBytesCanonical(es.V)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("stored v invalid: %v", err)
+	}
+	dh, err := ocpcrypto.PointFromBytesCanonical(req.DhShare)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("dh_share invalid: %v", err)
+	}
+	proof, err := ocpcrypto.DecodeChaumPedersenProof(req.DleqProof)
+	if err != nil {
+		return nil, dealertypes.ErrInvalidRequest.Wrapf("dleq_proof invalid: %v", err)
+	}
+
+	// Verify dh = skR*U AND pkR = skR*G for some skR. Failure here means the
+	// complainant did not actually know skR, so we can't trust the dh — reject
+	// without slashing anyone.
+	ok, err := ocpcrypto.ChaumPedersenVerify(pkR, U, dh, proof)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid DLEQ proof for dh_share")
+	}
+
+	// Now the chain knows dh is the correct DH share for this (pkR, U), so the
+	// AEAD opening result is deterministic. Three outcomes:
+	//   - AEAD fails        → dealer encrypted under the wrong key/AAD → guilty.
+	//   - scalar decrypts but s'*G != V - dh → dealer's scalar disagrees with
+	//     the NIZK-verified share point → guilty.
+	//   - scalar decrypts AND s'*G == V - dh → complainant is griefing → guilty.
+	var (
+		dealerAtFault     bool
+		complainerAtFault bool
+		slashReason       string
+	)
+	sPrime, openErr := ocpcrypto.DkgScalarAeadOpen(dh, es.ScalarCt, es.Proof)
+	if openErr != nil {
+		dealerAtFault = true
+		slashReason = "dkg-aead-bad"
+	} else {
+		sharePtFromScalar := ocpcrypto.MulBase(sPrime)
+		sharePtFromElGamal := ocpcrypto.PointSub(V, dh)
+		if !ocpcrypto.PointEq(sharePtFromScalar, sharePtFromElGamal) {
+			dealerAtFault = true
+			slashReason = "dkg-aead-scalar-mismatch"
+		} else {
+			complainerAtFault = true
+			slashReason = "dkg-aead-spurious"
+		}
+	}
+
+	params, err := m.GetParams(ctx)
+	if err != nil {
+		return nil, err
+	}
+	slashFraction := bpsToDec(params.SlashBpsDkg)
+	jailDuration := time.Duration(params.JailSecondsDkg) * time.Second
+
+	var (
+		guiltyAddr  string
+		guiltyPower int64
+		guiltyKind  string
+		slashedNow  bool
+	)
+	switch {
+	case dealerAtFault:
+		guiltyAddr = req.Dealer
+		guiltyPower = dealerMem.Power
+		guiltyKind = "aead-bad"
+		slashedNow = dkgSlash(dkg, req.Dealer)
+	case complainerAtFault:
+		guiltyAddr = req.Complainer
+		guiltyPower = complainerMem.Power
+		guiltyKind = "aead-spurious"
+		slashedNow = dkgSlash(dkg, req.Complainer)
+	}
+
+	// Mirror DkgComplaintInvalid: only apply the on-chain penalty when
+	// dkgSlash actually mutated the set. Without this guard a malicious
+	// dealer who fans out a bad scalar_ct to N recipients would be penalised
+	// N times — one per legitimate complaint — even though dkg.Slashed is
+	// already a set. The complaint record still lands so subsequent
+	// findDKGComplaint duplicate-checks fire as expected.
+	if slashedNow {
+		if err := m.applyPenalty(ctx, guiltyAddr, dkg.StartHeight, guiltyPower, slashFraction, jailDuration); err != nil {
+			return nil, err
+		}
+		sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+			dealertypes.EventTypeValidatorSlashed,
+			sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
+			sdk.NewAttribute("validator", guiltyAddr),
+			sdk.NewAttribute("reason", slashReason),
+			sdk.NewAttribute("slashFraction", slashFraction.String()),
+			sdk.NewAttribute("distributionHeight", fmt.Sprintf("%d", dkg.StartHeight)),
+			sdk.NewAttribute("power", fmt.Sprintf("%d", guiltyPower)),
+		))
+	}
+
+	dkg.Complaints = append(dkg.Complaints, dealertypes.DealerDKGComplaint{
+		EpochId:    dkg.EpochId,
+		Complainer: req.Complainer,
+		Dealer:     req.Dealer,
+		Kind:       guiltyKind,
+		ShareMsg:   nil,
+	})
+	sortDKGComplaints(dkg)
+
+	if err := m.SetDKG(ctx, dkg); err != nil {
+		return nil, err
+	}
+
+	sdkCtx.EventManager().EmitEvent(sdk.NewEvent(
+		dealertypes.EventTypeDKGComplaintAccepted,
+		sdk.NewAttribute("epochId", fmt.Sprintf("%d", dkg.EpochId)),
+		sdk.NewAttribute("dealer", req.Dealer),
+		sdk.NewAttribute("complainer", req.Complainer),
+		sdk.NewAttribute("kind", guiltyKind),
+	))
+	return &dealertypes.MsgDkgComplaintAEADBadResponse{}, nil
+}
+
 func (m msgServer) DkgShareReveal(ctx context.Context, req *dealertypes.MsgDkgShareReveal) (*dealertypes.MsgDkgShareRevealResponse, error) {
 	if req == nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("nil request")

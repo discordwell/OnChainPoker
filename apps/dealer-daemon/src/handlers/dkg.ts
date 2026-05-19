@@ -1,8 +1,10 @@
 import { randomBytes } from "node:crypto";
 import {
   CURVE_ORDER,
+  chaumPedersenProve,
   decryptShareScalar,
   dkgEncShareProve,
+  encodeChaumPedersenProof,
   encodeDkgEncShareProof,
   encryptShareScalar,
   groupElementFromBytes,
@@ -237,17 +239,22 @@ export async function handleDkgEncryptedShares(args: {
  *   1. AEAD decrypts successfully.
  *   2. s*G matches v - skR*u (i.e., scalar is consistent with the
  *      NIZK-verified share point).
- * Any share that fails these checks is discarded silently; the dealer's
- * misbehavior is already slashable via the on-chain NIZK check at submit
- * time, so the recipient's local check is defense-in-depth.
+ *
+ * When either check fails, the dealer is malicious: the NIZK they posted
+ * proves the share *point* is correct, but a wrong scalar_ct can still ship.
+ * We file MsgDkgComplaintAEADBad with dh = skR*U plus a Chaum-Pedersen DLEQ
+ * proof so the chain can verify our claim without us revealing skR. The
+ * chain then independently runs AES-GCM open and slashes the dealer (or, if
+ * the chain finds the share is actually valid, slashes us for griefing).
  */
 async function collectEncryptedShareScalars(args: {
+  client: OcpCosmosClient;
   stateStore: EpochStateStore;
   config: DealerDaemonConfig;
   epochId: number;
   dkg: any;
 }): Promise<Map<string, bigint>> {
-  const { stateStore, config, epochId, dkg } = args;
+  const { client, stateStore, config, epochId, dkg } = args;
   const out = new Map<string, bigint>();
 
   const secrets = await stateStore.load(epochId);
@@ -257,9 +264,23 @@ async function collectEncryptedShareScalars(args: {
   const myAddress = config.validatorAddress.toLowerCase();
   const myIndex = secrets.validatorIndex;
 
+  // Idempotency: skip dealers we already complained about.
+  const existingComplaints = Array.isArray(dkg.complaints) ? dkg.complaints : [];
+  const myAEADComplaints = new Set(
+    existingComplaints
+      .filter(
+        (c: any) =>
+          String(c.complainer ?? "").toLowerCase() === myAddress &&
+          (String(c.kind ?? "") === "aead-bad" ||
+            String(c.kind ?? "") === "aead-spurious")
+      )
+      .map((c: any) => String(c.dealer ?? "").toLowerCase())
+  );
+
   const shares = Array.isArray(dkg.encryptedShares) ? dkg.encryptedShares : [];
   for (const es of shares) {
-    const dealerAddr = String(es.dealer ?? "").toLowerCase();
+    const dealerAddrCanonical = String(es.dealer ?? "");
+    const dealerAddr = dealerAddrCanonical.toLowerCase();
     if (dealerAddr === myAddress) continue;
     const recipientIndex = Number(es.recipientIndex ?? es.recipient_index ?? 0) | 0;
     if (recipientIndex !== myIndex) continue;
@@ -270,22 +291,67 @@ async function collectEncryptedShareScalars(args: {
     const ct = decodeOnchainBytes(es.scalarCt ?? es.scalar_ct);
     if (!uBytes || !vBytes || !proofBytes || !ct) continue;
 
+    let u: ReturnType<typeof groupElementFromBytes>;
+    let v: ReturnType<typeof groupElementFromBytes>;
     try {
-      const u = groupElementFromBytes(uBytes);
-      const v = groupElementFromBytes(vBytes);
-      const s = decryptShareScalar({ skR, u, proofBytes, ct });
-      // Consistency: s*G == v - skR*u.
-      const sharePointFromScalar = mulBase(s);
-      const sharePointFromElGamal = pointSub(v, mulPoint(u, skR));
-      if (!pointEq(sharePointFromScalar, sharePointFromElGamal)) {
-        log(`DKG: encrypted share from ${dealerAddr} fails consistency check — discarding`);
-        continue;
-      }
-      out.set(dealerAddr, s);
+      u = groupElementFromBytes(uBytes);
+      v = groupElementFromBytes(vBytes);
     } catch (err) {
+      // Stored point bytes are malformed — chain would have rejected on
+      // submit, so don't complain.
+      log(`DKG: encrypted share from ${dealerAddr} has non-canonical u/v — skipping`);
+      continue;
+    }
+
+    let s: bigint | null = null;
+    let aeadFailed = false;
+    try {
+      s = decryptShareScalar({ skR, u, proofBytes, ct });
+    } catch (err) {
+      aeadFailed = true;
       const msg = String((err as Error)?.message ?? err);
       log(`DKG: failed to decrypt encrypted share from ${dealerAddr}: ${msg}`);
     }
+
+    let consistencyFailed = false;
+    if (!aeadFailed && s !== null) {
+      const sharePointFromScalar = mulBase(s);
+      const sharePointFromElGamal = pointSub(v, mulPoint(u, skR));
+      if (!pointEq(sharePointFromScalar, sharePointFromElGamal)) {
+        consistencyFailed = true;
+        log(`DKG: encrypted share from ${dealerAddr} fails s*G == V - skR*U`);
+      }
+    }
+
+    if (aeadFailed || consistencyFailed) {
+      if (myAEADComplaints.has(dealerAddr)) continue;
+      myAEADComplaints.add(dealerAddr);
+      try {
+        const dh = mulPoint(u, skR);
+        const proof = chaumPedersenProve({
+          y: mulBase(skR), // y = skR*G = pkR
+          c1: u,
+          d: dh, // d = skR*u
+          x: skR,
+          w: nonzeroScalar(),
+        });
+        await client.dealerDkgComplaintAEADBad({
+          complainer: config.validatorAddress,
+          epochId,
+          dealer: dealerAddrCanonical || dealerAddr,
+          recipientIndex: myIndex,
+          dhShare: groupElementToBytes(dh),
+          dleqProof: encodeChaumPedersenProof(proof),
+        });
+        log(`DKG: filed AEAD-bad complaint against ${dealerAddr}`);
+      } catch (err) {
+        const msg = String((err as Error)?.message ?? err);
+        log(`DKG: failed to file AEAD-bad complaint against ${dealerAddr}: ${msg}`);
+      }
+      continue;
+    }
+
+    if (s !== null) out.set(dealerAddr, s);
   }
   return out;
 }
@@ -423,13 +489,14 @@ export async function handleDkgReveals(args: {
  * since finalization clears the DKG state (including reveals).
  */
 export async function handleDkgAggregate(args: {
+  client: OcpCosmosClient;
   stateStore: EpochStateStore;
   config: DealerDaemonConfig;
   epochId: number;
   members: Array<{ validator: string; index: number }>;
   dkg: any;
 }): Promise<boolean> {
-  const { stateStore, config, epochId, members, dkg } = args;
+  const { client, stateStore, config, epochId, members, dkg } = args;
 
   const secrets = await stateStore.load(epochId);
   if (!secrets) return false;
@@ -454,7 +521,7 @@ export async function handleDkgAggregate(args: {
 
   // DKG v2: prefer scalars recovered from encrypted shares (AEAD-decrypted
   // locally via our ephemeralSk). Keys are lowercased dealer addresses.
-  const encScalars = await collectEncryptedShareScalars({ stateStore, config, epochId, dkg });
+  const encScalars = await collectEncryptedShareScalars({ client, stateStore, config, epochId, dkg });
 
   // Track which dealers we've counted so v1 reveals don't double-count a
   // dealer who also published an encrypted share.

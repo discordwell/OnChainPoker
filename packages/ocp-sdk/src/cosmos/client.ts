@@ -20,6 +20,7 @@ import type {
   MsgBeginEpoch,
   MsgDkgCommit,
   MsgDkgEncryptedShare,
+  MsgDkgComplaintAEADBad,
   MsgDkgComplaintInvalid,
   MsgDkgComplaintMissing,
   MsgDkgShareReveal,
@@ -153,10 +154,13 @@ export type OcpCosmosClient = {
     rakeBps?: number;
     maxPlayers?: number;
     label?: string;
-    password?: string;
+    // 32-byte SHA-256 commitment over (passwordSalt || plaintext_password).
+    // Plaintext must never be passed across the SDK boundary.
+    passwordCommitment?: Uint8Array;
+    passwordSalt?: Uint8Array;
     memo?: string;
   }) => Promise<DeliverTxResponse>;
-  pokerSit: (args: { player?: string; tableId: UintLike; buyIn: UintLike; pkPlayer: Uint8Array; password?: string; memo?: string }) => Promise<DeliverTxResponse>;
+  pokerSit: (args: { player?: string; tableId: UintLike; buyIn: UintLike; pkPlayer: Uint8Array; passwordProof?: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
   pokerStartHand: (args: { caller?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerAct: (args: { player?: string; tableId: UintLike; action: string; amount?: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   pokerTick: (args: { caller?: string; tableId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
@@ -186,6 +190,7 @@ export type OcpCosmosClient = {
   }) => Promise<DeliverTxResponse>;
   dealerDkgComplaintMissing: (args: { complainer: string; epochId: UintLike; dealer: string; memo?: string }) => Promise<DeliverTxResponse>;
   dealerDkgComplaintInvalid: (args: { complainer: string; epochId: UintLike; dealer: string; shareMsg: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
+  dealerDkgComplaintAEADBad: (args: { complainer: string; epochId: UintLike; dealer: string; recipientIndex: number; dhShare: Uint8Array; dleqProof: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
   dealerDkgShareReveal: (args: { dealer: string; epochId: UintLike; to: string; share: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
   /** DKG v2 encrypted-share delivery (replaces dkgShareReveal for v2 chains). */
   dealerDkgEncryptedShare: (args: {
@@ -280,9 +285,15 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     rakeBps?: number;
     maxPlayers?: number;
     label?: string;
-    password?: string;
+    passwordCommitment?: Uint8Array;
+    passwordSalt?: Uint8Array;
     memo?: string;
   }): Promise<DeliverTxResponse> {
+    const hasCommit = a.passwordCommitment && a.passwordCommitment.length > 0;
+    const hasSalt = a.passwordSalt && a.passwordSalt.length > 0;
+    if (Boolean(hasCommit) !== Boolean(hasSalt)) {
+      throw new Error("passwordCommitment and passwordSalt must both be set or both empty");
+    }
     const msg: MsgCreateTable = {
       creator: (a.creator ?? signing.address).trim(),
       smallBlind: toU64String(a.smallBlind, "smallBlind"),
@@ -295,7 +306,8 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       rakeBps: a.rakeBps ?? 0,
       maxPlayers: a.maxPlayers ?? 0, // 0 => module default (9)
       label: a.label ?? "",
-      password: a.password ?? ""
+      passwordCommitment: a.passwordCommitment ?? new Uint8Array(0),
+      passwordSalt: a.passwordSalt ?? new Uint8Array(0)
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.createTable, value: msg };
     return signAndBroadcast([eo], a.memo);
@@ -306,7 +318,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     tableId: UintLike;
     buyIn: UintLike;
     pkPlayer: Uint8Array;
-    password?: string;
+    passwordProof?: Uint8Array;
     memo?: string;
   }): Promise<DeliverTxResponse> {
     const msg: MsgSit = {
@@ -314,7 +326,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       tableId: toU64String(a.tableId, "tableId"),
       buyIn: toU64String(a.buyIn, "buyIn"),
       pkPlayer: a.pkPlayer,
-      password: a.password ?? ""
+      passwordProof: a.passwordProof ?? new Uint8Array(0)
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.sit, value: msg };
     return signAndBroadcast([eo], a.memo);
@@ -470,6 +482,29 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       shareMsg: a.shareMsg
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.dkgComplaintInvalid, value: msg };
+    return signAndBroadcast([eo], a.memo);
+  }
+
+  async function dealerDkgComplaintAEADBad(a: {
+    complainer: string;
+    epochId: UintLike;
+    dealer: string;
+    recipientIndex: number;
+    dhShare: Uint8Array;
+    dleqProof: Uint8Array;
+    memo?: string;
+  }): Promise<DeliverTxResponse> {
+    if (a.dhShare.length !== 32) throw new Error("dhShare must be 32 bytes");
+    if (a.dleqProof.length !== 96) throw new Error("dleqProof must be 96 bytes");
+    const msg: MsgDkgComplaintAEADBad = {
+      complainer: a.complainer.trim(),
+      epochId: toU64String(a.epochId, "epochId"),
+      dealer: a.dealer.trim(),
+      recipientIndex: a.recipientIndex,
+      dhShare: a.dhShare,
+      dleqProof: a.dleqProof
+    };
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.dkgComplaintAEADBad, value: msg };
     return signAndBroadcast([eo], a.memo);
   }
 
@@ -652,6 +687,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     dealerDkgCommit,
     dealerDkgComplaintMissing,
     dealerDkgComplaintInvalid,
+    dealerDkgComplaintAEADBad,
     dealerDkgShareReveal,
     dealerDkgEncryptedShare,
     dealerFinalizeEpoch,

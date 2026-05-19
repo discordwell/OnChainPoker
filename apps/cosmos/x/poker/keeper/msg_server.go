@@ -3,7 +3,6 @@ package keeper
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"math"
 
@@ -26,13 +25,21 @@ var _ types.MsgServer = msgServer{}
 
 const (
 	MaxTableLabelLen     = 64
-	MaxTablePasswordLen  = 64
 	MaxActionTimeoutSecs = 600  // 10 minutes
 	MaxDealerTimeoutSecs = 1800 // 30 minutes
 	MaxBuyInUchips       = 1_000_000_000_000 // 1M CHIPS
 	// InterHandCooldownBlocks defeats single-block griefing of StartHand while
 	// staying short enough to be invisible during normal table cadence (~30s at 6s blocks).
 	InterHandCooldownBlocks = 5
+	// PasswordCommitmentBytes is the byte length of password_commitment and
+	// password_proof: 32 bytes (SHA-256 output).
+	PasswordCommitmentBytes = 32
+	// PasswordSaltMinBytes / PasswordSaltMaxBytes bound the per-table salt.
+	// 16 is enough entropy to defeat rainbow tables; 32 mirrors the SHA-256
+	// block size and matches the chain's other 32-byte salt conventions
+	// (beacon protocol). Clients should always use 32.
+	PasswordSaltMinBytes = 16
+	PasswordSaltMaxBytes = 32
 )
 
 func NewMsgServerImpl(k Keeper, cdc codec.BinaryCodec) types.MsgServer {
@@ -72,8 +79,21 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 	if len(req.Label) > MaxTableLabelLen {
 		return nil, types.ErrInvalidTableCfg.Wrapf("label exceeds %d bytes", MaxTableLabelLen)
 	}
-	if len(req.Password) > MaxTablePasswordLen {
-		return nil, types.ErrInvalidTableCfg.Wrapf("password exceeds %d bytes", MaxTablePasswordLen)
+	// Password is now a client-computed commitment: SHA256(password_salt || password).
+	// Either both commitment+salt are empty (no password) or both must be set
+	// with strict length bounds. Plaintext never crosses the wire.
+	hasCommit := len(req.PasswordCommitment) > 0
+	hasSalt := len(req.PasswordSalt) > 0
+	if hasCommit != hasSalt {
+		return nil, types.ErrInvalidTableCfg.Wrap("password_commitment and password_salt must both be set or both empty")
+	}
+	if hasCommit {
+		if len(req.PasswordCommitment) != PasswordCommitmentBytes {
+			return nil, types.ErrInvalidTableCfg.Wrapf("password_commitment must be %d bytes", PasswordCommitmentBytes)
+		}
+		if len(req.PasswordSalt) < PasswordSaltMinBytes || len(req.PasswordSalt) > PasswordSaltMaxBytes {
+			return nil, types.ErrInvalidTableCfg.Wrapf("password_salt must be %d-%d bytes", PasswordSaltMinBytes, PasswordSaltMaxBytes)
+		}
 	}
 	if req.ActionTimeoutSecs > MaxActionTimeoutSecs {
 		return nil, types.ErrInvalidTableCfg.Wrapf("action_timeout_secs exceeds %d", MaxActionTimeoutSecs)
@@ -109,10 +129,10 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 		return nil, err
 	}
 
-	var passwordHash []byte
-	if req.Password != "" {
-		h := sha256.Sum256([]byte(req.Password))
-		passwordHash = h[:]
+	var passwordHash, passwordSalt []byte
+	if hasCommit {
+		passwordHash = append([]byte(nil), req.PasswordCommitment...)
+		passwordSalt = append([]byte(nil), req.PasswordSalt...)
 	}
 
 	t := &types.Table{
@@ -130,6 +150,7 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 			PlayerBond:        req.PlayerBond,
 			RakeBps:           req.RakeBps,
 			PasswordHash:      passwordHash,
+			PasswordSalt:      passwordSalt,
 		},
 		Seats:      make([]*types.Seat, 9),
 		NextHandId: 1,
@@ -175,13 +196,17 @@ func (m msgServer) Sit(ctx context.Context, req *types.MsgSit) (*types.MsgSitRes
 		return nil, types.ErrSeatOccupied.Wrap("already seated at this table")
 	}
 
-	// Password check.
+	// Password check. The chain stores SHA256(salt || password) in PasswordHash;
+	// the client computes the same expression and submits it as PasswordProof.
+	// Plaintext never crosses the wire.
 	if len(t.Params.PasswordHash) > 0 {
-		if req.Password == "" {
+		if len(req.PasswordProof) == 0 {
 			return nil, types.ErrInvalidRequest.Wrap("password required")
 		}
-		h := sha256.Sum256([]byte(req.Password))
-		if !bytes.Equal(h[:], t.Params.PasswordHash) {
+		if len(req.PasswordProof) != PasswordCommitmentBytes {
+			return nil, types.ErrInvalidRequest.Wrapf("password_proof must be %d bytes", PasswordCommitmentBytes)
+		}
+		if !bytes.Equal(req.PasswordProof, t.Params.PasswordHash) {
 			return nil, types.ErrInvalidRequest.Wrap("wrong password")
 		}
 	}

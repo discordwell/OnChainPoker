@@ -24,7 +24,11 @@ import (
 )
 
 // ConsensusVersion defines the current x/poker module consensus version.
-const ConsensusVersion = 1
+//
+// v2 introduces TableParams.password_salt and replaces plaintext password
+// fields on MsgCreateTable/MsgSit with client-computed commitments+proofs.
+// See keeper.Migrator.Migrate1to2.
+const ConsensusVersion = 2
 
 var (
 	_ module.AppModuleBasic = AppModule{}
@@ -84,6 +88,11 @@ func (AppModule) IsAppModule()        {}
 func (am AppModule) RegisterServices(cfg module.Configurator) {
 	types.RegisterMsgServer(cfg.MsgServer(), keeper.NewMsgServerImpl(am.keeper, am.cdc))
 	types.RegisterQueryServer(cfg.QueryServer(), keeper.NewQueryServerImpl(am.keeper))
+
+	m := keeper.NewMigrator(am.keeper)
+	if err := cfg.RegisterMigration(types.ModuleName, 1, m.Migrate1to2); err != nil {
+		panic(fmt.Errorf("x/poker: failed to register Migrate1to2: %w", err))
+	}
 }
 
 func (am AppModule) InitGenesis(ctx sdk.Context, cdc codec.JSONCodec, data json.RawMessage) {

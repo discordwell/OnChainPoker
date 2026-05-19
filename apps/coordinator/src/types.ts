@@ -4,7 +4,10 @@ export type TableParams = {
   bigBlind: string;
   minBuyIn: string;
   maxBuyIn: string;
+  // Base64-encoded SHA256(salt || password). Truthy iff the table is gated.
   passwordHash?: string;
+  // Base64-encoded 32-byte salt for new tables; empty for legacy tables.
+  passwordSalt?: string;
 };
 
 export type ChatMessage = {

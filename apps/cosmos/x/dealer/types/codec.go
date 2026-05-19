@@ -18,6 +18,7 @@ func RegisterLegacyAminoCodec(cdc *codec.LegacyAmino) {
 	legacy.RegisterAminoMsg(cdc, &MsgDkgCommit{}, "ocp/dealer/DkgCommit")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgComplaintMissing{}, "ocp/dealer/DkgComplaintMissing")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgComplaintInvalid{}, "ocp/dealer/DkgComplaintInvalid")
+	legacy.RegisterAminoMsg(cdc, &MsgDkgComplaintAEADBad{}, "ocp/dealer/DkgComplaintAEADBad")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgShareReveal{}, "ocp/dealer/DkgShareReveal")
 	legacy.RegisterAminoMsg(cdc, &MsgFinalizeEpoch{}, "ocp/dealer/FinalizeEpoch")
 	legacy.RegisterAminoMsg(cdc, &MsgDkgTimeout{}, "ocp/dealer/DkgTimeout")
@@ -42,6 +43,7 @@ func RegisterInterfaces(registry codectypes.InterfaceRegistry) {
 		&MsgDkgCommit{},
 		&MsgDkgComplaintMissing{},
 		&MsgDkgComplaintInvalid{},
+		&MsgDkgComplaintAEADBad{},
 		&MsgDkgShareReveal{},
 		&MsgFinalizeEpoch{},
 		&MsgDkgTimeout{},

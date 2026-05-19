@@ -9,7 +9,12 @@ export type TableInfo = {
     bigBlind: string;
     minBuyIn: string;
     maxBuyIn: string;
+    // Base64-encoded SHA256(salt || password) commitment. Truthy iff the
+    // table requires a password to sit.
     passwordHash?: string;
+    // Base64-encoded 32-byte salt. Empty for legacy (pre-v2) tables; the
+    // client treats the salt as zero-length and computes the proof accordingly.
+    passwordSalt?: string;
   };
   status: "open" | "in_hand" | "closed";
   updatedAtMs: number;

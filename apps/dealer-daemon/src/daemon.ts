@@ -276,6 +276,7 @@ export class DealerDaemon {
 
         // Phase 4: Aggregate secret share from reveals (must happen BEFORE finalization)
         const aggregated = await handleDkgAggregate({
+          client: this.client,
           stateStore: this.stateStore,
           config: this.config,
           epochId,

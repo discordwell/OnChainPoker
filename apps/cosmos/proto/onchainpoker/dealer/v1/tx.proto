@@ -25,6 +25,13 @@ service Msg {
   rpc DkgCommit(MsgDkgCommit) returns (MsgDkgCommitResponse);
   rpc DkgComplaintMissing(MsgDkgComplaintMissing) returns (MsgDkgComplaintMissingResponse);
   rpc DkgComplaintInvalid(MsgDkgComplaintInvalid) returns (MsgDkgComplaintInvalidResponse);
+  // DkgComplaintAEADBad lets a recipient surface a malformed scalar_ct from
+  // a dealer's MsgDkgEncryptedShare. The complainer reveals dh = skR*U plus a
+  // Chaum-Pedersen DLEQ proof binding dh to the on-chain (pkR, U); the chain
+  // then runs AES-GCM open and compares the recovered scalar to the share
+  // point implied by ElGamal V - dh. Slashes the dealer on AEAD-fail or
+  // scalar/point mismatch; slashes the complainer on spurious complaint.
+  rpc DkgComplaintAEADBad(MsgDkgComplaintAEADBad) returns (MsgDkgComplaintAEADBadResponse);
   // DkgShareReveal is the LEGACY v1 plaintext reveal path. It remains
   // accepted for backward compatibility with v1 chains; DKG v2 replaces it
   // with MsgDkgEncryptedShare (see docs/DKG-V2.md).
@@ -113,6 +120,22 @@ message MsgDkgComplaintInvalid {
 }
 
 message MsgDkgComplaintInvalidResponse {}
+
+message MsgDkgComplaintAEADBad {
+  option (cosmos.msg.v1.signer) = "complainer";
+  option (gogoproto.goproto_getters) = false;
+
+  string complainer = 1 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint64 epoch_id = 2;
+  string dealer = 3 [(cosmos_proto.scalar) = "cosmos.ValidatorAddressString"];
+  uint32 recipient_index = 4;
+  // 32-byte point: dh = skR * U where U is the dealer's encrypted-share nonce.
+  bytes dh_share = 5;
+  // 96-byte encoded ChaumPedersenProof binding dh_share to (pkR, U).
+  bytes dleq_proof = 6;
+}
+
+message MsgDkgComplaintAEADBadResponse {}
 
 message MsgDkgShareReveal {
   option (cosmos.msg.v1.signer) = "dealer";

@@ -22,8 +22,13 @@ export interface MsgCreateTable {
   /** default 9 */
   maxPlayers: number;
   label: string;
-  /** plaintext; keeper hashes before storage */
-  password: string;
+  /**
+   * 32-byte commitment computed client-side as SHA256(password_salt || password).
+   * Empty = table has no password. Plaintext password never crosses the wire.
+   */
+  passwordCommitment: Uint8Array;
+  /** 32 random bytes for new tables; empty if password_commitment is empty. */
+  passwordSalt: Uint8Array;
 }
 
 export interface MsgCreateTableResponse {
@@ -36,8 +41,11 @@ export interface MsgSit {
   buyIn: string;
   /** 32-byte ristretto point (required for dealer mode) */
   pkPlayer: Uint8Array;
-  /** plaintext; validated against table password_hash */
-  password: string;
+  /**
+   * 32-byte proof computed client-side as SHA256(table.password_salt || password).
+   * Required iff the table has a non-empty password_hash; chain compares bytes.
+   */
+  passwordProof: Uint8Array;
 }
 
 export interface MsgSitResponse {
@@ -104,7 +112,8 @@ function createBaseMsgCreateTable(): MsgCreateTable {
     rakeBps: 0,
     maxPlayers: 0,
     label: "",
-    password: "",
+    passwordCommitment: new Uint8Array(0),
+    passwordSalt: new Uint8Array(0),
   };
 }
 
@@ -143,8 +152,11 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     if (message.label !== "") {
       writer.uint32(90).string(message.label);
     }
-    if (message.password !== "") {
-      writer.uint32(98).string(message.password);
+    if (message.passwordCommitment.length !== 0) {
+      writer.uint32(106).bytes(message.passwordCommitment);
+    }
+    if (message.passwordSalt.length !== 0) {
+      writer.uint32(114).bytes(message.passwordSalt);
     }
     return writer;
   },
@@ -244,12 +256,20 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
           message.label = reader.string();
           continue;
         }
-        case 12: {
-          if (tag !== 98) {
+        case 13: {
+          if (tag !== 106) {
             break;
           }
 
-          message.password = reader.string();
+          message.passwordCommitment = reader.bytes();
+          continue;
+        }
+        case 14: {
+          if (tag !== 114) {
+            break;
+          }
+
+          message.passwordSalt = reader.bytes();
           continue;
         }
       }
@@ -310,7 +330,16 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
         ? globalThis.Number(object.max_players)
         : 0,
       label: isSet(object.label) ? globalThis.String(object.label) : "",
-      password: isSet(object.password) ? globalThis.String(object.password) : "",
+      passwordCommitment: isSet(object.passwordCommitment)
+        ? bytesFromBase64(object.passwordCommitment)
+        : isSet(object.password_commitment)
+        ? bytesFromBase64(object.password_commitment)
+        : new Uint8Array(0),
+      passwordSalt: isSet(object.passwordSalt)
+        ? bytesFromBase64(object.passwordSalt)
+        : isSet(object.password_salt)
+        ? bytesFromBase64(object.password_salt)
+        : new Uint8Array(0),
     };
   },
 
@@ -349,8 +378,11 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     if (message.label !== "") {
       obj.label = message.label;
     }
-    if (message.password !== "") {
-      obj.password = message.password;
+    if (message.passwordCommitment.length !== 0) {
+      obj.passwordCommitment = base64FromBytes(message.passwordCommitment);
+    }
+    if (message.passwordSalt.length !== 0) {
+      obj.passwordSalt = base64FromBytes(message.passwordSalt);
     }
     return obj;
   },
@@ -371,7 +403,8 @@ export const MsgCreateTable: MessageFns<MsgCreateTable> = {
     message.rakeBps = object.rakeBps ?? 0;
     message.maxPlayers = object.maxPlayers ?? 0;
     message.label = object.label ?? "";
-    message.password = object.password ?? "";
+    message.passwordCommitment = object.passwordCommitment ?? new Uint8Array(0);
+    message.passwordSalt = object.passwordSalt ?? new Uint8Array(0);
     return message;
   },
 };
@@ -441,7 +474,7 @@ export const MsgCreateTableResponse: MessageFns<MsgCreateTableResponse> = {
 };
 
 function createBaseMsgSit(): MsgSit {
-  return { player: "", tableId: "0", buyIn: "0", pkPlayer: new Uint8Array(0), password: "" };
+  return { player: "", tableId: "0", buyIn: "0", pkPlayer: new Uint8Array(0), passwordProof: new Uint8Array(0) };
 }
 
 export const MsgSit: MessageFns<MsgSit> = {
@@ -458,8 +491,8 @@ export const MsgSit: MessageFns<MsgSit> = {
     if (message.pkPlayer.length !== 0) {
       writer.uint32(42).bytes(message.pkPlayer);
     }
-    if (message.password !== "") {
-      writer.uint32(50).string(message.password);
+    if (message.passwordProof.length !== 0) {
+      writer.uint32(58).bytes(message.passwordProof);
     }
     return writer;
   },
@@ -503,12 +536,12 @@ export const MsgSit: MessageFns<MsgSit> = {
           message.pkPlayer = reader.bytes();
           continue;
         }
-        case 6: {
-          if (tag !== 50) {
+        case 7: {
+          if (tag !== 58) {
             break;
           }
 
-          message.password = reader.string();
+          message.passwordProof = reader.bytes();
           continue;
         }
       }
@@ -538,7 +571,11 @@ export const MsgSit: MessageFns<MsgSit> = {
         : isSet(object.pk_player)
         ? bytesFromBase64(object.pk_player)
         : new Uint8Array(0),
-      password: isSet(object.password) ? globalThis.String(object.password) : "",
+      passwordProof: isSet(object.passwordProof)
+        ? bytesFromBase64(object.passwordProof)
+        : isSet(object.password_proof)
+        ? bytesFromBase64(object.password_proof)
+        : new Uint8Array(0),
     };
   },
 
@@ -556,8 +593,8 @@ export const MsgSit: MessageFns<MsgSit> = {
     if (message.pkPlayer.length !== 0) {
       obj.pkPlayer = base64FromBytes(message.pkPlayer);
     }
-    if (message.password !== "") {
-      obj.password = message.password;
+    if (message.passwordProof.length !== 0) {
+      obj.passwordProof = base64FromBytes(message.passwordProof);
     }
     return obj;
   },
@@ -571,7 +608,7 @@ export const MsgSit: MessageFns<MsgSit> = {
     message.tableId = object.tableId ?? "0";
     message.buyIn = object.buyIn ?? "0";
     message.pkPlayer = object.pkPlayer ?? new Uint8Array(0);
-    message.password = object.password ?? "";
+    message.passwordProof = object.passwordProof ?? new Uint8Array(0);
     return message;
   },
 };

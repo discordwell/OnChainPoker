@@ -61,6 +61,20 @@ export interface MsgDkgComplaintInvalid {
 export interface MsgDkgComplaintInvalidResponse {
 }
 
+export interface MsgDkgComplaintAEADBad {
+  complainer: string;
+  epochId: string;
+  dealer: string;
+  recipientIndex: number;
+  /** 32-byte point: dh = skR * U where U is the dealer's encrypted-share nonce. */
+  dhShare: Uint8Array;
+  /** 96-byte encoded ChaumPedersenProof binding dh_share to (pkR, U). */
+  dleqProof: Uint8Array;
+}
+
+export interface MsgDkgComplaintAEADBadResponse {
+}
+
 export interface MsgDkgShareReveal {
   dealer: string;
   epochId: string;
@@ -995,6 +1009,212 @@ export const MsgDkgComplaintInvalidResponse: MessageFns<MsgDkgComplaintInvalidRe
   },
   fromPartial<I extends Exact<DeepPartial<MsgDkgComplaintInvalidResponse>, I>>(_: I): MsgDkgComplaintInvalidResponse {
     const message = createBaseMsgDkgComplaintInvalidResponse();
+    return message;
+  },
+};
+
+function createBaseMsgDkgComplaintAEADBad(): MsgDkgComplaintAEADBad {
+  return {
+    complainer: "",
+    epochId: "0",
+    dealer: "",
+    recipientIndex: 0,
+    dhShare: new Uint8Array(0),
+    dleqProof: new Uint8Array(0),
+  };
+}
+
+export const MsgDkgComplaintAEADBad: MessageFns<MsgDkgComplaintAEADBad> = {
+  encode(message: MsgDkgComplaintAEADBad, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.complainer !== "") {
+      writer.uint32(10).string(message.complainer);
+    }
+    if (message.epochId !== "0") {
+      writer.uint32(16).uint64(message.epochId);
+    }
+    if (message.dealer !== "") {
+      writer.uint32(26).string(message.dealer);
+    }
+    if (message.recipientIndex !== 0) {
+      writer.uint32(32).uint32(message.recipientIndex);
+    }
+    if (message.dhShare.length !== 0) {
+      writer.uint32(42).bytes(message.dhShare);
+    }
+    if (message.dleqProof.length !== 0) {
+      writer.uint32(50).bytes(message.dleqProof);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgDkgComplaintAEADBad {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgDkgComplaintAEADBad();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.complainer = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 16) {
+            break;
+          }
+
+          message.epochId = reader.uint64().toString();
+          continue;
+        }
+        case 3: {
+          if (tag !== 26) {
+            break;
+          }
+
+          message.dealer = reader.string();
+          continue;
+        }
+        case 4: {
+          if (tag !== 32) {
+            break;
+          }
+
+          message.recipientIndex = reader.uint32();
+          continue;
+        }
+        case 5: {
+          if (tag !== 42) {
+            break;
+          }
+
+          message.dhShare = reader.bytes();
+          continue;
+        }
+        case 6: {
+          if (tag !== 50) {
+            break;
+          }
+
+          message.dleqProof = reader.bytes();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): MsgDkgComplaintAEADBad {
+    return {
+      complainer: isSet(object.complainer) ? globalThis.String(object.complainer) : "",
+      epochId: isSet(object.epochId)
+        ? globalThis.String(object.epochId)
+        : isSet(object.epoch_id)
+        ? globalThis.String(object.epoch_id)
+        : "0",
+      dealer: isSet(object.dealer) ? globalThis.String(object.dealer) : "",
+      recipientIndex: isSet(object.recipientIndex)
+        ? globalThis.Number(object.recipientIndex)
+        : isSet(object.recipient_index)
+        ? globalThis.Number(object.recipient_index)
+        : 0,
+      dhShare: isSet(object.dhShare)
+        ? bytesFromBase64(object.dhShare)
+        : isSet(object.dh_share)
+        ? bytesFromBase64(object.dh_share)
+        : new Uint8Array(0),
+      dleqProof: isSet(object.dleqProof)
+        ? bytesFromBase64(object.dleqProof)
+        : isSet(object.dleq_proof)
+        ? bytesFromBase64(object.dleq_proof)
+        : new Uint8Array(0),
+    };
+  },
+
+  toJSON(message: MsgDkgComplaintAEADBad): unknown {
+    const obj: any = {};
+    if (message.complainer !== "") {
+      obj.complainer = message.complainer;
+    }
+    if (message.epochId !== "0") {
+      obj.epochId = message.epochId;
+    }
+    if (message.dealer !== "") {
+      obj.dealer = message.dealer;
+    }
+    if (message.recipientIndex !== 0) {
+      obj.recipientIndex = Math.round(message.recipientIndex);
+    }
+    if (message.dhShare.length !== 0) {
+      obj.dhShare = base64FromBytes(message.dhShare);
+    }
+    if (message.dleqProof.length !== 0) {
+      obj.dleqProof = base64FromBytes(message.dleqProof);
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgDkgComplaintAEADBad>, I>>(base?: I): MsgDkgComplaintAEADBad {
+    return MsgDkgComplaintAEADBad.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgDkgComplaintAEADBad>, I>>(object: I): MsgDkgComplaintAEADBad {
+    const message = createBaseMsgDkgComplaintAEADBad();
+    message.complainer = object.complainer ?? "";
+    message.epochId = object.epochId ?? "0";
+    message.dealer = object.dealer ?? "";
+    message.recipientIndex = object.recipientIndex ?? 0;
+    message.dhShare = object.dhShare ?? new Uint8Array(0);
+    message.dleqProof = object.dleqProof ?? new Uint8Array(0);
+    return message;
+  },
+};
+
+function createBaseMsgDkgComplaintAEADBadResponse(): MsgDkgComplaintAEADBadResponse {
+  return {};
+}
+
+export const MsgDkgComplaintAEADBadResponse: MessageFns<MsgDkgComplaintAEADBadResponse> = {
+  encode(_: MsgDkgComplaintAEADBadResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): MsgDkgComplaintAEADBadResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseMsgDkgComplaintAEADBadResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): MsgDkgComplaintAEADBadResponse {
+    return {};
+  },
+
+  toJSON(_: MsgDkgComplaintAEADBadResponse): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<MsgDkgComplaintAEADBadResponse>, I>>(base?: I): MsgDkgComplaintAEADBadResponse {
+    return MsgDkgComplaintAEADBadResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<MsgDkgComplaintAEADBadResponse>, I>>(_: I): MsgDkgComplaintAEADBadResponse {
+    const message = createBaseMsgDkgComplaintAEADBadResponse();
     return message;
   },
 };

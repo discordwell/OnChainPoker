@@ -24,7 +24,13 @@ message TableParams {
   uint64 dealer_timeout_secs = 7;
   uint64 player_bond = 8;
   uint32 rake_bps = 9;
-  bytes password_hash = 10; // SHA-256 hash; empty = no password required
+  // 32-byte SHA256(password_salt || password) commitment. Empty = no password.
+  // Pre-v2 legacy tables store SHA256(password) here with password_salt empty;
+  // the client computes the proof against whichever salt is on-chain.
+  bytes password_hash = 10;
+  // 32 random bytes for tables created after the v2 password rollout; empty
+  // for legacy tables. Public — clients read it to compute password_proof.
+  bytes password_salt = 11;
 }
 
 message Seat {

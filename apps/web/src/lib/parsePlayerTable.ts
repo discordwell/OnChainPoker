@@ -29,7 +29,9 @@ export type PlayerTableState = {
     bigBlind: string;
     minBuyIn: string;
     maxBuyIn: string;
+    // Base64 strings — see types.ts TableInfo for semantics.
     passwordHash?: string;
+    passwordSalt?: string;
   };
   seats: PlayerSeatState[];
   hand: PlayerHandState | null;
@@ -114,7 +116,13 @@ export function parsePlayerTable(raw: unknown): PlayerTableState | null {
       smallBlind: String(params.smallBlind ?? params.small_blind ?? "0"),
       bigBlind: String(params.bigBlind ?? params.big_blind ?? "0"),
       minBuyIn: String(params.minBuyIn ?? params.min_buy_in ?? "0"),
-      maxBuyIn: String(params.maxBuyIn ?? params.max_buy_in ?? "0")
+      maxBuyIn: String(params.maxBuyIn ?? params.max_buy_in ?? "0"),
+      passwordHash: typeof (params.passwordHash ?? params.password_hash) === "string"
+        ? String(params.passwordHash ?? params.password_hash) || undefined
+        : undefined,
+      passwordSalt: typeof (params.passwordSalt ?? params.password_salt) === "string"
+        ? String(params.passwordSalt ?? params.password_salt) || undefined
+        : undefined
     },
     seats,
     hand: handRaw

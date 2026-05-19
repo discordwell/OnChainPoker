@@ -892,13 +892,21 @@ func TestSitPasswordRequired(t *testing.T) {
 	p0 := addr(0xE2).String()
 	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
 
+	// Client-side: pick a 32-byte salt and compute the commitment
+	// SHA256(salt || password). Plaintext never touches the chain.
+	salt := bytes.Repeat([]byte{0xAB}, 32)
+	commit := sha256.Sum256(append(append([]byte{}, salt...), []byte("secret")...))
+	wrong := sha256.Sum256(append(append([]byte{}, salt...), []byte("wrong")...))
+
 	// Create password-protected table.
 	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
 		Creator:    creator,
 		SmallBlind: 1, BigBlind: 2,
 		MinBuyIn: 100, MaxBuyIn: 1000,
-		MaxPlayers: 9, Label: "pw-table",
-		Password: "secret",
+		MaxPlayers:         9,
+		Label:              "pw-table",
+		PasswordCommitment: commit[:],
+		PasswordSalt:       salt,
 	})
 	require.NoError(t, err)
 
@@ -912,7 +920,7 @@ func TestSitPasswordRequired(t *testing.T) {
 	// Sit with wrong password → rejected.
 	_, err = ms.Sit(ctx, &types.MsgSit{
 		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
-		Password: "wrong",
+		PasswordProof: wrong[:],
 	})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "wrong password")
@@ -920,7 +928,7 @@ func TestSitPasswordRequired(t *testing.T) {
 	// Sit with correct password → success.
 	resp, err := ms.Sit(ctx, &types.MsgSit{
 		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
-		Password: "secret",
+		PasswordProof: commit[:],
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint32(0), resp.Seat)
@@ -1070,18 +1078,109 @@ func TestAutoAssignSeatPlacement(t *testing.T) {
 	require.Equal(t, uint32(8), resp.Seat, "new player placed after BB at seat 7 → first empty is seat 8")
 }
 
+// TestSitPasswordLegacyTableBitCompat verifies that a pre-v2 table (with
+// password_hash = SHA256(password) and an empty password_salt) still
+// authenticates a v2 client that computes SHA256(empty || password) =
+// SHA256(password). This is the dual-path compatibility the migration plan
+// relies on so existing tables don't break when v2 deploys.
+func TestSitPasswordLegacyTableBitCompat(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uchips"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xF1).String()
+	p0 := addr(0xF2).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	// Manually plant a legacy table: empty salt, password_hash = SHA256("legacy").
+	legacyHash := sha256.Sum256([]byte("legacy"))
+	legacyTable := &types.Table{
+		Id:      1,
+		Creator: creator,
+		Label:   "legacy-table",
+		Params: types.TableParams{
+			MaxPlayers:   9,
+			SmallBlind:   1,
+			BigBlind:     2,
+			MinBuyIn:     100,
+			MaxBuyIn:     1000,
+			PasswordHash: legacyHash[:], // unsalted SHA256
+			PasswordSalt: nil,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 1,
+		ButtonSeat: -1,
+	}
+	require.NoError(t, k.SetTable(ctx, legacyTable))
+	require.NoError(t, k.SetNextTableID(ctx, 2))
+
+	// v2 client computes SHA256(empty_salt || password) = SHA256("legacy").
+	proof := sha256.Sum256([]byte("legacy"))
+	resp, err := ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+		PasswordProof: proof[:],
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint32(0), resp.Seat)
+}
+
+// TestSitPasswordProofWrongLength rejects a non-32-byte proof so a malformed
+// client can't squeak through with a partial digest.
+func TestSitPasswordProofWrongLength(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uchips"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	creator := addr(0xF3).String()
+	p0 := addr(0xF4).String()
+	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+
+	salt := bytes.Repeat([]byte{0x77}, 32)
+	commit := sha256.Sum256(append(append([]byte{}, salt...), []byte("pw")...))
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers:         9,
+		Label:              "len-test",
+		PasswordCommitment: commit[:],
+		PasswordSalt:       salt,
+	})
+	require.NoError(t, err)
+
+	// Sit with a too-short proof (16 bytes) → rejected.
+	short := make([]byte, 16)
+	_, err = ms.Sit(ctx, &types.MsgSit{
+		Player: p0, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
+		PasswordProof: short,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "password_proof must be")
+}
+
 func TestCreateTableWithPassword(t *testing.T) {
 	sdkCtx, k, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
 	ctx := sdk.WrapSDKContext(sdkCtx)
 
 	creator := addr(0xEA).String()
 
+	salt := bytes.Repeat([]byte{0xCD}, 32)
+	commit := sha256.Sum256(append(append([]byte{}, salt...), []byte("testpass")...))
+
 	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
 		Creator:    creator,
 		SmallBlind: 1, BigBlind: 2,
 		MinBuyIn: 100, MaxBuyIn: 1000,
-		MaxPlayers: 9, Label: "pw",
-		Password: "testpass",
+		MaxPlayers:         9,
+		Label:              "pw",
+		PasswordCommitment: commit[:],
+		PasswordSalt:       salt,
 	})
 	require.NoError(t, err)
 
@@ -1089,10 +1188,8 @@ func TestCreateTableWithPassword(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, tbl.Params.PasswordHash, "password hash should be set")
 	require.Len(t, tbl.Params.PasswordHash, 32, "SHA-256 produces 32 bytes")
-
-	// Verify hash matches SHA-256 of "testpass".
-	expected := sha256.Sum256([]byte("testpass"))
-	require.Equal(t, expected[:], tbl.Params.PasswordHash)
+	require.Equal(t, commit[:], tbl.Params.PasswordHash)
+	require.Equal(t, salt, tbl.Params.PasswordSalt)
 }
 
 // ---------------------------------------------------------------------------
@@ -1622,25 +1719,53 @@ func TestCreateTable_RejectsOversizeLabel(t *testing.T) {
 	require.ErrorContains(t, err, "label exceeds")
 }
 
-func TestCreateTable_RejectsOversizePassword(t *testing.T) {
+func TestCreateTable_RejectsMalformedPasswordFields(t *testing.T) {
 	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
 	ctx := sdk.WrapSDKContext(sdkCtx)
 	creator := addr(0x23).String()
 
-	huge := make([]byte, keeper.MaxTablePasswordLen+1)
-	for i := range huge {
-		huge[i] = 'p'
-	}
+	salt := bytes.Repeat([]byte{0x55}, 32)
+	good := sha256.Sum256(append(append([]byte{}, salt...), []byte("pw")...))
 
+	// Commitment set but salt missing → rejected.
 	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
 		Creator:    creator,
 		SmallBlind: 1, BigBlind: 2,
 		MinBuyIn: 100, MaxBuyIn: 1000,
-		MaxPlayers: 9, Label: "pw-test",
-		Password: string(huge),
+		MaxPlayers:         9,
+		Label:              "pw-1",
+		PasswordCommitment: good[:],
 	})
 	require.Error(t, err)
-	require.ErrorContains(t, err, "password exceeds")
+	require.ErrorContains(t, err, "must both be set or both empty")
+
+	// Commitment wrong length → rejected.
+	short := make([]byte, keeper.PasswordCommitmentBytes-1)
+	_, err = ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers:         9,
+		Label:              "pw-2",
+		PasswordCommitment: short,
+		PasswordSalt:       salt,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "password_commitment must be")
+
+	// Salt too short → rejected.
+	tinySalt := make([]byte, keeper.PasswordSaltMinBytes-1)
+	_, err = ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers:         9,
+		Label:              "pw-3",
+		PasswordCommitment: good[:],
+		PasswordSalt:       tinySalt,
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "password_salt must be")
 }
 
 func TestCreateTable_RejectsOversizeActionTimeout(t *testing.T) {

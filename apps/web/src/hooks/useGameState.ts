@@ -10,6 +10,7 @@ import {
 import { useHoleCards } from "../components/useHoleCards";
 import { isEncryptedBundle } from "../keyEncryption";
 import { parsePlayerTable, type PlayerTableState } from "../lib/parsePlayerTable";
+import { computePasswordProof, generatePasswordCommitment } from "../lib/passwordDigest";
 import { useChainVerification } from "../components/useChainVerification";
 import { useCometBftEvents } from "../components/useCometBftEvents";
 import type { ChainEvent } from "../lib/cometEventParser";
@@ -1119,8 +1120,16 @@ export function useGameState() {
       setPlayerSitSubmit({ kind: "pending", message: "Submitting sit transaction..." });
 
       try {
-        const sitPassword = playerSeatForm.password.trim() || undefined;
-        await client.pokerSit({ tableId, buyIn, pkPlayer, password: sitPassword });
+        const sitPasswordPlain = playerSeatForm.password;
+        let passwordProof: Uint8Array | undefined;
+        if (sitPasswordPlain && sitPasswordPlain.length > 0) {
+          // Client computes SHA256(table.passwordSalt || password) and sends
+          // bytes; plaintext stays in the browser. Empty salt (legacy tables)
+          // reduces to SHA256(password) and still matches on-chain.
+          const saltB64 = playerTable.data?.params.passwordSalt;
+          passwordProof = await computePasswordProof(saltB64, sitPasswordPlain);
+        }
+        await client.pokerSit({ tableId, buyIn, pkPlayer, passwordProof });
         setPlayerSitSubmit({ kind: "success", message: "Seated successfully." });
         setPlayerSeatForm(defaultPlayerSeatForm());
         await loadPlayerTable(tableId, false);
@@ -1283,6 +1292,17 @@ export function useGameState() {
 
       setCreateTableSubmit({ kind: "pending", message: "Creating table..." });
       try {
+        // Build the password commitment client-side so plaintext never crosses
+        // the wire. If the user left the field blank, both fields stay empty
+        // (chain stores no password on the new table).
+        let passwordCommitment: Uint8Array | undefined;
+        let passwordSalt: Uint8Array | undefined;
+        const pwPlain = f.password;
+        if (pwPlain && pwPlain.length > 0) {
+          const out = await generatePasswordCommitment(pwPlain);
+          passwordCommitment = out.commitment;
+          passwordSalt = out.salt;
+        }
         const tx = await client.pokerCreateTable({
           smallBlind: f.smallBlind.trim(),
           bigBlind: f.bigBlind.trim(),
@@ -1290,7 +1310,8 @@ export function useGameState() {
           maxBuyIn: f.maxBuyIn.trim(),
           maxPlayers: parseInt(f.maxPlayers.trim(), 10) || 9,
           label: f.label.trim(),
-          password: f.password.trim() || undefined,
+          passwordCommitment,
+          passwordSalt,
           actionTimeoutSecs: f.actionTimeoutSecs.trim() || "0",
           dealerTimeoutSecs: f.dealerTimeoutSecs.trim() || "0",
           playerBond: f.playerBond.trim() || "0",

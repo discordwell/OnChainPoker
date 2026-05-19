@@ -2,7 +2,33 @@
 
 ## Session Summaries
 
-### 2026-05-19T~UTC (latest) — Threshold≥2 Operational + Five Medium Findings Closed
+### 2026-05-19T~UTC (latest) — Audit Findings 1 + 3 Closed (DKG AEAD Complaint + MsgSit Password Commitment)
+Closed the last two audit deferrals from the prior session. Both required proto regen + buf/protoc-gen-gogo workflow; that workflow is now also documented in the codebase paths used here.
+
+**Finding 1 — DKG AEAD complaint path** (`apps/cosmos/proto/onchainpoker/dealer/v1/tx.proto`, `apps/cosmos/x/dealer/keeper/msg_server.go:659-870`, `apps/dealer-daemon/src/handlers/dkg.ts:244-340`):
+- New `MsgDkgComplaintAEADBad` lets a recipient surface a malformed `scalar_ct`. Complainant publishes `dh = skR*U` + 96-byte Chaum-Pedersen DLEQ proof binding `dh` to `(pkR=skR*G, U)`. Chain runs `ocpcrypto.ChaumPedersenVerify(pkR, U, dh, proof)`, then `ocpcrypto.DkgScalarAeadOpen(dh, scalar_ct, aad=stored_proof)`.
+- Three outcomes: AEAD tag fail → slash dealer; decrypt-but `s'*G != V - dh` → slash dealer; everything checks out → slash complainer for griefing. Mirrors `DkgComplaintInvalid`'s slash pattern including the `if dkgSlash(...) { applyPenalty(...) }` idempotency guard (code review catch — first cut omitted it; would have slashed a dealer once per recipient who filed against them).
+- DLEQ exploits the fact that `(pkR, U)` are uniquely fixed per `(epoch, dealer, recipient_index)` on-chain, so the proof binding implicitly covers the whole tuple even though the Chaum-Pedersen transcript only commits to `(pkR, U, dh, a, b)`.
+- `ocpcrypto.DkgScalarAeadOpen` exported (was internal `deriveScalarAeadKey + manual AES-GCM`) so the keeper can decrypt without inlining stdlib crypto.
+- Daemon (`dkg.ts:244-340`) refactored: AEAD throws or `s*G != v-skR*u` mismatch now fires `chaumPedersenProve` (TS counterpart from `@onchainpoker/ocp-crypto`) + `client.dealerDkgComplaintAEADBad(...)`. Idempotency via filtered `dkg.complaints` lookup for prior `aead-bad`/`aead-spurious` from this validator.
+- 10 new Go tests in `apps/cosmos/x/dealer/keeper/msg_server_aead_complaint_test.go` — happy paths, spurious slashing, bad DLEQ, both window boundaries, duplicate rejection, recipient_index mismatch, length validation, and crucially `TestDkgComplaintAEADBad_DoubleComplaintSlashesOnce` (regression guard for the code-review C1 bug).
+
+**Finding 3 — MsgSit / MsgCreateTable password commitment** (`apps/cosmos/proto/onchainpoker/poker/v1/{tx,poker}.proto`, `apps/cosmos/x/poker/keeper/msg_server.go:42-220`, `apps/web/src/lib/passwordDigest.ts`, `apps/bot/src/bot.ts:185-211`, `packages/ocp-sdk/src/cosmos/client.ts`):
+- Clean break: `MsgSit.password = 6` (string) and `MsgCreateTable.password = 12` (string) → `reserved 6;` `reserved 12;`. Replaced with `bytes password_commitment = 13;` `bytes password_salt = 14;` (CreateTable) and `bytes password_proof = 7;` (Sit). `TableParams.password_salt = 11;` new field; semantic of `password_hash = 10` shifted from "SHA256(pw)" to "SHA256(salt || pw)".
+- All clients compute the digest themselves before broadcast: web via `crypto.subtle.digest`, bot via the same (Node 22 supports `crypto.subtle`). Plaintext never crosses the wire. Coordinator + SDK + frontend types updated to carry `passwordSalt` alongside `passwordHash`.
+- Legacy-table dual path: pre-v2 tables with empty `password_salt` and unsalted `SHA256(pw)` in `password_hash` still authenticate because the v2 client computes `SHA256("" || pw) = SHA256(pw)` — byte-equal on the chain comparison. Verified by `TestSitPasswordLegacyTableBitCompat`.
+- `x/poker.ConsensusVersion` bumped 1→2; `apps/cosmos/x/poker/keeper/migrations.go` stands up `keeper.Migrator` + `Migrate1to2` no-op (iterates tables, logs count + how many had passwords, returns nil — the proto3 default already populates `password_salt = []` on existing rows). Registers via `cfg.RegisterMigration(types.ModuleName, 1, m.Migrate1to2)` in `module.go:RegisterServices`.
+- 4 new Go tests: `TestSitPasswordLegacyTableBitCompat`, `TestSitPasswordProofWrongLength`, `TestMigrate1to2_NoopOnEmptyKeeper`, `TestMigrate1to2_PreservesPasswordHash`. Existing `TestSitPasswordRequired`, `TestCreateTableWithPassword`, and `TestCreateTable_RejectsMalformedPasswordFields` rewritten for the new wire shape.
+
+**Proto regen workflow** (cosmetic but worth recording for future sessions): `cd apps/cosmos/proto && PATH="/Users/discordwell/go/bin:$PATH" buf generate` for Go; for TS use `buf generate --template buf.gen.ts.yaml` (NOT `--config` — buf v1.68.2 misparses that). Outputs: Go to `apps/cosmos/x/{poker,dealer}/types/*.pb.go`, TS to `packages/ocp-sdk/src/cosmos/gen/onchainpoker/*`.
+
+**Code review** (`/code-review` skill via subagent) caught the critical C1 bug: AEAD complaint handler discarded `dkgSlash`'s return → applyPenalty fired even when the validator was already in `dkg.Slashed`. Multi-recipient complaint scenario would have slashed the same dealer N times. Fixed in-line by mirroring the `DkgComplaintInvalid` pattern (slash + penalty + event all gated by `if slashedNow`). Reviewer also flagged that reserved-field replay drops historical plaintext silently — acceptable for testnet.
+
+**Tests green**: 10/10 AEAD complaint tests, 7/7 password+migration tests; full Go suite ok; pnpm -r build clean across all 13 projects; coordinator tests 42/44 (the 2 `http-dealer-next` failures are pre-existing per the prior claudepad entry).
+
+**Files modified/created** (29 total): proto x3, regen `.pb.go` x3, regen `.ts` x3; chain Go x5 (msg_server x2, codec, migrations [new], module, ocpcrypto/dkg_scalar_aead); test Go x3 (aead [new], migrations [new], msg_server_test); SDK TS x2 (ocp.ts, client.ts); daemon TS x2 (dkg.ts, daemon.ts); web TS x4 (passwordDigest [new], useGameState, parsePlayerTable, types); coordinator TS x2 (chain/cosmos.ts, types.ts); bot TS x1.
+
+### 2026-05-19T~UTC — Threshold≥2 Operational + Five Medium Findings Closed
 Continued from the partial rollout earlier. Closed the beacon protocol gap; chain successfully advanced to epoch 42 with `threshold=2, members=3`. Architecture claim "no single validator can see unrevealed cards" is now TRUE on the live testnet.
 
 **Beacon stuck-recovery (the actual fix):**
