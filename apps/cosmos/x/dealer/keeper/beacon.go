@@ -104,10 +104,14 @@ func (k Keeper) openBeacon(ctx context.Context, epochID uint64, commitBlocks, re
 	}
 	if existing != nil && len(existing.Final) == 0 {
 		sdkCtx := sdk.UnwrapSDKContext(ctx)
-		// Live: still within the reveal window. Post-upgrade also overwrites
-		// stuck beacons whose reveal window has passed without finalization.
-		live := sdkCtx.BlockHeight() < beaconStuckRecoveryHeight || sdkCtx.BlockHeight() <= existing.RevealCloseHeight
-		if live {
+		// Live: window still open. Consumable: window closed and has enough
+		// reveals to finalize via BeginEpoch — must not be overwritten.
+		// Post-upgrade allows overwrite ONLY for genuinely stuck beacons:
+		// window expired AND reveals < threshold (no path to finalization).
+		live := sdkCtx.BlockHeight() <= existing.RevealCloseHeight
+		consumable := uint32(len(existing.Reveals)) >= existing.Threshold
+		preUpgrade := sdkCtx.BlockHeight() < beaconStuckRecoveryHeight
+		if live || consumable || preUpgrade {
 			return nil, dealertypes.ErrInvalidRequest.Wrap("beacon window already open; consume the previous one before opening a new one")
 		}
 	}
@@ -171,10 +175,15 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	sdkCtx := sdk.UnwrapSDKContext(ctx)
 	curHeight := sdkCtx.BlockHeight()
 	if bs != nil && len(bs.Final) == 0 {
-		// Pre-upgrade: any unconsumed beacon blocks reopen.
-		// Post-upgrade: still block while reveal window is open; allow
-		// overwrite only once the window has expired (stuck recovery).
-		if curHeight < beaconStuckRecoveryHeight || curHeight <= bs.RevealCloseHeight {
+		// Skip reopen if (pre-upgrade) ANY unconsumed beacon exists, or
+		// (post-upgrade) the window is still open, or the beacon already
+		// has enough reveals to be consumed by the next BeginEpoch. Only
+		// genuinely stuck beacons (window closed, reveals < threshold) fall
+		// through to be overwritten.
+		preUpgrade := curHeight < beaconStuckRecoveryHeight
+		live := curHeight <= bs.RevealCloseHeight
+		consumable := uint32(len(bs.Reveals)) >= bs.Threshold
+		if preUpgrade || live || consumable {
 			return nil
 		}
 	}
