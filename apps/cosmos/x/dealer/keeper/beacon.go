@@ -159,9 +159,12 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	// An unconsumed beacon (Final empty) is live — skip. A consumed beacon
-	// is an audit-log row from a previous epoch; openBeacon will overwrite.
-	if bs != nil && len(bs.Final) == 0 {
+	sdkCtxEarly := sdk.UnwrapSDKContext(ctx)
+	curHeight := sdkCtxEarly.BlockHeight()
+	// A live unconsumed beacon (Final empty AND reveal window not yet passed)
+	// blocks reopen. Once the reveal window has expired without consumption
+	// the beacon is stuck; allow openBeacon to overwrite it.
+	if bs != nil && len(bs.Final) == 0 && curHeight <= bs.RevealCloseHeight {
 		return nil
 	}
 	dkg, err := k.GetDKG(ctx)
