@@ -159,12 +159,9 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	sdkCtxEarly := sdk.UnwrapSDKContext(ctx)
-	curHeight := sdkCtxEarly.BlockHeight()
-	// A live unconsumed beacon (Final empty AND reveal window not yet passed)
-	// blocks reopen. Once the reveal window has expired without consumption
-	// the beacon is stuck; allow openBeacon to overwrite it.
-	if bs != nil && len(bs.Final) == 0 && curHeight <= bs.RevealCloseHeight {
+	// An unconsumed beacon (Final empty) is live — skip. A consumed beacon
+	// is an audit-log row from a previous epoch; openBeacon will overwrite.
+	if bs != nil && len(bs.Final) == 0 {
 		return nil
 	}
 	dkg, err := k.GetDKG(ctx)
@@ -183,10 +180,8 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 	}
 	// If the consumed beacon already targets NextEpochID, there's nothing
 	// new to do — the chain is between consume and DKG-start and the same
-	// epoch's seed is already recorded. An expired-unconsumed beacon for
-	// the same epoch must be replaced (caught by the live-window guard
-	// above), so this only skips truly consumed beacons.
-	if bs != nil && len(bs.Final) > 0 && bs.EpochId == nextEpoch {
+	// epoch's seed is already recorded.
+	if bs != nil && bs.EpochId == nextEpoch {
 		return nil
 	}
 
