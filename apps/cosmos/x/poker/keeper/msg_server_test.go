@@ -1328,3 +1328,128 @@ func TestCreateTableNoPassword(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, tbl.Params.PasswordHash, "password hash should be empty")
 }
+
+// ---------------------------------------------------------------------------
+// MsgTick auth gates (regression for security fix in commit af60345)
+// ---------------------------------------------------------------------------
+
+// buildTickTable seats `players` and constructs an active hand in BETTING
+// phase with action on seat 0. ActionDeadline is set to `deadline`.
+func buildTickTable(t *testing.T, k keeper.Keeper, ctx context.Context, players []sdk.AccAddress, deadline int64) {
+	t.Helper()
+	tbl := &types.Table{
+		Id:      1,
+		Creator: players[0].String(),
+		Label:   "tick-auth",
+		Params: types.TableParams{
+			MaxPlayers: 9, SmallBlind: 1, BigBlind: 2,
+			MinBuyIn: 1, MaxBuyIn: 1000,
+			PlayerBond: 0, RakeBps: 0,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: -1,
+		Hand: &types.Hand{
+			HandId:            1,
+			Phase:             types.HandPhase_HAND_PHASE_BETTING,
+			Street:            types.Street_STREET_PREFLOP,
+			ActionOn:          0,
+			BetTo:             0,
+			IntervalId:        0,
+			InHand:            make([]bool, 9),
+			Folded:            make([]bool, 9),
+			AllIn:             make([]bool, 9),
+			StreetCommit:      make([]uint64, 9),
+			TotalCommit:       make([]uint64, 9),
+			LastIntervalActed: make([]int32, 9),
+			ActionDeadline:    deadline,
+		},
+	}
+	for i := 0; i < 9; i++ {
+		tbl.Hand.LastIntervalActed[i] = -1
+	}
+	for i, p := range players {
+		tbl.Hand.InHand[i] = true
+		tbl.Seats[i] = &types.Seat{Player: p.String(), Stack: 100, Bond: 0, Hole: []uint32{255, 255}}
+	}
+	require.NoError(t, k.SetTable(ctx, tbl))
+}
+
+func TestTick_RejectsEmptyCaller(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: "", TableId: 1})
+	require.Error(t, err)
+	require.ErrorIs(t, err, types.ErrInvalidRequest)
+	require.ErrorContains(t, err, "missing caller")
+}
+
+func TestTick_RejectsMalformedCallerAddress(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: "not-bech32", TableId: 1})
+	require.Error(t, err)
+	require.ErrorIs(t, err, types.ErrInvalidRequest)
+	require.ErrorContains(t, err, "invalid caller address")
+}
+
+func TestTick_PreDeadlineRejectsNonSeatedCaller(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	sdkCtx, k, ms, _ := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0x70)
+	intruder := addr(0x71)
+	buildTickTable(t, k, ctx, []sdk.AccAddress{p0}, now.Unix()+100)
+
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: intruder.String(), TableId: 1})
+	require.Error(t, err)
+	require.ErrorIs(t, err, types.ErrInvalidRequest)
+	require.ErrorContains(t, err, "caller not authorized: must be seated before action deadline")
+}
+
+func TestTick_PreDeadlineAcceptsSeatedCaller(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	sdkCtx, k, ms, _ := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0x80)
+	p1 := addr(0x81)
+	// Deadline far in the future — seated caller is permitted but no slashing fires.
+	buildTickTable(t, k, ctx, []sdk.AccAddress{p0, p1}, now.Unix()+1000)
+
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: p0.String(), TableId: 1})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "action not timed out")
+	require.NotContains(t, err.Error(), "caller not authorized")
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl.Hand, "hand should still be active when deadline has not passed")
+}
+
+func TestTick_PostDeadlineAcceptsAnyValidBech32Caller(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uchips"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	now := time.Unix(1000, 0).UTC()
+	sdkCtx, k, ms, _ := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0x90)
+	p1 := addr(0x91)
+	unrelated := addr(0x92)
+	// Deadline is in the past.
+	buildTickTable(t, k, ctx, []sdk.AccAddress{p0, p1}, now.Unix()-1)
+
+	_, err := ms.Tick(ctx, &types.MsgTick{Caller: unrelated.String(), TableId: 1})
+	require.NoError(t, err, "post-deadline tick from unrelated bech32 caller should succeed")
+
+	tbl, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl)
+	// Tick applied an auto-action on behalf of the AFK seat — ActionOn must have advanced off seat 0.
+	require.NotNil(t, tbl.Hand)
+	require.NotEqual(t, int32(0), tbl.Hand.ActionOn, "tick should have advanced action off the AFK seat")
+}

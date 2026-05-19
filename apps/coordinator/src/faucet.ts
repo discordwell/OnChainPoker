@@ -27,7 +27,7 @@ function bech32HrpExpand(hrp: string): number[] {
   return ret;
 }
 
-function decodeBech32Prefix(address: string): string | null {
+export function decodeBech32Prefix(address: string): string | null {
   if (typeof address !== "string" || address.length < 8 || address.length > 90) return null;
   let hasLower = false;
   let hasUpper = false;
