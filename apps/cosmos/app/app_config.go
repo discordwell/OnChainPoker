@@ -92,6 +92,7 @@ var (
 					stakingtypes.ModuleName,
 					ibcexported.ModuleName,
 					ibctransfertypes.ModuleName,
+					dealertypes.ModuleName,
 				},
 				EndBlockers: []string{
 					banktypes.ModuleName,
