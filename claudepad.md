@@ -2,7 +2,29 @@
 
 ## Session Summaries
 
-### 2026-05-19T~UTC (latest) — Audit Findings 1 + 3 Closed (DKG AEAD Complaint + MsgSit Password Commitment)
+### 2026-05-19T~UTC (latest) — Housekeeping + Beacon-Recovery Tests + Shuffle "step N/3" Finding
+Closed three of the four leftover items the prior session log called out: server housekeeping on ovh2, missing Go regression tests for the beacon stuck-recovery paths, and the stuck-epoch-41-hand audit. One new bug surfaced incidentally and is reported but not yet fixed.
+
+**Housekeeping (ovh2):**
+- Pruned `/opt/ocp/bin/ocpd.{prev,with-consumable-fix,pre-stuck-fix}` rollback binaries (~343 MB).
+- All three node `config.toml` switched to `indexer = "null"`; `tx_index.db` directories removed under each `/opt/ocp/chain/node{0,1,2}/data/`. Total reclaim ~3.9 GB (3.7 GB on node0 alone). Disk went from 84G/88% → 80G/83% used (13G → 17G free).
+- Rolling restart kept BFT quorum (2 of 3) up at all times; chain advanced ~1 block per node-down window (5 s). Validator set returned to 3/3 signing within seconds of each node coming back.
+- `/root/ocp-new-validator-mnemonics.txt` already `rw-------` root-only — no action needed.
+- Caddy still blocks `/ocp/rpc/tx_search` publicly (verified 404 post-cleanup). Internal code never called the indexer (`grep -rn "tx_search\|TxSearch" apps packages` returned zero).
+
+**Beacon-recovery tests** (`522f49c`):
+- New file `apps/cosmos/x/dealer/keeper/msg_server_beacon_recovery_test.go` (303 LoC, 9 tests) drives `WithBlockHeight` past `beaconStuckRecoveryHeight = 1_036_000` so the post-upgrade branch actually executes. Pre-existing beacon tests all run at height 10 and exercised only the legacy path.
+- Covers all three branches of the `live || consumable || preUpgrade` guard in both entry points (`openBeacon` + `MaybeAutoOpenBeacon`): pre-upgrade preserve-expired, post-upgrade overwrite-stuck (the f658ecb path), post-upgrade preserve-consumable (the b2393b1 regression), post-upgrade preserve-live, post-upgrade preserve-consumed audit row.
+- One implementation quirk noted by the test author: `MaybeAutoOpenBeacon`'s recovery branch hardcodes `threshold = 2` (call site is `openBeacon(ctx, nextEpoch, 0, 0, 2)`), independent of the current `epoch_size` config. Fine while the live `committee_size=3, threshold=2` matches, but a wider committee would auto-open with a threshold below its intended value. Not in scope to fix this pass.
+
+**Stuck-hand audit:** clean. Table 1 is healthily mid-hand 15163 (now 15164+ as new hands roll over) on epoch 42, t=2, n=3. The pre-v2 `init_hash_salt=null` hand 15048 the prior session was worried about resolved cleanly once dealer-0's null-guard fix (`1d3ed6c`) stopped the crash loop. No state needing manual intervention.
+
+**NEW finding — shuffle "step 4/3" log** (NOT fixed):
+- During the node0 restart spike on table 1 hand 15164, dealer-2 logged `Shuffle: our turn (step 4/3) for table 1 hand 15164` and then `submitting proof for round 4`, which the chain rejected with `deck already finalized`. Hand self-resolved (table moved on) but the position-computation path is producing impossible step indices. Three-member committee should only emit step ∈ {1,2,3} (or {0,1,2}), never 4. Plausible causes: dealer-2 is using the wrong validator index when computing position, or the daemon's retry loop is incrementing step without re-reading chain state, or a race after the brief node0 outage left dealer-2 with stale state. Worth a focused look the next time someone touches `apps/dealer-daemon/src/handlers/shuffle.ts`.
+
+**Live state at end of session:** epoch 42, t=2/n=3, height ≈1,041,950, all 3 validators signing, all 3 dealers active, disk at 83% used (17 G free).
+
+### 2026-05-19T~UTC — Audit Findings 1 + 3 Closed (DKG AEAD Complaint + MsgSit Password Commitment)
 Closed the last two audit deferrals from the prior session. Both required proto regen + buf/protoc-gen-gogo workflow; that workflow is now also documented in the codebase paths used here.
 
 **Finding 1 — DKG AEAD complaint path** (`apps/cosmos/proto/onchainpoker/dealer/v1/tx.proto`, `apps/cosmos/x/dealer/keeper/msg_server.go:659-870`, `apps/dealer-daemon/src/handlers/dkg.ts:244-340`):
