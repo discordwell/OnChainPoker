@@ -63,14 +63,11 @@ func (m msgServer) BeginEpoch(ctx context.Context, req *dealertypes.MsgBeginEpoc
 	if _, err := sdk.AccAddressFromBech32(req.Caller); err != nil {
 		return nil, dealertypes.ErrInvalidRequest.Wrap("invalid caller address")
 	}
-	if req.CommitteeSize == 0 {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("committee_size must be > 0")
+	if req.Threshold < 2 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("threshold must be >= 2")
 	}
-	if req.Threshold == 0 {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("threshold must be > 0")
-	}
-	if req.Threshold > req.CommitteeSize {
-		return nil, dealertypes.ErrInvalidRequest.Wrap("threshold exceeds committee_size")
+	if req.CommitteeSize < req.Threshold {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("committee_size must be >= threshold")
 	}
 	if err := m.requireActiveBondedCaller(ctx, req.Caller); err != nil {
 		return nil, err

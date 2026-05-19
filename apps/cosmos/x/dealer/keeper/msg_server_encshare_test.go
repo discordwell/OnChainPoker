@@ -219,7 +219,7 @@ func TestDkgCommit_AcceptsEphemeralPubkey(t *testing.T) {
 
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:           8,
-		Threshold:         1,
+		Threshold:         2,
 		Members:           []dealertypes.DealerMember{{Validator: dealer, Index: 1}},
 		StartHeight:       1,
 		CommitDeadline:    10,
@@ -233,10 +233,11 @@ func TestDkgCommit_AcceptsEphemeralPubkey(t *testing.T) {
 	pkR := ocpcrypto.MulBase(skR).Bytes()
 
 	commitment := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
+	commitment2 := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(2)).Bytes()
 	_, err := ms.DkgCommit(ctx, &dealertypes.MsgDkgCommit{
 		Dealer:          dealer,
 		EpochId:         8,
-		Commitments:     [][]byte{commitment},
+		Commitments:     [][]byte{commitment, commitment2},
 		EphemeralPubkey: pkR,
 	})
 	require.NoError(t, err)

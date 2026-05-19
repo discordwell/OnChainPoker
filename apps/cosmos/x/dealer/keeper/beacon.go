@@ -117,8 +117,8 @@ func (k Keeper) openBeacon(ctx context.Context, epochID uint64, commitBlocks, re
 	if revealBlocks > beaconMaxWindowBlocks {
 		return nil, dealertypes.ErrInvalidRequest.Wrapf("reveal_blocks exceeds max of %d", beaconMaxWindowBlocks)
 	}
-	if threshold == 0 {
-		threshold = 1
+	if threshold < 2 {
+		return nil, dealertypes.ErrInvalidRequest.Wrap("threshold must be >= 2")
 	}
 
 	commitOpen := sdkCtx.BlockHeight()
@@ -185,7 +185,7 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 		return nil
 	}
 
-	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, 0)
+	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, 2)
 	if err != nil {
 		return err
 	}

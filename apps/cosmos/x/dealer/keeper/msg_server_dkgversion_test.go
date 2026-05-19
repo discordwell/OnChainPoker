@@ -23,7 +23,7 @@ func TestDkgShareReveal_AcceptedUnderV1(t *testing.T) {
 	require.NoError(t, k.SetParams(ctx, dealertypes.DefaultParams()))
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:   7,
-		Threshold: 1,
+		Threshold: 2,
 		Members: []dealertypes.DealerMember{
 			{Validator: dealer, Index: 1},
 			{Validator: to, Index: 2},
@@ -67,7 +67,7 @@ func TestDkgShareReveal_RejectedUnderV2(t *testing.T) {
 	require.NoError(t, k.SetParams(ctx, params))
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:   7,
-		Threshold: 1,
+		Threshold: 2,
 		Members: []dealertypes.DealerMember{
 			{Validator: dealer, Index: 1},
 			{Validator: to, Index: 2},
@@ -103,7 +103,7 @@ func TestDkgShareReveal_EmptyVersionTreatedAsV1(t *testing.T) {
 	require.NoError(t, k.SetParams(ctx, params))
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:   7,
-		Threshold: 1,
+		Threshold: 2,
 		Members: []dealertypes.DealerMember{
 			{Validator: dealer, Index: 1},
 			{Validator: to, Index: 2},

@@ -27,7 +27,7 @@ func TestInitHand_AcceptsTableCreatorGamemaster(t *testing.T) {
 	pkEpoch := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(9))
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   1,
-		Threshold: 1,
+		Threshold: 2,
 		PkEpoch:   append([]byte(nil), pkEpoch.Bytes()...),
 		Members: []dealertypes.DealerMember{
 			{Validator: valoper, Index: 1, ConsPubkey: bytes.Repeat([]byte{0xbb}, 32), Power: 1},
@@ -96,7 +96,7 @@ func TestInitHand_AcceptsActiveBondedValidator(t *testing.T) {
 	pkEpoch := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(9))
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   1,
-		Threshold: 1,
+		Threshold: 2,
 		PkEpoch:   append([]byte(nil), pkEpoch.Bytes()...),
 		Members: []dealertypes.DealerMember{
 			{Validator: valoper, Index: 1, ConsPubkey: bytes.Repeat([]byte{0xa5}, 32), Power: 1},
@@ -163,7 +163,7 @@ func TestInitHand_RejectsNonCreatorNonValidator(t *testing.T) {
 	pkEpoch := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(9))
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   1,
-		Threshold: 1,
+		Threshold: 2,
 		PkEpoch:   append([]byte(nil), pkEpoch.Bytes()...),
 		Members: []dealertypes.DealerMember{
 			{Validator: valoper, Index: 1, ConsPubkey: bytes.Repeat([]byte{0x99}, 32), Power: 1},

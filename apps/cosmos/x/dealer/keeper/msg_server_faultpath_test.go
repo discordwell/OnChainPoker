@@ -20,7 +20,7 @@ func TestDkgCommit_DeadlinePassed(t *testing.T) {
 
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:           7,
-		Threshold:         1,
+		Threshold:         2,
 		Members:           []dealertypes.DealerMember{{Validator: valoper, Index: 1}},
 		StartHeight:       1,
 		CommitDeadline:    10,
@@ -50,7 +50,7 @@ func TestDkgCommit_DuplicateRejected(t *testing.T) {
 	commitment := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(5)).Bytes()
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
 		EpochId:           8,
-		Threshold:         1,
+		Threshold:         2,
 		Members:           []dealertypes.DealerMember{{Validator: valoper, Index: 1}},
 		StartHeight:       1,
 		CommitDeadline:    20,
@@ -107,7 +107,7 @@ func TestSubmitPubShare_DuplicateRejected(t *testing.T) {
 
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   9,
-		Threshold: 1,
+		Threshold: 2,
 		Members: []dealertypes.DealerMember{
 			{
 				Validator: valoper,

@@ -72,9 +72,10 @@ func TestOpenBeaconWindow_DefaultsApplied(t *testing.T) {
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 42, []stakingtypes.Validator{v})
 
 	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
-		Caller:  acc,
-		EpochId: 9,
-		// commit_blocks, reveal_blocks, threshold all zero → use defaults.
+		Caller:    acc,
+		EpochId:   9,
+		Threshold: 2,
+		// commit_blocks, reveal_blocks zero → use defaults.
 	})
 	require.NoError(t, err)
 
@@ -83,7 +84,7 @@ func TestOpenBeaconWindow_DefaultsApplied(t *testing.T) {
 	require.NotNil(t, bs)
 	require.Equal(t, int64(42+5), bs.CommitCloseHeight)
 	require.Equal(t, int64(42+5+5), bs.RevealCloseHeight)
-	require.Equal(t, uint32(1), bs.Threshold) // defaults to 1
+	require.Equal(t, uint32(2), bs.Threshold)
 }
 
 func TestOpenBeaconWindow_NonBondedCallerRejected(t *testing.T) {
@@ -103,12 +104,12 @@ func TestOpenBeaconWindow_ReopenRejected(t *testing.T) {
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 5, []stakingtypes.Validator{v})
 
 	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
-		Caller: acc, EpochId: 1,
+		Caller: acc, EpochId: 1, Threshold: 2,
 	})
 	require.NoError(t, err)
 
 	_, err = ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
-		Caller: acc, EpochId: 2,
+		Caller: acc, EpochId: 2, Threshold: 2,
 	})
 	require.ErrorContains(t, err, "already open")
 }
@@ -144,7 +145,7 @@ func TestBeaconCommit_HappyPath(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x61)
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x11}, 32)
 	commitH, err := committee.Commit(valoper, 1, salt)
@@ -171,7 +172,7 @@ func TestBeaconCommit_NonBondedRejected(t *testing.T) {
 	opener := sdk.AccAddress(bytes.Repeat([]byte{0x71}, 20)).String()
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, opener, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, opener, 1, 5, 5, 2)
 
 	// Fabricate a "validator" address with no bonded counterpart.
 	attackerValoper := sdk.ValAddress(bytes.Repeat([]byte{0x88}, 20)).String()
@@ -191,7 +192,7 @@ func TestBeaconCommit_WrongEpochRejected(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x62)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x12}, 32)
 	commitH, err := committee.Commit(valoper, 1, salt)
@@ -209,7 +210,7 @@ func TestBeaconCommit_AfterCloseRejected(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x63)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x13}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -229,7 +230,7 @@ func TestBeaconCommit_DuplicateRejected(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x64)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x14}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -249,7 +250,7 @@ func TestBeaconCommit_WrongCommitLength(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x65)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	_, err := ms.BeaconCommit(ctx, &dealertypes.MsgBeaconCommit{
 		Validator: valoper, EpochId: 1, Commit: bytes.Repeat([]byte{0x00}, 16),
@@ -263,7 +264,7 @@ func TestBeaconReveal_HappyPath(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x81)
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x21}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -290,7 +291,7 @@ func TestBeaconReveal_RevealWindowNotOpen(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x82)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x22}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -308,7 +309,7 @@ func TestBeaconReveal_AfterCloseRejected(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x83)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x23}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -326,7 +327,7 @@ func TestBeaconReveal_WrongSaltRejected(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x84)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x24}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
@@ -347,7 +348,7 @@ func TestBeaconReveal_NoCommitRejected(t *testing.T) {
 	_, valoperB, v2 := beaconValidator(t, 0x86)
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v1, v2})
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	// Only v1 commits; v2 tries to reveal without committing.
 	salt := bytes.Repeat([]byte{0x25}, 32)
@@ -367,7 +368,7 @@ func TestBeaconReveal_NonBondedRejected(t *testing.T) {
 	opener := sdk.AccAddress(bytes.Repeat([]byte{0x87}, 20)).String()
 	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 
-	openBeaconFixture(t, ctx, ms, opener, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, opener, 1, 5, 5, 2)
 
 	ctxReveal := beaconSetCtxHeight(ctx, 17)
 	attackerValoper := sdk.ValAddress(bytes.Repeat([]byte{0x77}, 20)).String()
@@ -385,7 +386,7 @@ func TestOpenBeaconWindow_DevnetDefaults(t *testing.T) {
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 42, []stakingtypes.Validator{v})
 
 	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
-		Caller: acc, EpochId: 9,
+		Caller: acc, EpochId: 9, Threshold: 2,
 	})
 	require.NoError(t, err)
 
@@ -404,7 +405,7 @@ func TestOpenBeaconWindow_ProductionDefaults(t *testing.T) {
 	ctx = sdk.WrapSDKContext(sdkCtx)
 
 	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
-		Caller: acc, EpochId: 9,
+		Caller: acc, EpochId: 9, Threshold: 2,
 	})
 	require.NoError(t, err)
 
@@ -436,7 +437,7 @@ func TestMaybeAutoOpenBeacon_SkipsWhenBeaconOpen(t *testing.T) {
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 	require.NoError(t, k.SetNextEpochID(ctx, 3))
 
-	openBeaconFixture(t, ctx, ms, acc, 5, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 5, 5, 5, 2)
 
 	// Auto-open should be a no-op — existing beacon is unconsumed.
 	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
@@ -451,7 +452,7 @@ func TestMaybeAutoOpenBeacon_SkipsWhenDKGInFlight(t *testing.T) {
 	ctx, k, _, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 	require.NoError(t, k.SetNextEpochID(ctx, 3))
 	require.NoError(t, k.SetDKG(ctx, &dealertypes.DealerDKG{
-		EpochId: 2, Threshold: 1,
+		EpochId: 2, Threshold: 2,
 	}))
 
 	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
@@ -474,7 +475,7 @@ func TestMaybeAutoOpenBeacon_NoopWhenConsumedBeaconIsCurrent(t *testing.T) {
 		CommitOpenHeight:  1,
 		CommitCloseHeight: 5,
 		RevealCloseHeight: 10,
-		Threshold:         1,
+		Threshold:         2,
 		Final:             bytes.Repeat([]byte{0xbb}, 32),
 	}
 	require.NoError(t, k.SetBeaconState(ctx, consumed))
@@ -500,7 +501,7 @@ func TestMaybeAutoOpenBeacon_ReplacesConsumedBeacon(t *testing.T) {
 		CommitOpenHeight:  1,
 		CommitCloseHeight: 5,
 		RevealCloseHeight: 10,
-		Threshold:         1,
+		Threshold:         2,
 		Final:             bytes.Repeat([]byte{0xaa}, 32),
 	}
 	require.NoError(t, k.SetBeaconState(ctx, consumed))
@@ -522,18 +523,26 @@ func TestMaybeAutoOpenBeacon_ReplacesConsumedBeacon(t *testing.T) {
 
 func TestConsumeBeacon_HappyPath(t *testing.T) {
 	acc, valoper, v := beaconValidator(t, 0x91)
-	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
+	_, valoper2, v2 := beaconValidator(t, 0x90)
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v, v2})
 	server := msgServer{Keeper: k}
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	salt := bytes.Repeat([]byte{0x31}, 32)
 	commitH, _ := committee.Commit(valoper, 1, salt)
 	_, err := ms.BeaconCommit(ctx, &dealertypes.MsgBeaconCommit{Validator: valoper, EpochId: 1, Commit: commitH[:]})
 	require.NoError(t, err)
 
+	salt2 := bytes.Repeat([]byte{0x32}, 32)
+	commitH2, _ := committee.Commit(valoper2, 1, salt2)
+	_, err = ms.BeaconCommit(ctx, &dealertypes.MsgBeaconCommit{Validator: valoper2, EpochId: 1, Commit: commitH2[:]})
+	require.NoError(t, err)
+
 	ctxReveal := beaconSetCtxHeight(ctx, 17)
 	_, err = ms.BeaconReveal(ctxReveal, &dealertypes.MsgBeaconReveal{Validator: valoper, EpochId: 1, Salt: salt})
+	require.NoError(t, err)
+	_, err = ms.BeaconReveal(ctxReveal, &dealertypes.MsgBeaconReveal{Validator: valoper2, EpochId: 1, Salt: salt2})
 	require.NoError(t, err)
 
 	// Advance past reveal_close (= 15 + 5 = 20) and consume.
@@ -604,7 +613,7 @@ func TestConsumeBeacon_RevealWindowStillOpen(t *testing.T) {
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v})
 	server := msgServer{Keeper: k}
 
-	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc, 1, 5, 5, 2)
 
 	// Consume while reveal window is still open (height 17 < reveal_close=20).
 	ctxEarly := beaconSetCtxHeight(ctx, 17)
@@ -613,14 +622,15 @@ func TestConsumeBeacon_RevealWindowStillOpen(t *testing.T) {
 }
 
 func TestConsumeBeacon_SlashesCommittedButNotRevealed(t *testing.T) {
-	// v1 commits + reveals; v2 commits but does NOT reveal. v2 should be
-	// slashed at consume time.
+	// v1 and v3 commit + reveal (meeting threshold=2); v2 commits but does NOT
+	// reveal. v2 should be slashed at consume time.
 	acc1, valoper1, v1 := beaconValidator(t, 0x97)
 	_, valoper2, v2 := beaconValidator(t, 0x98)
-	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v1, v2})
+	_, valoper3, v3 := beaconValidator(t, 0x99)
+	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 10, []stakingtypes.Validator{v1, v2, v3})
 	server := msgServer{Keeper: k}
 
-	openBeaconFixture(t, ctx, ms, acc1, 1, 5, 5, 1)
+	openBeaconFixture(t, ctx, ms, acc1, 1, 5, 5, 2)
 
 	s1 := bytes.Repeat([]byte{0x41}, 32)
 	c1, _ := committee.Commit(valoper1, 1, s1)
@@ -632,8 +642,15 @@ func TestConsumeBeacon_SlashesCommittedButNotRevealed(t *testing.T) {
 	_, err = ms.BeaconCommit(ctx, &dealertypes.MsgBeaconCommit{Validator: valoper2, EpochId: 1, Commit: c2[:]})
 	require.NoError(t, err)
 
+	s3 := bytes.Repeat([]byte{0x43}, 32)
+	c3, _ := committee.Commit(valoper3, 1, s3)
+	_, err = ms.BeaconCommit(ctx, &dealertypes.MsgBeaconCommit{Validator: valoper3, EpochId: 1, Commit: c3[:]})
+	require.NoError(t, err)
+
 	ctxReveal := beaconSetCtxHeight(ctx, 17)
 	_, err = ms.BeaconReveal(ctxReveal, &dealertypes.MsgBeaconReveal{Validator: valoper1, EpochId: 1, Salt: s1})
+	require.NoError(t, err)
+	_, err = ms.BeaconReveal(ctxReveal, &dealertypes.MsgBeaconReveal{Validator: valoper3, EpochId: 1, Salt: s3})
 	require.NoError(t, err)
 
 	ctxConsume := beaconSetCtxHeight(ctx, 21)

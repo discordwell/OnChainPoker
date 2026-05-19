@@ -154,8 +154,10 @@ func makeBondedValidatorForDealerTest(t *testing.T, valoper string, power int64,
 func TestBeginEpoch_HugeBlockHeightOverflowDoesNotMutateState(t *testing.T) {
 	caller := sdk.AccAddress(bytes.Repeat([]byte{0x22}, 20)).String()
 	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x22}, 20)).String()
+	valoper2 := sdk.ValAddress(bytes.Repeat([]byte{0x23}, 20)).String()
 	bonded := []stakingtypes.Validator{
 		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+		makeBondedValidatorForDealerTest(t, valoper2, 1, 0xab),
 	}
 
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), math.MaxInt64, bonded)
@@ -163,8 +165,8 @@ func TestBeginEpoch_HugeBlockHeightOverflowDoesNotMutateState(t *testing.T) {
 	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
 		Caller:          caller,
 		EpochId:         1,
-		CommitteeSize:   1,
-		Threshold:       1,
+		CommitteeSize:   2,
+		Threshold:       2,
 		CommitBlocks:    1,
 		ComplaintBlocks: 1,
 		RevealBlocks:    1,
@@ -193,8 +195,8 @@ func TestBeginEpoch_NonBondedCallerRejected(t *testing.T) {
 	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
 		Caller:          caller,
 		EpochId:         1,
-		CommitteeSize:   1,
-		Threshold:       1,
+		CommitteeSize:   2,
+		Threshold:       2,
 		CommitBlocks:    1,
 		ComplaintBlocks: 1,
 		RevealBlocks:    1,
@@ -214,8 +216,10 @@ func TestBeginEpoch_NonBondedCallerRejected(t *testing.T) {
 func TestBeginEpoch_WindowLimitDoesNotMutateState(t *testing.T) {
 	caller := sdk.AccAddress(bytes.Repeat([]byte{0x42}, 20)).String()
 	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x42}, 20)).String()
+	valoper2 := sdk.ValAddress(bytes.Repeat([]byte{0x43}, 20)).String()
 	bonded := []stakingtypes.Validator{
 		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+		makeBondedValidatorForDealerTest(t, valoper2, 1, 0xab),
 	}
 
 	ctx, k, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 1, bonded)
@@ -223,8 +227,8 @@ func TestBeginEpoch_WindowLimitDoesNotMutateState(t *testing.T) {
 	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
 		Caller:          caller,
 		EpochId:         1,
-		CommitteeSize:   1,
-		Threshold:       1,
+		CommitteeSize:   2,
+		Threshold:       2,
 		CommitBlocks:    dkgMaxWindowBlocks + 1,
 		ComplaintBlocks: 1,
 		RevealBlocks:    1,
@@ -253,7 +257,7 @@ func TestInitHand_HugeTimeoutOverflowDoesNotMutateState(t *testing.T) {
 	pkEpoch := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(9))
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   1,
-		Threshold: 1,
+		Threshold: 2,
 		PkEpoch:   append([]byte(nil), pkEpoch.Bytes()...),
 		Members: []dealertypes.DealerMember{
 			{
@@ -331,7 +335,7 @@ func TestSubmitShuffle_HugeTimeoutOverflowDoesNotMutateState(t *testing.T) {
 	pkEpoch := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(3))
 	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
 		EpochId:   1,
-		Threshold: 1,
+		Threshold: 2,
 		PkEpoch:   append([]byte(nil), pkEpoch.Bytes()...),
 		Members: []dealertypes.DealerMember{
 			{
@@ -420,4 +424,65 @@ func TestSubmitShuffle_HugeTimeoutOverflowDoesNotMutateState(t *testing.T) {
 	require.Equal(t, uint32(0), dh.ShuffleStep)
 	require.Equal(t, int64(0), dh.ShuffleDeadline)
 	require.Equal(t, deckProto, dh.Deck)
+}
+
+func TestBeginEpoch_RejectsThresholdBelowTwo(t *testing.T) {
+	caller := sdk.AccAddress(bytes.Repeat([]byte{0x52}, 20)).String()
+	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x52}, 20)).String()
+	bonded := []stakingtypes.Validator{
+		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+	}
+
+	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 1, bonded)
+
+	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
+		Caller:          caller,
+		EpochId:         1,
+		CommitteeSize:   2,
+		Threshold:       1,
+		CommitBlocks:    1,
+		ComplaintBlocks: 1,
+		RevealBlocks:    1,
+		FinalizeBlocks:  1,
+	})
+	require.ErrorContains(t, err, "threshold must be >= 2")
+}
+
+func TestBeginEpoch_RejectsCommitteeSizeBelowThreshold(t *testing.T) {
+	caller := sdk.AccAddress(bytes.Repeat([]byte{0x53}, 20)).String()
+	valoper := sdk.ValAddress(bytes.Repeat([]byte{0x53}, 20)).String()
+	bonded := []stakingtypes.Validator{
+		makeBondedValidatorForDealerTest(t, valoper, 1, 0xaa),
+	}
+
+	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 1, bonded)
+
+	_, err := ms.BeginEpoch(ctx, &dealertypes.MsgBeginEpoch{
+		Caller:          caller,
+		EpochId:         1,
+		CommitteeSize:   2,
+		Threshold:       3,
+		CommitBlocks:    1,
+		ComplaintBlocks: 1,
+		RevealBlocks:    1,
+		FinalizeBlocks:  1,
+	})
+	require.ErrorContains(t, err, "committee_size must be >= threshold")
+}
+
+func TestOpenBeaconWindow_RejectsThresholdBelowOne(t *testing.T) {
+	keyBytes := bytes.Repeat([]byte{0x56}, 20)
+	acc := sdk.AccAddress(keyBytes).String()
+	valoper := sdk.ValAddress(keyBytes).String()
+	bonded := []stakingtypes.Validator{
+		makeBondedValidatorForDealerTest(t, valoper, 1, 0x56),
+	}
+	ctx, _, ms, _ := newDealerMsgServerForOverflowTests(t, time.Unix(100, 0).UTC(), 5, bonded)
+
+	_, err := ms.OpenBeaconWindow(ctx, &dealertypes.MsgOpenBeaconWindow{
+		Caller:    acc,
+		EpochId:   1,
+		Threshold: 1,
+	})
+	require.ErrorContains(t, err, "threshold must be >= 2")
 }
