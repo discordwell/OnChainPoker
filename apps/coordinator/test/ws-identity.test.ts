@@ -153,6 +153,35 @@ test("subscribe with non-matching tableId regex is rejected", async () => {
   }
 });
 
+test("table_chat to unknown tableId is rejected and creates no chat ring", async () => {
+  const chain = new MockChainAdapter();
+  chain.createTable("t1");
+  const store = new CoordinatorStore({ artifactMaxBytes: 1_000_000, artifactCacheMaxBytes: 10_000_000 });
+  const server = createCoordinatorServer({ config: makeConfig(), chain, store });
+  const started = await server.start();
+  let ws: WebSocket | null = null;
+  try {
+    ws = await openWs(started.url);
+    await subscribeTable(ws, "nonsense99");
+    const errP = nextMessage(ws, (m) => m?.type === "error");
+    ws.send(JSON.stringify({ type: "table_chat", tableId: "nonsense99", text: "hi" }));
+    const err = await withTimeout(errP, 2_000, "unknown table error");
+    assert.equal(err.error, "unknown table");
+    assert.equal(store.getChatHistory("nonsense99").length, 0);
+    assert.equal(store.getTable("nonsense99"), null);
+
+    await subscribeTable(ws, "t1");
+    const okP = nextMessage(ws, (m) => m?.type === "table_chat" && m?.tableId === "t1");
+    ws.send(JSON.stringify({ type: "table_chat", tableId: "t1", text: "ok" }));
+    const ok = await withTimeout(okP, 2_000, "ok chat");
+    assert.equal(ok.text, "ok");
+    assert.equal(store.getChatHistory("t1").length, 1);
+  } finally {
+    try { ws?.close(); } catch { /* ignore */ }
+    await server.stop().catch(() => {});
+  }
+});
+
 test("per-IP rate limit fires across multiple connections from same source", async () => {
   const { server, baseUrl } = await bootstrap("t4");
   const conns: WebSocket[] = [];

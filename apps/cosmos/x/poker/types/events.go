@@ -14,6 +14,7 @@ const (
 	EventTypeStreetRevealed   = "StreetRevealed"
 	EventTypeShowdownReached  = "ShowdownReached"
 	EventTypePotAwarded       = "PotAwarded"
+	EventTypePotRefunded      = "PotRefunded"
 	EventTypeHandCompleted    = "HandCompleted"
 	EventTypeHandAborted      = "HandAborted"
 	EventTypeHoleCardRevealed = "HoleCardRevealed"

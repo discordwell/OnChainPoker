@@ -1282,28 +1282,26 @@ func TestRebuy_OverflowProtection(t *testing.T) {
 	ctx := sdk.WrapSDKContext(sdkCtx)
 
 	player := addr(0xF7).String()
-	pkBytes := ocpcrypto.MulBase(ocpcrypto.ScalarFromUint64(1)).Bytes()
 
-	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
-		Creator:    player,
-		SmallBlind: 1, BigBlind: 2,
-		MinBuyIn: 100, MaxBuyIn: math.MaxUint64,
-		MaxPlayers: 9, Label: "rebuy-overflow",
-	})
-	require.NoError(t, err)
-
-	_, err = ms.Sit(ctx, &types.MsgSit{
-		Player: player, TableId: 1, BuyIn: 100, PkPlayer: pkBytes,
-	})
-	require.NoError(t, err)
-
-	// Set stack near uint64 max
-	tbl, err := k.GetTable(ctx, 1)
-	require.NoError(t, err)
-	tbl.Seats[0].Stack = math.MaxUint64 - 1
+	// Build table directly so MaxBuyIn can exceed the MsgCreateTable cap, isolating addUint64Checked.
+	tbl := &types.Table{
+		Id:      1,
+		Creator: player,
+		Label:   "rebuy-overflow",
+		Params: types.TableParams{
+			MaxPlayers: 9,
+			SmallBlind: 1, BigBlind: 2,
+			MinBuyIn: 100, MaxBuyIn: math.MaxUint64,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 1,
+		ButtonSeat: -1,
+	}
+	tbl.Seats[0] = &types.Seat{Player: player, Stack: math.MaxUint64 - 1, Hole: []uint32{255, 255}}
+	require.NoError(t, k.SetNextTableID(ctx, 2))
 	require.NoError(t, k.SetTable(ctx, tbl))
 
-	_, err = ms.Rebuy(ctx, &types.MsgRebuy{
+	_, err := ms.Rebuy(ctx, &types.MsgRebuy{
 		Player: player, TableId: 1, Amount: 2,
 	})
 	require.Error(t, err)
@@ -1452,4 +1450,242 @@ func TestTick_PostDeadlineAcceptsAnyValidBech32Caller(t *testing.T) {
 	// Tick applied an auto-action on behalf of the AFK seat — ActionOn must have advanced off seat 0.
 	require.NotNil(t, tbl.Hand)
 	require.NotEqual(t, int32(0), tbl.Hand.ActionOn, "tick should have advanced action off the AFK seat")
+}
+
+// ---------------------------------------------------------------------------
+// StartHand inter-hand cooldown (anti-griefing)
+// ---------------------------------------------------------------------------
+
+func TestStartHand_RejectsBeforeInterHandCooldown(t *testing.T) {
+	startHeight := int64(100)
+	sdkCtx, _, ms, _, p0, _ := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	sdkCtx = sdkCtx.WithBlockHeight(startHeight)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	// P0 folds — heads-up hand ends, height-stamp written at block 100.
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p0.String(),
+		TableId: 1,
+		Action:  "fold",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	// Same block: griefer attempts to restart the hand immediately.
+	_, err = ms.StartHand(ctx, &types.MsgStartHand{Caller: p0.String(), TableId: 1})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "inter-hand cooldown")
+}
+
+func TestStartHand_AcceptsAfterInterHandCooldown(t *testing.T) {
+	startHeight := int64(100)
+	sdkCtx, _, ms, _, p0, _ := setupHeadsUpBetting(t, time.Unix(100, 0).UTC())
+	sdkCtx = sdkCtx.WithBlockHeight(startHeight)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	_, err := ms.Act(ctx, &types.MsgAct{
+		Player:  p0.String(),
+		TableId: 1,
+		Action:  "fold",
+		Amount:  0,
+	})
+	require.NoError(t, err)
+
+	// Advance past the 5-block cooldown.
+	sdkCtx = sdkCtx.WithBlockHeight(startHeight + int64(keeper.InterHandCooldownBlocks))
+	ctx = sdk.WrapSDKContext(sdkCtx)
+
+	_, err = ms.StartHand(ctx, &types.MsgStartHand{Caller: p0.String(), TableId: 1})
+	require.NoError(t, err)
+}
+
+// ---------------------------------------------------------------------------
+// Leave: folded mid-hand seat may withdraw stack + bond immediately
+// ---------------------------------------------------------------------------
+
+func TestLeave_FoldedPlayerCanLeaveMidHand(t *testing.T) {
+	oldDenom := sdk.DefaultBondDenom
+	sdk.DefaultBondDenom = "uchips"
+	defer func() { sdk.DefaultBondDenom = oldDenom }()
+
+	now := time.Unix(100, 0).UTC()
+	sdkCtx, k, ms, bk := newKeeper(t, now)
+	ctx := sdk.WrapSDKContext(sdkCtx)
+
+	p0 := addr(0xA2)
+	p1 := addr(0xA3)
+	p2 := addr(0xA4)
+
+	// Three-player table where seat 0 has already folded — hand remains active
+	// because seats 1 and 2 are still in the hand.
+	tbl := &types.Table{
+		Id:      1,
+		Creator: p0.String(),
+		Label:   "leave-folded",
+		Params: types.TableParams{
+			MaxPlayers:        9,
+			SmallBlind:        1,
+			BigBlind:          2,
+			MinBuyIn:          100,
+			MaxBuyIn:          1000,
+			ActionTimeoutSecs: 0,
+			DealerTimeoutSecs: 0,
+			PlayerBond:        7,
+			RakeBps:           0,
+		},
+		Seats:      make([]*types.Seat, 9),
+		NextHandId: 2,
+		ButtonSeat: 0,
+		Hand: &types.Hand{
+			HandId:         1,
+			Phase:          types.HandPhase_HAND_PHASE_BETTING,
+			Street:         types.Street_STREET_PREFLOP,
+			ButtonSeat:     0,
+			SmallBlindSeat: 1,
+			BigBlindSeat:   2,
+			ActionOn:       1,
+			BetTo:          2,
+			MinRaiseSize:   2,
+			IntervalId:     0,
+			Dealer:         nil,
+
+			InHand:            make([]bool, 9),
+			Folded:            make([]bool, 9),
+			AllIn:             make([]bool, 9),
+			StreetCommit:      make([]uint64, 9),
+			TotalCommit:       make([]uint64, 9),
+			LastIntervalActed: make([]int32, 9),
+		},
+	}
+	for i := 0; i < 9; i++ {
+		tbl.Hand.LastIntervalActed[i] = -1
+	}
+	tbl.Hand.InHand[0] = true
+	tbl.Hand.InHand[1] = true
+	tbl.Hand.InHand[2] = true
+	// Seat 0 folded earlier this hand.
+	tbl.Hand.Folded[0] = true
+
+	tbl.Seats[0] = &types.Seat{Player: p0.String(), Stack: 50, Bond: 7, Hole: []uint32{255, 255}}
+	tbl.Seats[1] = &types.Seat{Player: p1.String(), Stack: 99, Bond: 7, Hole: []uint32{255, 255}}
+	tbl.Seats[2] = &types.Seat{Player: p2.String(), Stack: 98, Bond: 7, Hole: []uint32{255, 255}}
+	tbl.Hand.StreetCommit[1] = 1
+	tbl.Hand.TotalCommit[1] = 1
+	tbl.Hand.StreetCommit[2] = 2
+	tbl.Hand.TotalCommit[2] = 2
+
+	require.NoError(t, k.SetTable(ctx, tbl))
+
+	_, err := ms.Leave(ctx, &types.MsgLeave{
+		Player:  p0.String(),
+		TableId: 1,
+	})
+	require.NoError(t, err, "folded seat must be able to leave even though hand is still active")
+
+	require.NotEmpty(t, bk.calls)
+	last := bk.calls[len(bk.calls)-1]
+	require.Equal(t, "m2a", last.kind)
+	require.Equal(t, p0, last.toAcc)
+	require.Equal(t, sdk.NewCoins(sdk.NewCoin("uchips", sdkmath.NewInt(57))), last.coins, "stack 50 + bond 7 = 57")
+
+	tbl2, err := k.GetTable(ctx, 1)
+	require.NoError(t, err)
+	require.NotNil(t, tbl2)
+	require.Empty(t, tbl2.Seats[0].Player)
+	require.Zero(t, tbl2.Seats[0].Stack)
+	require.Zero(t, tbl2.Seats[0].Bond)
+	// Hand still active for seats 1 and 2.
+	require.NotNil(t, tbl2.Hand)
+}
+
+// ---------------------------------------------------------------------------
+// CreateTable param caps (DoS / config hygiene)
+// ---------------------------------------------------------------------------
+
+func TestCreateTable_RejectsOversizeLabel(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x22).String()
+
+	huge := make([]byte, keeper.MaxTableLabelLen+1)
+	for i := range huge {
+		huge[i] = 'a'
+	}
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: string(huge),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "label exceeds")
+}
+
+func TestCreateTable_RejectsOversizePassword(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x23).String()
+
+	huge := make([]byte, keeper.MaxTablePasswordLen+1)
+	for i := range huge {
+		huge[i] = 'p'
+	}
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		MaxPlayers: 9, Label: "pw-test",
+		Password: string(huge),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "password exceeds")
+}
+
+func TestCreateTable_RejectsOversizeActionTimeout(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x24).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		ActionTimeoutSecs: keeper.MaxActionTimeoutSecs + 1,
+		MaxPlayers:        9, Label: "huge-action",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "action_timeout_secs exceeds")
+}
+
+func TestCreateTable_RejectsOversizeDealerTimeout(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x25).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: 1000,
+		DealerTimeoutSecs: keeper.MaxDealerTimeoutSecs + 1,
+		MaxPlayers:        9, Label: "huge-dealer",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "dealer_timeout_secs exceeds")
+}
+
+func TestCreateTable_RejectsOversizeBuyIn(t *testing.T) {
+	sdkCtx, _, ms, _ := newKeeper(t, time.Unix(100, 0).UTC())
+	ctx := sdk.WrapSDKContext(sdkCtx)
+	creator := addr(0x26).String()
+
+	_, err := ms.CreateTable(ctx, &types.MsgCreateTable{
+		Creator:    creator,
+		SmallBlind: 1, BigBlind: 2,
+		MinBuyIn: 100, MaxBuyIn: keeper.MaxBuyInUchips + 1,
+		MaxPlayers: 9, Label: "huge-max-buyin",
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "max_buy_in exceeds")
 }

@@ -215,17 +215,45 @@ func TestMissingReveals(t *testing.T) {
 }
 
 func TestIsDevnetChainID(t *testing.T) {
-	yes := []string{"ocp-devnet-1", "ocp-local-1", "DEVNET", "Local-42", "foo-bar-local"}
-	no := []string{"ocp-main-1", "poker-mainnet", "prod", "", "cosmoshub-4"}
-	for _, s := range yes {
-		if !IsDevnetChainID(s) {
-			t.Errorf("IsDevnetChainID(%q) = false, want true", s)
-		}
+	cases := []struct {
+		name    string
+		chainID string
+		want    bool
+	}{
+		// Accepted: canonical devnet/localnet ids.
+		{"ocp-devnet-1", "ocp-devnet-1", true},
+		{"ocp-local-1", "ocp-local-1", true},
+		{"felt-localnet-2", "felt-localnet-2", true},
+		{"test-local-abc", "test-local-abc", true},
+		{"ocp-devnet", "ocp-devnet", true},
+		{"ocp-devnet-a-b-c", "ocp-devnet-a-b-c", true},
+		{"mixed case canonical", "OCP-Devnet-1", true},
+
+		// Rejected: live/production chain ids.
+		{"live testnet", "onchainpoker-testnet-1", false},
+		{"ocp-main-1", "ocp-main-1", false},
+		{"poker-mainnet", "poker-mainnet", false},
+		{"prod", "prod", false},
+		{"empty", "", false},
+		{"cosmoshub-4", "cosmoshub-4", false},
+
+		// Rejected: substring tricks that the old loose check accepted.
+		{"local not at segment 2", "ocp-mainnet-local-fork", false},
+		{"devnet glued to prefix", "mydevnet-foo", false},
+		{"bare devnet word", "DEVNET", false},
+		{"local with no prefix", "Local-42", false},
+		{"local at segment 3", "foo-bar-local", false},
+		{"trailing hyphen", "ocp-devnet-", false},
+		{"non-alphanumeric segment", "ocp-devnet-a_b", false},
+		{"underscore prefix", "ocp_devnet-1", false},
+		{"empty prefix", "-devnet-1", false},
 	}
-	for _, s := range no {
-		if IsDevnetChainID(s) {
-			t.Errorf("IsDevnetChainID(%q) = true, want false", s)
-		}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := IsDevnetChainID(tc.chainID); got != tc.want {
+				t.Errorf("IsDevnetChainID(%q) = %v, want %v", tc.chainID, got, tc.want)
+			}
+		})
 	}
 }
 

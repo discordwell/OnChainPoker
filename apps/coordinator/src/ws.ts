@@ -119,6 +119,10 @@ export function createWsHub(opts: {
           sendJson(ws, { type: "error", error: "not subscribed to table" });
           return;
         }
+        if (!opts.store.getTable(tableId)) {
+          sendJson(ws, { type: "error", error: "unknown table" });
+          return;
+        }
         const now = Date.now();
         if (state.lastChatMs && now - state.lastChatMs < 1000) {
           sendJson(ws, { type: "error", error: "chat rate limited (1 msg/sec)" });

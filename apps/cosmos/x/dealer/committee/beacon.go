@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -168,11 +169,17 @@ func MissingReveals(commits []BeaconCommit, reveals []BeaconReveal) []string {
 	return out
 }
 
+// Anchored so production ids that merely contain "devnet"/"local" as a
+// substring (e.g. "felt-localnet-prod") do not silently downgrade randomness.
+var devnetChainIDRe = regexp.MustCompile(`^[a-z0-9]+-(devnet|localnet|local)(-[a-z0-9]+)*$`)
+
 // IsDevnetChainID returns true if chainID should be allowed to fall back to
 // block-entropy-only randomness. Production chains must run the beacon.
 func IsDevnetChainID(chainID string) bool {
-	lc := strings.ToLower(chainID)
-	return strings.Contains(lc, "devnet") || strings.Contains(lc, "local")
+	if chainID == "" {
+		return false
+	}
+	return devnetChainIDRe.MatchString(strings.ToLower(chainID))
 }
 
 // VerifyCommitSyntax rejects obviously malformed commit values (wrong length).

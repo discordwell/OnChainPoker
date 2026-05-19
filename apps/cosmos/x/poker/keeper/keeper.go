@@ -95,6 +95,40 @@ func (k Keeper) SetTable(ctx context.Context, t *types.Table) error {
 	return store.Set(types.TableKey(t.Id), bz)
 }
 
+// lastHandEndedHeightKeyPrefix is a keeper-private kv prefix; kept here (rather
+// than types/keys.go) because it backs an internal anti-griefing cooldown and
+// is not part of the externally-visible state schema.
+var lastHandEndedHeightKeyPrefix = []byte{0x03}
+
+func lastHandEndedHeightKey(tableID uint64) []byte {
+	bz := make([]byte, 1+8)
+	bz[0] = lastHandEndedHeightKeyPrefix[0]
+	binary.BigEndian.PutUint64(bz[1:], tableID)
+	return bz
+}
+
+func (k Keeper) getLastHandEndedHeight(ctx context.Context, tableID uint64) (int64, error) {
+	store := k.storeService.OpenKVStore(ctx)
+	bz, err := store.Get(lastHandEndedHeightKey(tableID))
+	if err != nil {
+		return 0, err
+	}
+	if bz == nil {
+		return 0, nil
+	}
+	if len(bz) != 8 {
+		return 0, fmt.Errorf("invalid lastHandEndedHeight encoding")
+	}
+	return int64(binary.BigEndian.Uint64(bz)), nil
+}
+
+func (k Keeper) setLastHandEndedHeight(ctx context.Context, tableID uint64, height int64) error {
+	store := k.storeService.OpenKVStore(ctx)
+	bz := make([]byte, 8)
+	binary.BigEndian.PutUint64(bz, uint64(height))
+	return store.Set(lastHandEndedHeightKey(tableID), bz)
+}
+
 func (k Keeper) IterateTables(ctx context.Context, cb func(id uint64) (stop bool)) error {
 	store := k.storeService.OpenKVStore(ctx)
 	it, err := store.Iterator(types.TableKeyPrefix, storetypes.PrefixEndBytes(types.TableKeyPrefix))

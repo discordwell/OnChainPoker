@@ -18,6 +18,7 @@ export class CoordinatorStore {
   ) {}
 
   addChatMessage(tableId: string, msg: ChatMessage): void {
+    if (!this.tablesById.has(tableId)) return;
     const ring = this.chatByTable.get(tableId) ?? [];
     ring.push(msg);
     if (ring.length > CHAT_RING_SIZE) ring.splice(0, ring.length - CHAT_RING_SIZE);

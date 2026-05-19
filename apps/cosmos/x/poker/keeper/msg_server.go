@@ -24,6 +24,17 @@ type msgServer struct {
 
 var _ types.MsgServer = msgServer{}
 
+const (
+	MaxTableLabelLen     = 64
+	MaxTablePasswordLen  = 64
+	MaxActionTimeoutSecs = 600  // 10 minutes
+	MaxDealerTimeoutSecs = 1800 // 30 minutes
+	MaxBuyInUchips       = 1_000_000_000_000 // 1M CHIPS
+	// InterHandCooldownBlocks defeats single-block griefing of StartHand while
+	// staying short enough to be invisible during normal table cadence (~30s at 6s blocks).
+	InterHandCooldownBlocks = 5
+)
+
 func NewMsgServerImpl(k Keeper, cdc codec.BinaryCodec) types.MsgServer {
 	return &msgServer{Keeper: k, cdc: cdc}
 }
@@ -57,6 +68,33 @@ func (m msgServer) CreateTable(ctx context.Context, req *types.MsgCreateTable) (
 	}
 	if req.RakeBps != 0 {
 		return nil, types.ErrInvalidTableCfg.Wrap("rake_bps must be 0")
+	}
+	if len(req.Label) > MaxTableLabelLen {
+		return nil, types.ErrInvalidTableCfg.Wrapf("label exceeds %d bytes", MaxTableLabelLen)
+	}
+	if len(req.Password) > MaxTablePasswordLen {
+		return nil, types.ErrInvalidTableCfg.Wrapf("password exceeds %d bytes", MaxTablePasswordLen)
+	}
+	if req.ActionTimeoutSecs > MaxActionTimeoutSecs {
+		return nil, types.ErrInvalidTableCfg.Wrapf("action_timeout_secs exceeds %d", MaxActionTimeoutSecs)
+	}
+	if req.DealerTimeoutSecs > MaxDealerTimeoutSecs {
+		return nil, types.ErrInvalidTableCfg.Wrapf("dealer_timeout_secs exceeds %d", MaxDealerTimeoutSecs)
+	}
+	if req.PlayerBond > MaxBuyInUchips {
+		return nil, types.ErrInvalidTableCfg.Wrapf("player_bond exceeds %d", MaxBuyInUchips)
+	}
+	if req.MinBuyIn > MaxBuyInUchips {
+		return nil, types.ErrInvalidTableCfg.Wrapf("min_buy_in exceeds %d", MaxBuyInUchips)
+	}
+	if req.MaxBuyIn > MaxBuyInUchips {
+		return nil, types.ErrInvalidTableCfg.Wrapf("max_buy_in exceeds %d", MaxBuyInUchips)
+	}
+	if req.SmallBlind > MaxBuyInUchips {
+		return nil, types.ErrInvalidTableCfg.Wrapf("small_blind exceeds %d", MaxBuyInUchips)
+	}
+	if req.BigBlind > MaxBuyInUchips {
+		return nil, types.ErrInvalidTableCfg.Wrapf("big_blind exceeds %d", MaxBuyInUchips)
 	}
 
 	id, err := m.GetNextTableID(ctx)
@@ -226,6 +264,15 @@ func (m msgServer) StartHand(ctx context.Context, req *types.MsgStartHand) (*typ
 	}
 	if t.Hand != nil {
 		return nil, types.ErrHandInProgress.Wrap("hand already in progress")
+	}
+
+	sdkCtxCooldown := sdk.UnwrapSDKContext(ctx)
+	lastEnded, err := m.getLastHandEndedHeight(ctx, req.TableId)
+	if err != nil {
+		return nil, err
+	}
+	if lastEnded != 0 && sdkCtxCooldown.BlockHeight() < lastEnded+InterHandCooldownBlocks {
+		return nil, types.ErrInvalidRequest.Wrapf("inter-hand cooldown: must wait until block %d", lastEnded+InterHandCooldownBlocks)
 	}
 
 	activeSeats := occupiedSeatsWithStack(t)
@@ -410,6 +457,9 @@ func (m msgServer) Act(ctx context.Context, req *types.MsgAct) (*types.MsgActRes
 		if err := m.SetTable(ctx, t); err != nil {
 			return nil, err
 		}
+		if err := m.setLastHandEndedHeight(ctx, req.TableId, sdkCtx.BlockHeight()); err != nil {
+			return nil, err
+		}
 	}
 
 	return &types.MsgActResponse{}, nil
@@ -545,6 +595,9 @@ func (m msgServer) Tick(ctx context.Context, req *types.MsgTick) (*types.MsgTick
 		if err := m.SetTable(ctx, t); err != nil {
 			return nil, err
 		}
+		if err := m.setLastHandEndedHeight(ctx, req.TableId, sdkCtx.BlockHeight()); err != nil {
+			return nil, err
+		}
 	}
 
 	return &types.MsgTickResponse{}, nil
@@ -574,7 +627,7 @@ func (m msgServer) Leave(ctx context.Context, req *types.MsgLeave) (*types.MsgLe
 	if seat < 0 || seat >= 9 || t.Seats[seat] == nil || t.Seats[seat].Player == "" {
 		return nil, types.ErrNotSeated.Wrap("player not seated at table")
 	}
-	if t.Hand != nil && seat < len(t.Hand.InHand) && t.Hand.InHand[seat] {
+	if t.Hand != nil && seat < len(t.Hand.InHand) && t.Hand.InHand[seat] && !(seat < len(t.Hand.Folded) && t.Hand.Folded[seat]) {
 		return nil, types.ErrInvalidRequest.Wrap("cannot leave during active hand")
 	}
 

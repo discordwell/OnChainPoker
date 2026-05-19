@@ -972,6 +972,46 @@ func settleKnownShowdown(t *types.Table) ([]sdk.Event, error) {
 
 		if len(pot.EligibleSeats) == 1 {
 			potWinners[potIdx] = []int{pot.EligibleSeats[0]}
+		} else if len(holeBySeat) == 1 {
+			// Only one eligible seat actually revealed hole cards; it takes the pot uncontested.
+			for seat := range holeBySeat {
+				potWinners[potIdx] = []int{seat}
+			}
+		} else if len(holeBySeat) == 0 {
+			// No eligible seat revealed hole cards (dealer aborted mid-showdown). Refund the pot
+			// pro-rata to eligible seats so chips aren't stranded in the module account.
+			share := pot.Amount / uint64(len(pot.EligibleSeats))
+			rem := pot.Amount % uint64(len(pot.EligibleSeats))
+			refundedSeats := make([]int, 0, len(pot.EligibleSeats))
+			refundParts := make([]string, 0, len(pot.EligibleSeats))
+			for i, seat := range pot.EligibleSeats {
+				if seat < 0 || seat > 8 || t.Seats[seat] == nil {
+					continue
+				}
+				amt := share
+				if i == 0 {
+					amt += rem
+				}
+				nextStack, addErr := addUint64Checked(t.Seats[seat].Stack, amt, "seat stack refund")
+				if addErr != nil {
+					return nil, addErr
+				}
+				t.Seats[seat].Stack = nextStack
+				refundedSeats = append(refundedSeats, seat)
+				refundParts = append(refundParts, fmt.Sprintf("%d", amt))
+			}
+			events = append(events, sdk.NewEvent(
+				types.EventTypePotRefunded,
+				sdk.NewAttribute("tableId", fmt.Sprintf("%d", t.Id)),
+				sdk.NewAttribute("handId", fmt.Sprintf("%d", h.HandId)),
+				sdk.NewAttribute("potIndex", fmt.Sprintf("%d", potIdx)),
+				sdk.NewAttribute("amount", fmt.Sprintf("%d", pot.Amount)),
+				sdk.NewAttribute("eligibleSeats", joinSeats(pot.EligibleSeats)),
+				sdk.NewAttribute("refundedSeats", joinSeats(refundedSeats)),
+				sdk.NewAttribute("refundedAmounts", strings.Join(refundParts, ",")),
+				sdk.NewAttribute("reason", "no-eligible-reveals"),
+			))
+			continue
 		} else {
 			winners, err := holdem.Winners(
 				[]cards.Card{cards.Card(board5[0]), cards.Card(board5[1]), cards.Card(board5[2]), cards.Card(board5[3]), cards.Card(board5[4])},
