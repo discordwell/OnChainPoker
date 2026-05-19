@@ -83,7 +83,7 @@ export async function handlePubShare(args: {
 
   const initHeightRaw = dealerHand.initHeight ?? dealerHand.init_height;
   const initSaltRaw = dealerHand.initHashSalt ?? dealerHand.init_hash_salt;
-  if (initHeightRaw === undefined || initSaltRaw === undefined) {
+  if (initHeightRaw == null || initSaltRaw == null) {
     log(`PubShare: dealer hand missing initHeight/initHashSalt (pre-v2 chain state?)`);
     return;
   }
