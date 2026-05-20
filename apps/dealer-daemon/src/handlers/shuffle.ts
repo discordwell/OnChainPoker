@@ -38,9 +38,14 @@ export async function handleShuffle(args: {
 
   const actualStep = Number(dealerHand.shuffleStep ?? dealerHand.shuffle_step ?? 0);
 
-  // Determine if it's our turn
-  const memberIdx = actualStep % epochMembers.length;
-  const expectedShuffler = epochMembers[memberIdx]?.validator;
+  // Shuffle phase has N rounds (one per qualified member). When actualStep
+  // reaches N the chain refuses further submissions and the next message is
+  // FinalizeDeck. Without this guard, modulo wraparound (step 3 % 3 = 0)
+  // would tell whoever is epochMembers[0] to re-shuffle, producing wasted
+  // proofs that the chain rejects with "deck already finalized".
+  if (actualStep >= epochMembers.length) return;
+
+  const expectedShuffler = epochMembers[actualStep]?.validator;
   if (!expectedShuffler || expectedShuffler.toLowerCase() !== config.validatorAddress.toLowerCase()) {
     return; // Not our turn
   }
