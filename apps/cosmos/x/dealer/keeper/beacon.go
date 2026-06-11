@@ -210,7 +210,22 @@ func (k Keeper) MaybeAutoOpenBeacon(ctx context.Context) error {
 		}
 	}
 
-	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, 2)
+	// Inherit the current epoch's DKG threshold, floored at openBeacon's
+	// protocol minimum of 2, so a committee running t>2 never auto-opens a
+	// beacon that can finalize with fewer reveals than the epoch's own
+	// security parameter. Replay-safe without a height gate: every historical
+	// epoch ran threshold <= 2, so max(2, t) reproduces the previously
+	// hardcoded value at all past heights.
+	threshold := uint32(2)
+	epoch, err := k.GetEpoch(ctx)
+	if err != nil {
+		return err
+	}
+	if epoch != nil && epoch.Threshold > threshold {
+		threshold = epoch.Threshold
+	}
+
+	opened, err := k.openBeacon(ctx, nextEpoch, 0, 0, threshold)
 	if err != nil {
 		// BeginBlock errors during replay are fatal. Recovery failures here
 		// must not crash the chain; log and try again next block.

@@ -99,7 +99,9 @@ export function parsePlayerTable(raw: unknown): PlayerTableState | null {
   let pot = 0n;
   const totalCommits = Array.isArray(handRaw?.totalCommit ?? handRaw?.total_commit) ? (handRaw!.totalCommit ?? handRaw!.total_commit) as unknown[] : [];
   for (const tc of totalCommits) {
-    const v = typeof tc === "string" ? BigInt(tc || "0") : BigInt(tc ?? 0);
+    const v = typeof tc === "string" ? BigInt(tc || "0")
+      : typeof tc === "number" && Number.isInteger(tc) ? BigInt(tc)
+      : 0n;
     pot += v;
   }
 

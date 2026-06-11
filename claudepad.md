@@ -2,7 +2,31 @@
 
 ## Session Summaries
 
-### 2026-05-19T~UTC (latest) — Housekeeping + Beacon-Recovery Tests + Shuffle "step N/3" Finding
+### 2026-06-11T~UTC (latest) — Maintenance Pass: All Suites Green + Beacon Threshold Inheritance
+Routine maintenance pass (local-only; no deploys). Closed the epoch-threshold quirk from the prior session's notes and got every test suite in the workspace green simultaneously — the coordinator and ocp-shuffle suites had been red since March/April. Two summaries from 2026-02-19 rotated to a new `oldpad.md` (20-summary cap).
+
+**Beacon auto-open threshold inheritance** (`apps/cosmos/x/dealer/keeper/beacon.go`):
+- `MaybeAutoOpenBeacon` no longer hardcodes `openBeacon(ctx, nextEpoch, 0, 0, 2)`; it now uses `max(2, currentEpoch.Threshold)` so a future wider committee (t>2) can't auto-open a beacon that finalizes below the epoch's own security parameter. This was the explicitly-deferred quirk from the 2026-05-19 beacon-recovery-tests session.
+- Replay-safe WITHOUT a height gate: every historical epoch ran threshold ∈ {1,2}, so `max(2,t)` reproduces the previously hardcoded 2 at all past heights → byte-identical state on replay. `GetEpoch` is read only on the actually-opening path, preserving the BeginBlocker first-read short-circuit contract noted in module.go.
+- 3 new regression tests in `msg_server_beacon_recovery_test.go`: inherit t=3 on plain auto-open, floor legacy t=1 to 2, inherit t=3 through the stuck-overwrite recovery branch.
+- Code-review altitude note for a future session: beacon threshold arguably belongs in module Params (needs proto regen) — manual `MsgOpenBeaconWindow` takes `req.Threshold` while auto-open now reads epoch state; two sources of truth at different depths. Also the deeper semantic wrinkle: beacon participants are ALL bonded validators while `epoch.Threshold` describes the DKG committee.
+
+**Coordinator suite green (44/44, first time since ~March)** (`apps/coordinator/test/http-dealer-next.test.ts`):
+- The two perpetually-failing tests stubbed the legacy ABCI path `/table/N` and `dealer.finalized`; the route moved to LCD `/onchainpoker/poker/v1/tables/N` + `deckFinalized` in the 2026-03-08 LCD migration and nobody updated the stubs. Stubs now mirror the real LCD shape (`{table:{...}}` wrapper). The route's base64-decode path they exercise (`decodeU8Array` string branch) is still live code.
+
+**ocp-shuffle suite green (21/21, was 6/21)** (`packages/ocp-shuffle/package.json`):
+- Test script ran bare `node --test`, which unlike vitest does NOT set `NODE_ENV=test`, so the April audit's `seedUnsafeForTestsOnly` guard threw in 15 tests. The suite was designed for NODE_ENV=test (seed_guard.test.ts's `withEnv` comment says so). Fix: `NODE_ENV=test` prefix in the script. Verified with `env -u NODE_ENV pnpm test`. The April session likely had NODE_ENV set in-shell, masking this.
+
+**Web `tsc --noEmit` green (20 pre-existing errors fixed)** (`apps/web`):
+- The web `test` script IS `tsc --noEmit`, so the web "suite" had been failing since ~March too. Vite/esbuild never type-checks, so these lingered invisibly.
+- 13 of 20: Tweener `TweenOptions.target` was `Record<string, number>` — too narrow for Pixi `ObservablePoint`/`CardSprite`/`Graphics` targets. Widened to `object` (impl already casts internally).
+- 4: TS 5.7+ `Uint8Array<ArrayBufferLike>` vs `BufferSource` at crypto.subtle boundaries — annotated the fresh-allocating base64 decoders + params as `Uint8Array<ArrayBuffer>` (`keyEncryption.ts`, `passwordDigest.ts`, `utils.ts:base64ToUint8`).
+- 2: coordinatorUrl.test.ts window mock now casts `as unknown as Window & typeof globalThis` (dropped the unused `@ts-expect-error`).
+- 1: `parsePlayerTable.ts` pot loop `BigInt(tc ?? 0)` on unknown → explicit string/integer-number branches, garbage (objects/null/booleans/NaN/Infinity/floats) sums as 0n instead of throwing. New `parsePlayerTable.test.ts` (6 tests) pins pot computation incl. snake_case fallback. (Code-review pass caught that bare `typeof tc === "number"` still let NaN/floats throw → added `Number.isInteger` guard.)
+
+**Verification:** full `pnpm -r --if-present test` sweep green with NODE_ENV scrubbed (coordinator 44, dealer-daemon 29, web 77 vitest + tsc, ocp-shuffle 21, ocp-crypto, ocp-sdk, poker-engine, holdem-eval, sim all pass); `go test ./...` in apps/cosmos green; `pnpm -r build` clean. No chain/daemon deploy needed for the test-only fixes; beacon.go change ships with the next regular chain deploy (replay-safe per analysis above).
+
+### 2026-05-19T~UTC — Housekeeping + Beacon-Recovery Tests + Shuffle "step N/3" Finding
 Closed three of the four leftover items the prior session log called out: server housekeeping on ovh2, missing Go regression tests for the beacon stuck-recovery paths, and the stuck-epoch-41-hand audit. One new bug surfaced incidentally and is reported but not yet fixed.
 
 **Housekeeping (ovh2):**
@@ -252,21 +276,6 @@ Fixed the blocking issue preventing all gRPC/REST state queries when IBC is enab
 - **Fix**: Created `queryMultiStore` wrapper (`app/querywrap.go`) overriding `CacheMultiStoreWithVersion`. When `GetImmutable` fails and CommitInfo shows an empty-tree hash, substitutes a MemDB dummy instead of erroring. Wired via `SetQueryMultiStore()`.
 - Also fixed IBCStackBuilder middleware panic (bypass builder, wire transfer module directly).
 - All gRPC, REST, CLI queries now work: bank, staking, IBC endpoints verified.
-
-### 2026-02-19T~UTC — Follow-up Fixes (DKG + Hole Cards)
-Fixed two documented limitations from the initial implementation:
-- **Multi-party DKG**: Updated daemon to use complaint-based share distribution. New flow: commit → file `DkgComplaintMissing` for all other validators → reveal shares in response to complaints → aggregate secret share from own self-evaluation + received reveals → finalize. Added `handleDkgComplaints()`, `handleDkgReveals()`, `handleDkgAggregate()` to `dkg.ts`. Updated daemon.ts polling loop.
-- **Hole card decryption**: Implemented full crypto pipeline in `useHoleCards.ts`. Decrypts enc shares (V - skPlayer * U), computes Lagrange coefficients for validator indices, combines threshold shares via group-element interpolation (Σ λ_j * d_j), recovers card ID from precomputed lookup table (M = C2 - D). Integrated into App.tsx passing `holeCardState.cards` to PokerTable.
-
-### 2026-02-19T~UTC — Testnet → Live Poker Room (Phases 1-6)
-Implemented all 6 phases of the plan to bridge the on-chain poker protocol to a playable poker room:
-- **Phase 1**: Fixed `getPlayerPkForAddress()` → `getPlayerKeysForAddress()` to store 64-byte entropy (not just pubkey) in localStorage under `ocp.web.skPlayer:<addr>`. Added legacy key migration.
-- **Phase 2**: Added 4 dealer proxy routes to coordinator (`/v1/dealer/hand/:t/:h`, hole-positions, enc-shares, ciphertext) following the existing ABCI query pattern.
-- **Phase 3**: Created `apps/dealer-daemon/` — event-loop daemon with handlers for DKG commit, shuffle, enc shares, pub shares. Uses polling against chain LCD. Encrypted-at-rest epoch secrets in `~/.ocp-dealer/`.
-- **Phase 4**: Game automation integrated into dealer daemon (`automation.ts`) — auto epoch, hand init, tick, timeout. Gamemaster flag for designated operator.
-- **Phase 5**: Created `PokerTable.tsx`, `CardFace.tsx` components with "Emerald Velvet" CSS design. Added `useHoleCards` and `useTableState` hooks. Integrated PokerTable into App.tsx Player Desk section.
-- **Phase 6**: Deploy infrastructure — nginx config, 3 systemd unit templates (chain node, coordinator, dealer daemon), `deploy-vps.sh` script.
-- **Code review fixes**: State file permissions (0o600), systemd template typo, stale hand ID race, nginx WebSocket upgrade, empty passphrase warning.
 
 ## Key Findings
 

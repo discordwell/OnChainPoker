@@ -5,21 +5,23 @@
 // Legacy tables ship with empty salt; SHA256(empty || password) reduces to
 // the unsalted hash on-chain so they still authenticate.
 
-function base64Decode(b64: string): Uint8Array {
+function base64Decode(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64);
   const out = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
   return out;
 }
 
-function concat(a: Uint8Array, b: Uint8Array): Uint8Array {
+// Fresh allocations are ArrayBuffer-backed; the explicit return type keeps
+// the result assignable to crypto.subtle's BufferSource parameters.
+function concat(a: Uint8Array, b: Uint8Array): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(a.length + b.length);
   out.set(a, 0);
   out.set(b, a.length);
   return out;
 }
 
-async function sha256(input: Uint8Array): Promise<Uint8Array> {
+async function sha256(input: Uint8Array<ArrayBuffer>): Promise<Uint8Array> {
   const hash = await crypto.subtle.digest("SHA-256", input);
   return new Uint8Array(hash);
 }

@@ -22,14 +22,16 @@ function toBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
-function fromBase64(b64: string): Uint8Array {
+// Return type pinned to Uint8Array<ArrayBuffer> (not the ArrayBufferLike
+// default) so the bytes satisfy the BufferSource constraint of crypto.subtle.
+function fromBase64(b64: string): Uint8Array<ArrayBuffer> {
   const decoded = atob(b64);
   const bytes = new Uint8Array(decoded.length);
   for (let i = 0; i < decoded.length; i++) bytes[i] = decoded.charCodeAt(i);
   return bytes;
 }
 
-async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKey> {
+async function deriveKey(passphrase: string, salt: Uint8Array<ArrayBuffer>): Promise<CryptoKey> {
   const enc = new TextEncoder();
   const keyMaterial = await crypto.subtle.importKey(
     "raw",
@@ -48,7 +50,7 @@ async function deriveKey(passphrase: string, salt: Uint8Array): Promise<CryptoKe
 }
 
 export async function encryptEntropy(
-  entropy: Uint8Array,
+  entropy: Uint8Array<ArrayBuffer>,
   passphrase: string
 ): Promise<EncryptedKeyBundle> {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_BYTES));

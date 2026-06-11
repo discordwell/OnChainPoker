@@ -13,7 +13,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "pnpm build && node --test dist/test/**/*.test.js",
+    "test": "pnpm build && NODE_ENV=test node --test dist/test/**/*.test.js",
     "bench": "pnpm build && node dist/bench/verify.js",
     "gen:test-vector": "pnpm build && node dist/scripts/gen-test-vector.js"
   },

@@ -6,7 +6,8 @@ import { normalizeCoordinatorBase, toWsUrl } from "./coordinatorUrl";
 const MOCK_ORIGIN = "http://localhost:3000";
 
 beforeEach(() => {
-  // @ts-expect-error -- mock window for Node test env
+  // Partial mock of window for the Node test env; cast through unknown since
+  // only origin/href and the storage methods under test are provided.
   globalThis.window = {
     location: { origin: MOCK_ORIGIN, href: MOCK_ORIGIN },
     localStorage: {
@@ -14,7 +15,7 @@ beforeEach(() => {
       setItem: vi.fn(),
       removeItem: vi.fn(),
     },
-  };
+  } as unknown as Window & typeof globalThis;
 });
 
 afterEach(() => {

@@ -15,7 +15,7 @@ export function uint8ToBase64(bytes: Uint8Array): string {
   return btoa(out);
 }
 
-export function base64ToUint8(raw: string | null): Uint8Array | null {
+export function base64ToUint8(raw: string | null): Uint8Array<ArrayBuffer> | null {
   if (!raw) return null;
   try {
     const decoded = atob(raw);

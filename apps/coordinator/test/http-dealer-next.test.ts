@@ -86,15 +86,17 @@ function makeApp(chain: StubChainAdapter) {
 
 test("dealer next helper: decodes base64 board bytes for awaitFlop reveal pos", async () => {
   const chain = new StubChainAdapter();
-  chain.set("/table/7", {
-    id: 7,
-    hand: {
-      handId: 99,
-      phase: "awaitFlop",
-      board: "BQ==", // one board card (byte value 5)
-      dealer: {
-        finalized: true,
-        cursor: 6
+  chain.set("/onchainpoker/poker/v1/tables/7", {
+    table: {
+      id: 7,
+      hand: {
+        handId: 99,
+        phase: "awaitFlop",
+        board: "BQ==", // one board card (byte value 5)
+        dealer: {
+          deckFinalized: true,
+          cursor: 6
+        }
       }
     }
   });
@@ -118,17 +120,19 @@ test("dealer next helper: decodes base64 holePos bytes for awaitShowdown reveal 
   ]).toString("base64");
 
   const chain = new StubChainAdapter();
-  chain.set("/table/8", {
-    id: 8,
-    hand: {
-      handId: 100,
-      phase: "awaitShowdown",
-      inHand: [true, true, true, false, false, false, false, false, false],
-      folded: [false, false, true, false, false, false, false, false, false],
-      dealer: {
-        finalized: true,
-        holePos,
-        reveals: [{ pos: 0 }, { pos: 2 }]
+  chain.set("/onchainpoker/poker/v1/tables/8", {
+    table: {
+      id: 8,
+      hand: {
+        handId: 100,
+        phase: "awaitShowdown",
+        inHand: [true, true, true, false, false, false, false, false, false],
+        folded: [false, false, true, false, false, false, false, false, false],
+        dealer: {
+          deckFinalized: true,
+          holePos,
+          reveals: [{ pos: 0 }, { pos: 2 }]
+        }
       }
     }
   });

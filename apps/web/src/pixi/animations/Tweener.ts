@@ -63,8 +63,13 @@ function tick(dt: { deltaMS: number }) {
 }
 
 export interface TweenOptions {
-  /** Target object whose properties will be animated */
-  target: Record<string, number>;
+  /**
+   * Target object whose properties will be animated. Typed `object` rather
+   * than `Record<string, number>` so PixiJS containers/points (which carry
+   * plenty of non-numeric members) are accepted; only the numeric keys named
+   * in `to` are ever written.
+   */
+  target: object;
   /** Property values to animate to */
   to: Record<string, number>;
   /** Duration in milliseconds */

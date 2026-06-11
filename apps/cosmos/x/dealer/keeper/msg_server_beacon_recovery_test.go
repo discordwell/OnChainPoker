@@ -99,7 +99,7 @@ func TestMaybeAutoOpenBeacon_PostUpgrade_OverwritesExpiredUnconsumedStuck(t *tes
 	// Devnet defaults are 5/5 (harness chainID is ocp-devnet-1).
 	require.Equal(t, postUpgradeHeight+5, bs.CommitCloseHeight)
 	require.Equal(t, postUpgradeHeight+10, bs.RevealCloseHeight)
-	require.Equal(t, uint32(2), bs.Threshold, "auto-open hardcodes threshold=2")
+	require.Equal(t, uint32(2), bs.Threshold, "no epoch in fixture → auto-open uses the protocol minimum threshold of 2")
 	require.Empty(t, bs.Final)
 	require.Empty(t, bs.Reveals)
 	require.Empty(t, bs.Commits)
@@ -189,6 +189,80 @@ func TestMaybeAutoOpenBeacon_PostUpgrade_PreservesConsumedBeacon(t *testing.T) {
 	require.NotEmpty(t, bs.Final, "consumed-for-current-epoch beacon preserved")
 	require.Equal(t, uint64(3), bs.EpochId)
 	require.Equal(t, consumed.Final, bs.Final)
+}
+
+// --- auto-open threshold inheritance ----------------------------------------
+
+// Auto-open must inherit the current epoch's DKG threshold so a wider
+// committee (t > 2) never gets a beacon that finalizes with fewer reveals
+// than the epoch's own security parameter. Previously the call site
+// hardcoded threshold=2 regardless of epoch config.
+func TestMaybeAutoOpenBeacon_InheritsEpochThreshold(t *testing.T) {
+	ctx, k := recoveryFixture(t, postUpgradeHeight)
+
+	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
+		EpochId:   2,
+		Threshold: 3,
+	}))
+
+	// No beacon state stored → the plain auto-open path fires.
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bs)
+	require.Equal(t, uint64(3), bs.EpochId)
+	require.Equal(t, uint32(3), bs.Threshold, "auto-open must inherit the epoch's threshold")
+}
+
+// A legacy epoch with threshold=1 (as epochs 1-41 ran on the live testnet)
+// must be floored to openBeacon's protocol minimum of 2. This is also the
+// replay-safety property: max(2, t) equals the previously hardcoded 2 at
+// every historical height, so no height gate is needed for this change.
+func TestMaybeAutoOpenBeacon_FloorsLegacyEpochThreshold(t *testing.T) {
+	ctx, k := recoveryFixture(t, postUpgradeHeight)
+
+	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
+		EpochId:   2,
+		Threshold: 1,
+	}))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bs)
+	require.Equal(t, uint32(2), bs.Threshold, "legacy threshold=1 epochs floor to the protocol minimum")
+}
+
+// The stuck-overwrite recovery branch goes through the same call site and
+// must inherit the epoch threshold too — this was the exact quirk flagged
+// when the recovery path landed (openBeacon(ctx, nextEpoch, 0, 0, 2)).
+func TestMaybeAutoOpenBeacon_PostUpgrade_StuckOverwriteInheritsEpochThreshold(t *testing.T) {
+	ctx, k := recoveryFixture(t, postUpgradeHeight)
+
+	require.NoError(t, k.SetEpoch(ctx, &dealertypes.DealerEpoch{
+		EpochId:   2,
+		Threshold: 3,
+	}))
+
+	stuck := &dealertypes.BeaconState{
+		EpochId:           2,
+		CommitOpenHeight:  postUpgradeHeight - 100,
+		CommitCloseHeight: postUpgradeHeight - 50,
+		RevealCloseHeight: postUpgradeHeight - 10, // expired
+		Threshold:         2,
+		// 0 reveals < threshold → stuck, overwrite-eligible.
+	}
+	require.NoError(t, k.SetBeaconState(ctx, stuck))
+
+	require.NoError(t, k.MaybeAutoOpenBeacon(ctx))
+
+	bs, err := k.GetBeaconState(ctx)
+	require.NoError(t, err)
+	require.NotNil(t, bs)
+	require.Equal(t, uint64(3), bs.EpochId, "stuck beacon replaced with one for NextEpochID")
+	require.Equal(t, uint32(3), bs.Threshold, "recovery overwrite must inherit the epoch's threshold")
 }
 
 // --- openBeacon ------------------------------------------------------------
