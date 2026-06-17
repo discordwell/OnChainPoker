@@ -2,7 +2,24 @@
 
 ## Session Summaries
 
-### 2026-06-11T~UTC (latest) — Maintenance Pass: All Suites Green + Beacon Threshold Inheritance
+### 2026-06-17T~UTC (latest) — Fixed 3-Month-Red `pnpm test` / CI (README runtime-check marker)
+Maintenance pass (local-only; no deploys). Found and fixed the root `pnpm test` command — and therefore CI's "Unit Tests + Build" job — failing at its **very first step** since 2026-03-20.
+
+**Root cause** (`README.md`, `scripts/check-runtime-target.sh`):
+- `test:unit` (= `pnpm test`) starts with `pnpm runtime:check`, which greps `README.md` for the literal `Production target:` to keep the legacy(`apps/chain`)/production(`apps/cosmos`) runtime split documented.
+- Commit `d4e44b8` (2026-03-20, "VC-ready docs" README rewrite) deleted the `- **Production target:** \`apps/cosmos\`` line — and dropped any mention of `apps/chain` at all — so `runtime:check` has exited 1 ever since, aborting the whole suite before any package test ran.
+- **Why nobody caught it for ~3 months:** prior "all green" verifications used `pnpm -r --if-present test`, which runs each *workspace package's* own `test` script and **skips the root `test:unit` orchestration**. The root-only steps (`runtime:check`, `node --test scripts/test/*.test.mjs`, `pnpm web:build`, `pnpm chain:test`) were never exercised by that sweep. See new Key Finding.
+- Knock-on: CI's `test` job aborts at "Unit Tests + Build", so its *next* step "Cosmos Go Tests" (`apps/cosmos go test ./...`) also hasn't run since 2026-03-20.
+
+**Fix:**
+- Restored the `**Production target:** \`apps/cosmos\` …` paragraph to README (also re-adds the genuinely useful "apps/chain is a legacy CometBFT scaffold, not a deploy target" note the rewrite had dropped).
+- Added a hidden `<!-- … -->` HTML comment above it explaining the two literals are load-bearing for `check-runtime-target.sh`, so a future reword can't silently drop them again.
+
+**Verification:** full `pnpm test` now exits 0 end-to-end — every previously-unvalidated root step passes: `runtime:check` ✓, `scripts/test` (4) ✓, dealer-daemon (29) ✓, web tsc+vitest (77) ✓, `web:build` (vite) ✓, `chain:test` (apps/chain go) ✓, plus all other package suites. `apps/cosmos go test ./...` green standalone (x/dealer + x/poker keepers).
+
+**Observation for a future session (not changed):** CI `setup-go` reads `go-version-file: apps/chain/go.mod` (`go 1.25.0`) in all three jobs, but `apps/cosmos/go.mod` needs `go 1.25.7`; the now-unblocked "Cosmos Go Tests" step relies on `GOTOOLCHAIN=auto` to fetch 1.25.7. Consider bumping apps/chain's `go` directive to 1.25.7 (verified to still build/test locally on 1.25.7) or pointing CI at `apps/cosmos/go.mod`.
+
+### 2026-06-11T~UTC — Maintenance Pass: All Suites Green + Beacon Threshold Inheritance
 Routine maintenance pass (local-only; no deploys). Closed the epoch-threshold quirk from the prior session's notes and got every test suite in the workspace green simultaneously — the coordinator and ocp-shuffle suites had been red since March/April. Two summaries from 2026-02-19 rotated to a new `oldpad.md` (20-summary cap).
 
 **Beacon auto-open threshold inheritance** (`apps/cosmos/x/dealer/keeper/beacon.go`):
@@ -270,15 +287,9 @@ Fixed multiple field-name mismatches and control-flow bugs in the dealer daemon 
 - **Timeout flow**: Removed `return` from reveal/betting phase handlers so `maybeDealerTimeout` always runs.
 - **Result**: Full hands flow autonomously — DKG → shuffle → enc shares → preflop → flop → turn → river → showdown → next hand. Bots (calling-station + TAG) playing continuously.
 
-### 2026-02-21T~UTC — IBC State Query Fix (GoLevelDB Empty-Value Bug)
-Fixed the blocking issue preventing all gRPC/REST state queries when IBC is enabled:
-- **Root cause**: `cosmos-db`'s `GoLevelDB.Has()` returns false for keys with empty values (`[]byte{}`). IAVL's `SaveEmptyRoot()` writes `[]byte{}` for empty stores (evidence, ibc, transfer). This breaks `CacheMultiStoreWithVersion()` for all queries.
-- **Fix**: Created `queryMultiStore` wrapper (`app/querywrap.go`) overriding `CacheMultiStoreWithVersion`. When `GetImmutable` fails and CommitInfo shows an empty-tree hash, substitutes a MemDB dummy instead of erroring. Wired via `SetQueryMultiStore()`.
-- Also fixed IBCStackBuilder middleware panic (bypass builder, wire transfer module directly).
-- All gRPC, REST, CLI queries now work: bank, staking, IBC endpoints verified.
-
 ## Key Findings
 
+- **Verify with `pnpm test`, not `pnpm -r test`**: The root `test:unit` script (what `pnpm test` runs, and what CI's "Unit Tests + Build" step runs) has orchestration-only steps that the recursive per-package runner never executes: `pnpm runtime:check` (`scripts/check-runtime-target.sh`), `node --test scripts/test/*.test.mjs`, `pnpm web:build`, and `pnpm chain:test` (`apps/chain` go test). A `pnpm -r --if-present test` sweep can be 100% green while `pnpm test` is red. A README reword silently broke `runtime:check` and went unnoticed for ~3 months (2026-03-20 → 2026-06-17) for exactly this reason. Always run the root `pnpm test` before declaring suites green.
 - **DKG share distribution**: Uses the chain's complaint/reveal mechanism as the share distribution channel. Every validator files `DkgComplaintMissing` against every other after commit phase, forcing on-chain `DkgShareReveal`. Must aggregate shares BEFORE `FinalizeEpoch` since finalization clears DKG state.
 - **Hole card crypto**: Enc share format is `U(32)||V(32)`, decrypt as `V - skPlayer * U = d_j = xHand_j * C1`. Lagrange on group elements yields combined partial decryption `D`. Card recovery: `M = C2 - D`, lookup `M` in precomputed table of `mulBase(BigInt(cardId + 1))` for id 0..51 (uses `id+1` to avoid identity point, matching Go chain's `cardPoint()`).
 - **Security items resolved** (2026-02-20): All 8 deferred items addressed — hex length check, threshold check, XSS SECURITY comment + future mitigation path noted, DKG re-fetch between phases, pk mismatch warning, error logging, committed-only complaint filter, module-level card table.

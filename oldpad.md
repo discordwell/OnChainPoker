@@ -3,6 +3,13 @@
 Older session summaries rotated out of claudepad.md (which keeps the 20 most
 recent). Newest first.
 
+### 2026-02-21T~UTC — IBC State Query Fix (GoLevelDB Empty-Value Bug)
+Fixed the blocking issue preventing all gRPC/REST state queries when IBC is enabled:
+- **Root cause**: `cosmos-db`'s `GoLevelDB.Has()` returns false for keys with empty values (`[]byte{}`). IAVL's `SaveEmptyRoot()` writes `[]byte{}` for empty stores (evidence, ibc, transfer). This breaks `CacheMultiStoreWithVersion()` for all queries.
+- **Fix**: Created `queryMultiStore` wrapper (`app/querywrap.go`) overriding `CacheMultiStoreWithVersion`. When `GetImmutable` fails and CommitInfo shows an empty-tree hash, substitutes a MemDB dummy instead of erroring. Wired via `SetQueryMultiStore()`.
+- Also fixed IBCStackBuilder middleware panic (bypass builder, wire transfer module directly).
+- All gRPC, REST, CLI queries now work: bank, staking, IBC endpoints verified.
+
 ### 2026-02-19T~UTC — Follow-up Fixes (DKG + Hole Cards)
 Fixed two documented limitations from the initial implementation:
 - **Multi-party DKG**: Updated daemon to use complaint-based share distribution. New flow: commit → file `DkgComplaintMissing` for all other validators → reveal shares in response to complaints → aggregate secret share from own self-evaluation + received reveals → finalize. Added `handleDkgComplaints()`, `handleDkgReveals()`, `handleDkgAggregate()` to `dkg.ts`. Updated daemon.ts polling loop.

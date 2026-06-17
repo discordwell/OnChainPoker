@@ -35,6 +35,12 @@ See [ARCHITECTURE.md](./ARCHITECTURE.md) for the full system overview, data flow
 | `packages/dkg` | Distributed key generation | TypeScript |
 | `packages/ocp-sdk` | Client SDK (CosmJS, protobuf, events) | TypeScript |
 
+<!-- NOTE: the literal "Production target:" and `apps/cosmos` below are load-bearing.
+     scripts/check-runtime-target.sh (run as `pnpm runtime:check`, the first step of
+     `pnpm test`) greps for them to keep the legacy/production runtime split documented.
+     Reword freely, but keep both literals or `pnpm test` will fail. -->
+**Production target:** `apps/cosmos` (the Cosmos SDK appchain) is the production runtime chain. A separate `apps/chain` directory holds a legacy CometBFT+ABCI v0 scaffold kept only for fast local prototyping and the dealer-flow smoke test — it is **not** a deployment target.
+
 ## Tech Stack
 
 **Chain:** Cosmos SDK, CometBFT, Go | **Crypto:** Ristretto255, ElGamal threshold encryption | **Frontend:** React 19, TypeScript, Vite | **Wallet:** Keplr | **Monorepo:** pnpm workspaces
