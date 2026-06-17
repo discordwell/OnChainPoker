@@ -2,7 +2,25 @@
 
 ## Session Summaries
 
-### 2026-06-17T~UTC (latest) — Fixed 3-Month-Red `pnpm test` / CI (README runtime-check marker)
+### 2026-06-17T~UTC (latest) — Coordinator Hardening (XFF rate-limit bypass, memory bounds) + CI Go-version
+Maintenance pass (local-only; no deploys). Dispatched bug-hunt subagents over the dealer-daemon (clean — only a low-sev dead-code note: `daemon.ts:86`'s `dh.reveals` fallback reads a field the poker `DealerMeta` proto doesn't have, but the explicit `revealPos` path covers it) and the untrusted coordinator (3 findings, all closed). Also confirmed the prior session's shuffle "step 4/3" finding was already fixed in `1713655` (drop-modulo). Five changes, two commits:
+
+**XFF rate-limit / faucet-cooldown bypass (HIGH)** (`apps/coordinator/src/clientIp.ts` [new], `http.ts`, `ws.ts`, `config.ts`):
+- `getClientId` + the WS per-IP cap read the LEFTMOST `X-Forwarded-For` hop, which is fully client-controlled. `deploy/nginx-ocp.conf` uses `$proxy_add_x_forwarded_for` (APPENDS the real peer as the RIGHT-most hop), so an attacker rotating a spoofed XFF prefix minted a fresh "IP" per request → bypassed the write rate limiter, faucet per-IP cooldown, and WS chat cap. The 2026-05-19 session set first-hop deliberately ("cap fires behind nginx") but that reasoning missed that nginx *appends*.
+- New `clientIpFromForwarded(header, directIp, trustedHops=1)` reads the `trustedHops`-th hop from the RIGHT (Express `trust proxy: n` semantics); fails safe to the socket peer when the chain is shorter than expected or `trustedHops<=0`. Configurable via `COORDINATOR_TRUSTED_PROXY_HOPS` (default 1 = the single checked-in nginx). **NOT verified against the live prod proxy topology** — operator should confirm the hop count before deploy (documented in `deploy/coordinator.env.example`). Centralized in one helper (was duplicated in http+ws). 9 unit tests pin the spoof-collapse property.
+
+**Unbounded nicknames map (MEDIUM)** (`apps/coordinator/src/nicknames.ts` [new], `http.ts`):
+- `PUT /v1/nicknames/:address` validated only `startsWith("ocp")` into an unbounded Map. Prod `requireWriteAuth` defaults true, but the browser nickname UI implies this deployment disables it → public unbounded growth. New `NicknameRegistry` caps at 50k (FIFO-evict oldest; never evicts an in-place update); handler now requires a checksum-valid bech32 `ocp` address via existing `decodeBech32Prefix`. 5 unit + 2 HTTP tests.
+
+**Faucet evictExcess (LOW)** (`apps/coordinator/src/faucet.ts`):
+- Evicted by Map insertion order, which could re-arm a freshly-renewed long cooldown. Extracted exported `evictSoonestToExpire(map, max)` (evict soonest-to-expire first; callers already pruned expired). 3 unit tests.
+
+**CI Go-version** (`.github/workflows/ci.yml`):
+- The two cosmos-building jobs (`test`, `cosmos-dealer-e2e`) installed Go from `apps/chain/go.mod` (`go 1.25.0`) and relied on `GOTOOLCHAIN=auto` to fetch 1.25.7 mid-test for `apps/cosmos` (`go 1.25.7`). Now point `go-version-file` at `apps/cosmos/go.mod` so the toolchain satisfies both up front; `dealer-smoke` (chain-only) stays on `apps/chain/go.mod`. Closes the 2026-06-17 observation.
+
+**Verification:** full `pnpm test` exits 0 end-to-end (coordinator 44→63 tests, dealer-daemon 29, web 77+tsc, chain go, all packages); `apps/cosmos go test ./...` green on local 1.25.7; coordinator `tsc` build clean. Code-review subagent: no findings. No deploy (orchestrator pushes after its safety check).
+
+### 2026-06-17T~UTC — Fixed 3-Month-Red `pnpm test` / CI (README runtime-check marker)
 Maintenance pass (local-only; no deploys). Found and fixed the root `pnpm test` command — and therefore CI's "Unit Tests + Build" job — failing at its **very first step** since 2026-03-20.
 
 **Root cause** (`README.md`, `scripts/check-runtime-target.sh`):
@@ -279,16 +297,9 @@ Implemented public testnet infrastructure for anyone to play poker at discordwel
 - **Deploy fixes**: VITE env vars set at build time (relative paths for reverse proxy), bot restart detection (scans `bot-*.env`), coordinator ocp-sdk dependency wired for VPS.
 - **Config**: `FaucetConfig` type with 10 fields parsed from env, reuses existing COORDINATOR_COSMOS_* URLs as fallbacks.
 
-### 2026-02-21T10:00~UTC — Dealer Daemon Bugfixes + Bot Integration Test
-Fixed multiple field-name mismatches and control-flow bugs in the dealer daemon that prevented hands from completing:
-- **Shuffle round**: `handleShuffle` now reads `shuffleStep` from `DealerHand` proto (authoritative) instead of poker table metadata.
-- **Enc shares**: Read `holePos` from `table.hand.dealer` (poker module metadata), not `DealerHand` proto. Added `seatData.pk` field fallback. Catch "not in shuffle phase" gracefully.
-- **Deck finalized**: Use `pick(dealer, "deckFinalized", "deck_finalized")` everywhere (both `processTable` and `expectedRevealPos`).
-- **Timeout flow**: Removed `return` from reveal/betting phase handlers so `maybeDealerTimeout` always runs.
-- **Result**: Full hands flow autonomously — DKG → shuffle → enc shares → preflop → flop → turn → river → showdown → next hand. Bots (calling-station + TAG) playing continuously.
-
 ## Key Findings
 
+- **Client IP behind nginx = the RIGHT-most `X-Forwarded-For` hop, not the left**: `deploy/nginx-ocp.conf` uses `$proxy_add_x_forwarded_for`, which APPENDS the real peer to whatever the client sent. So the trustworthy client IP is the last element (with 1 proxy in front); reading `split(",")[0]` trusts a fully client-controlled value and lets an attacker mint a fresh rate-limit key per request. Coordinator IP extraction is centralized in `apps/coordinator/src/clientIp.ts` (`clientIpFromForwarded`, `trustedHops` from the right, default 1 via `COORDINATOR_TRUSTED_PROXY_HOPS`). If the prod topology ever gains another proxy (CDN), bump the hop count or the cap collapses all clients into one bucket.
 - **Verify with `pnpm test`, not `pnpm -r test`**: The root `test:unit` script (what `pnpm test` runs, and what CI's "Unit Tests + Build" step runs) has orchestration-only steps that the recursive per-package runner never executes: `pnpm runtime:check` (`scripts/check-runtime-target.sh`), `node --test scripts/test/*.test.mjs`, `pnpm web:build`, and `pnpm chain:test` (`apps/chain` go test). A `pnpm -r --if-present test` sweep can be 100% green while `pnpm test` is red. A README reword silently broke `runtime:check` and went unnoticed for ~3 months (2026-03-20 → 2026-06-17) for exactly this reason. Always run the root `pnpm test` before declaring suites green.
 - **DKG share distribution**: Uses the chain's complaint/reveal mechanism as the share distribution channel. Every validator files `DkgComplaintMissing` against every other after commit phase, forcing on-chain `DkgShareReveal`. Must aggregate shares BEFORE `FinalizeEpoch` since finalization clears DKG state.
 - **Hole card crypto**: Enc share format is `U(32)||V(32)`, decrypt as `V - skPlayer * U = d_j = xHand_j * C1`. Lagrange on group elements yields combined partial decryption `D`. Card recovery: `M = C2 - D`, lookup `M` in precomputed table of `mulBase(BigInt(cardId + 1))` for id 0..51 (uses `id+1` to avoid identity point, matching Go chain's `cardPoint()`).
