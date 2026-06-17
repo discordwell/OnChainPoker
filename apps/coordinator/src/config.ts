@@ -24,6 +24,15 @@ export type CoordinatorConfig = {
   writeRateLimitEnabled: boolean;
   writeRateLimitMax: number;
   writeRateLimitWindowMs: number;
+  /**
+   * Number of reverse-proxy hops in front of the coordinator, used to extract
+   * the real client IP from `X-Forwarded-For` for rate limiting. Defaults to 1
+   * (matches the checked-in nginx deployment, which appends the peer address).
+   * Set to 0 to ignore XFF entirely (direct exposure / no trusted proxy).
+   * Optional so existing config literals (e.g. in tests) keep compiling; absent
+   * is treated as the default of 1 by consumers.
+   */
+  trustedProxyHops?: number;
   faucet: FaucetConfig;
 };
 
@@ -96,6 +105,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
   const writeRateLimitWindowMs =
     (parseIntEnv(env.COORDINATOR_WRITE_RATE_LIMIT_WINDOW_SECS) ?? 60) * 1000;
 
+  const trustedProxyHops = Math.max(0, parseIntEnv(env.COORDINATOR_TRUSTED_PROXY_HOPS) ?? 1);
+
   const faucetEnabled = parseBoolEnv(env.FAUCET_ENABLED) ?? false;
   const faucetMnemonic = (env.FAUCET_MNEMONIC ?? "").trim() || null;
   const faucetAmount = (env.FAUCET_AMOUNT ?? "").trim() || "5000000";
@@ -120,6 +131,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): CoordinatorCon
     writeRateLimitEnabled,
     writeRateLimitMax,
     writeRateLimitWindowMs,
+    trustedProxyHops,
     faucet: {
       enabled: faucetEnabled,
       mnemonic: faucetMnemonic,

@@ -52,6 +52,23 @@ export function decodeBech32Prefix(address: string): string | null {
   return hrp;
 }
 
+/**
+ * Evict entries from a cooldown map (key → expiry-epoch-ms) down to `maxEntries`,
+ * dropping the entries whose cooldown expires soonest first. Callers prune
+ * already-expired entries beforehand, so what remains is still cooling down;
+ * dropping a still-active cooldown re-arms that key's rate limit early, so we
+ * sacrifice the ones closest to expiring rather than the oldest-inserted.
+ * Exported for unit testing.
+ */
+export function evictSoonestToExpire(map: Map<string, number>, maxEntries: number): void {
+  if (map.size <= maxEntries) return;
+  const excess = map.size - maxEntries;
+  const soonestToExpire = [...map.entries()]
+    .sort((a, b) => a[1] - b[1])
+    .slice(0, excess);
+  for (const [key] of soonestToExpire) map.delete(key);
+}
+
 export type FaucetStatus = {
   enabled: boolean;
   address: string;
@@ -198,19 +215,15 @@ export class FaucetService {
     for (const [k, v] of this.ipCooldowns) {
       if (now >= v) this.ipCooldowns.delete(k);
     }
-    // Hard cap to prevent memory abuse — evict oldest entries (Map insertion order)
+    // Hard cap to prevent memory abuse. Expired entries were already pruned
+    // above, so anything left is still cooling down; evict the entries closest
+    // to expiry rather than by insertion order, so we never re-arm a key whose
+    // cooldown still has a long way to run.
     this.evictExcess(this.addressCooldowns);
     this.evictExcess(this.ipCooldowns);
   }
 
   private evictExcess(map: Map<string, number>): void {
-    if (map.size <= FaucetService.MAX_COOLDOWN_ENTRIES) return;
-    const excess = map.size - FaucetService.MAX_COOLDOWN_ENTRIES;
-    let removed = 0;
-    for (const key of map.keys()) {
-      if (removed >= excess) break;
-      map.delete(key);
-      removed++;
-    }
+    evictSoonestToExpire(map, FaucetService.MAX_COOLDOWN_ENTRIES);
   }
 }

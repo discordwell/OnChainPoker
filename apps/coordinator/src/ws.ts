@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import WebSocket, { WebSocketServer } from "ws";
 import type { ChainEvent } from "./types.js";
 import type { CoordinatorStore } from "./store.js";
+import { clientIpFromForwarded } from "./clientIp.js";
 
 type ClientState = {
   subs: Set<string>;
@@ -38,6 +39,7 @@ export function createWsHub(opts: {
   httpServer: http.Server;
   store: CoordinatorStore;
   path?: string;
+  trustedProxyHops?: number;
 }): WsHub {
   const wss = new WebSocketServer({
     server: opts.httpServer,
@@ -50,10 +52,14 @@ export function createWsHub(opts: {
 
   wss.on("connection", (ws, req) => {
     const identity = `anon-${randomUUID().replace(/-/g, "").slice(0, 4)}`;
-    // Mirror http.ts getClientId: honor X-Forwarded-For first hop so the per-IP cap fires behind nginx.
-    const xff = req.headers["x-forwarded-for"];
-    const xffFirst = typeof xff === "string" ? xff.split(",")[0]?.trim() : Array.isArray(xff) ? xff[0]?.split(",")[0]?.trim() : null;
-    const ip = xffFirst || req.socket.remoteAddress || "unknown";
+    // Mirror http.ts getClientId: derive the real client IP from X-Forwarded-For
+    // (trusting only the proxy-appended right-most hop) so the per-IP cap fires
+    // behind nginx and can't be bypassed by a spoofed XFF prefix.
+    const ip = clientIpFromForwarded(
+      req.headers["x-forwarded-for"],
+      req.socket.remoteAddress ?? "",
+      opts.trustedProxyHops ?? 1
+    );
     const state: ClientState = { subs: new Set(), identity, ip };
     clients.set(ws, state);
 

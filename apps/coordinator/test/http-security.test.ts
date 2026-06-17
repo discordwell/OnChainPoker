@@ -184,3 +184,48 @@ test("write endpoint rate limits requests", async () => {
     assert.equal(second.status, 429);
   });
 });
+
+// A real, checksum-valid bech32 address with the `ocp` HRP (shared with bech32.test.ts).
+const VALID_OCP_ADDR = "ocp1qyqszqgpqyqszqgpqyqszqgpqyqszqgpnvpqjr";
+
+test("PUT nickname rejects addresses that are not checksum-valid bech32", async () => {
+  const app = makeApp();
+
+  await withHttpServer(app, async (baseUrl) => {
+    // Old behaviour accepted anything starting with "ocp"; now requires valid bech32.
+    const bogus = await fetch(`${baseUrl}/v1/nicknames/ocpNOTAVALIDADDRESS`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname: "Mallory" })
+    });
+    assert.equal(bogus.status, 400);
+
+    // Right "ocp" prefix but a corrupted checksum (last char flipped) — proves
+    // we validate the bech32 checksum, not merely `startsWith("ocp")`.
+    const badChecksum = VALID_OCP_ADDR.slice(0, -1) + (VALID_OCP_ADDR.endsWith("q") ? "r" : "q");
+    const corrupt = await fetch(`${baseUrl}/v1/nicknames/${badChecksum}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname: "Mallory" })
+    });
+    assert.equal(corrupt.status, 400);
+  });
+});
+
+test("PUT nickname accepts a valid ocp address and round-trips via GET", async () => {
+  const app = makeApp();
+
+  await withHttpServer(app, async (baseUrl) => {
+    const put = await fetch(`${baseUrl}/v1/nicknames/${VALID_OCP_ADDR}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ nickname: "Alice" })
+    });
+    assert.equal(put.status, 200);
+
+    const get = await fetch(`${baseUrl}/v1/nicknames/${VALID_OCP_ADDR}`);
+    assert.equal(get.status, 200);
+    const data = await get.json();
+    assert.equal(data.nickname, "Alice");
+  });
+});

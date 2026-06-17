@@ -7,7 +7,9 @@ import type { ChainAdapter } from "./chain/adapter.js";
 import type { CoordinatorStore } from "./store.js";
 import type { ArtifactKind } from "./types.js";
 import type { WsHub } from "./ws.js";
-import type { FaucetService } from "./faucet.js";
+import { type FaucetService, decodeBech32Prefix } from "./faucet.js";
+import { clientIpFromForwarded } from "./clientIp.js";
+import { NicknameRegistry } from "./nicknames.js";
 
 const SeatIntentSchema = z.object({
   tableId: z.string().min(1),
@@ -37,13 +39,9 @@ const ShuffleArtifactPutSchema = z.object({
   meta: z.record(z.unknown()).optional()
 });
 
-function getClientId(req: Request): string {
-  const forwarded = req.header("x-forwarded-for");
-  if (forwarded) {
-    const first = forwarded.split(",")[0]?.trim();
-    if (first) return first;
-  }
-  return req.ip || req.socket.remoteAddress || "unknown";
+function getClientId(req: Request, trustedHops: number): string {
+  const directIp = req.ip || req.socket.remoteAddress || "unknown";
+  return clientIpFromForwarded(req.header("x-forwarded-for"), directIp, trustedHops);
 }
 
 function extractWriteToken(req: Request): string | null {
@@ -91,7 +89,7 @@ function createWriteRateLimiter(config: CoordinatorConfig): express.RequestHandl
   const buckets = new Map<string, { count: number; windowEndMs: number }>();
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const key = getClientId(req);
+    const key = getClientId(req, config.trustedProxyHops ?? 1);
     const now = Date.now();
     let bucket = buckets.get(key);
 
@@ -262,7 +260,7 @@ export function createHttpApp(opts: {
     const address = typeof req.body?.address === "string" ? req.body.address.trim() : "";
     if (!address) return res.status(400).json({ error: "address required" });
 
-    const clientIp = getClientId(req);
+    const clientIp = getClientId(req, config.trustedProxyHops ?? 1);
 
     try {
       const result = await faucet.drip(address, clientIp);
@@ -600,11 +598,11 @@ export function createHttpApp(opts: {
 
   // ─── Nicknames ───
 
-  const nicknames = new Map<string, string>();
+  const nicknames = new NicknameRegistry();
 
   app.get("/v1/nicknames", (_req, res) => {
     const result: Record<string, string> = {};
-    for (const [addr, nick] of nicknames) result[addr] = nick;
+    for (const [addr, nick] of nicknames.entries()) result[addr] = nick;
     res.json(result);
   });
 
@@ -617,20 +615,19 @@ export function createHttpApp(opts: {
 
   app.put("/v1/nicknames/:address", ...writeGuards, (req, res) => {
     const addr = String(req.params.address ?? "");
-    if (!addr || !addr.startsWith("ocp")) return res.status(400).json({ error: "invalid address" });
+    // Require a checksum-valid bech32 address with an `ocp` HRP. The old
+    // `startsWith("ocp")` check let arbitrary `ocp<garbage>` strings in, which
+    // (when write auth is disabled for the browser client) could flood the
+    // registry. The NicknameRegistry size cap is the hard memory backstop.
+    const hrp = decodeBech32Prefix(addr);
+    if (!hrp || !hrp.startsWith("ocp")) return res.status(400).json({ error: "invalid address" });
 
     const parsed = NicknameSchema.safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ error: parsed.error.message });
 
-    // Check uniqueness (case-insensitive)
-    const lower = parsed.data.nickname.toLowerCase();
-    for (const [existingAddr, existingNick] of nicknames) {
-      if (existingAddr !== addr && existingNick.toLowerCase() === lower) {
-        return res.status(409).json({ error: "nickname already taken" });
-      }
+    if (nicknames.set(addr, parsed.data.nickname) === "taken") {
+      return res.status(409).json({ error: "nickname already taken" });
     }
-
-    nicknames.set(addr, parsed.data.nickname);
     res.json({ address: addr, nickname: parsed.data.nickname });
   });
 

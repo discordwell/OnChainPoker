@@ -46,7 +46,7 @@ export function createCoordinatorServer(opts: {
     });
 
     httpServer = http.createServer(app);
-    wsHub = createWsHub({ httpServer, store, path: "/ws" });
+    wsHub = createWsHub({ httpServer, store, path: "/ws", trustedProxyHops: config.trustedProxyHops });
 
     stopChainSub = chain.subscribe((ev: ChainEvent) => {
       wsHub?.broadcastChainEvent(ev);
