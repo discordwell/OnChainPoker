@@ -27,7 +27,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: apps/chain/go.mod
+          # apps/cosmos is the production runtime and requires a newer Go than
+          # apps/chain (the legacy scaffold). Install from cosmos/go.mod so the
+          # toolchain satisfies both modules up front, instead of relying on
+          # GOTOOLCHAIN=auto to download it mid-test for the cosmos steps.
+          go-version-file: apps/cosmos/go.mod
           cache: true
           cache-dependency-path: |
             apps/chain/go.sum
@@ -130,7 +134,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version-file: apps/chain/go.mod
+          # apps/cosmos is the production runtime and requires a newer Go than
+          # apps/chain (the legacy scaffold). Install from cosmos/go.mod so the
+          # toolchain satisfies both modules up front, instead of relying on
+          # GOTOOLCHAIN=auto to download it mid-test for the cosmos steps.
+          go-version-file: apps/cosmos/go.mod
           cache: true
           cache-dependency-path: |
             apps/chain/go.sum
