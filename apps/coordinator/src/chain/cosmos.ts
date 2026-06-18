@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import type { ChainAdapter } from "./adapter.js";
 import type { ChainEvent, TableInfo } from "../types.js";
+import { dispatchChainEvents } from "./dispatch.js";
 
 type CometTxEventAttr = { key: string; value: string };
 type CometTxEvent = { type: string; attributes?: CometTxEventAttr[] };
@@ -280,9 +281,9 @@ export class CosmosChainAdapter implements ChainAdapter {
       const chainEvents = cosmosEventsToChainEvents(events, { eventIndexStart: this.nextEventIndex, timeMs: nowMs });
       this.nextEventIndex += chainEvents.length;
 
-      for (const ev of chainEvents) {
-        for (const cb of this.subscribers) cb(ev);
-      }
+      dispatchChainEvents(this.subscribers, chainEvents, (err) =>
+        console.error("[cosmos] chain-event subscriber threw", err)
+      );
     });
 
     const onCloseOrError = () => {

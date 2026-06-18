@@ -25,7 +25,17 @@ function safeJsonParse(raw: string): unknown {
 
 function sendJson(ws: WebSocket, msg: unknown): void {
   if (ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify(msg));
+  // Best-effort delivery: a single client's failed send must never throw.
+  // `JSON.stringify` throws on an unserializable payload (e.g. a stray BigInt)
+  // and `ws.send` can throw on a socket that raced to CLOSING after the
+  // readyState check. Either would otherwise abort delivery to the remaining
+  // clients in a broadcast loop and — when called from the chain-event
+  // subscriber — escape as an uncaught exception that crashes the coordinator.
+  try {
+    ws.send(JSON.stringify(msg));
+  } catch {
+    // Drop this client's copy; other recipients are unaffected.
+  }
 }
 
 export type WsHub = {

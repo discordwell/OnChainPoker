@@ -2,7 +2,24 @@
 
 ## Session Summaries
 
-### 2026-06-17T~UTC (latest) — Coordinator Hardening (XFF rate-limit bypass, memory bounds) + CI Go-version
+### 2026-06-17T~UTC (latest) — Coordinator Crash-Resilience: Total `sendJson` + Isolated Chain-Event Dispatch
+Maintenance pass (local-only; no deploys). Orienting review found the repo green and clean (zero TODO/FIXME, holdem-eval/pots/engine all correct, scout-flagged dealer-daemon "bugs" were false positives — DKG member indices are 1-based per `committee/dealer_members.go:37` so the `dkg.ts:176` `j>0` guard is harmless, and `u64le(Number(tableId))` can't collapse because `BigInt(NaN)` throws and real chain IDs are numeric). The one genuine, high-value finding: a reachable **coordinator process-crash** in the always-on relay.
+
+**The bug** (`apps/coordinator/src/ws.ts`, `chain/cosmos.ts`, `chain/comet.ts`):
+- `sendJson` did a bare `ws.send(JSON.stringify(msg))`. The chain adapters' RPC-WebSocket `message` handler dispatched events via `for (const cb of this.subscribers) cb(ev)` with NO try/catch, and there is NO process-level `uncaughtException`/`unhandledRejection` handler anywhere in the coordinator (grep-confirmed).
+- Crash path: chain event → subscriber (`server.ts:51`) → `broadcastChainEvent` → `sendJson` → `ws.send`/`JSON.stringify` throws (a client socket that raced to CLOSING after the readyState check, or any unserializable payload) → escapes the `message` handler as an uncaught exception → **whole coordinator dies, disconnecting every player**. A throw also aborted delivery to the *remaining* clients in the broadcast loop.
+
+**The fix (two layers):**
+- **Part A (root cause)** — `sendJson` is now total: `ws.send(JSON.stringify(msg))` wrapped in try/catch (best-effort delivery; drop one client's copy, never throw). This makes all broadcast paths (`broadcastChainEvent`/`broadcastToTopic`/`broadcast`) and every single-client reply safe at once. All 20 call sites are fire-and-forget `void` — swallowing hides nothing actionable (verified by code-review subagent).
+- **Part B (defense-in-depth)** — new `apps/coordinator/src/chain/dispatch.ts` exports `dispatchChainEvents(subscribers, events, onError?)` that catches per-subscriber throws (no escape, no sibling starvation). Wired into both `cosmos.ts` and `comet.ts`, replacing the bare nested loop byte-for-byte plus a `console.error` onError net. Covers any future non-`sendJson` subscriber too.
+
+**Tests (every fix requires a test):**
+- `test/chain-dispatch.test.ts` (4): happy-path exactly-once delivery, throwing-subscriber-first doesn't starve siblings or escape, no-`onError` path still swallows, empty-batch no-op.
+- `test/ws-broadcast-resilience.test.ts` (1): end-to-end through real `createCoordinatorServer` + `MockChainAdapter` — publishing an event with a BigInt in `data` does NOT throw and the relay keeps delivering a subsequent `HandStarted`. **Proven a genuine regression guard**: reverting `sendJson` to the throwing form fails it with `TypeError: Do not know how to serialize a BigInt`.
+
+**Verification:** coordinator suite 63→68 (all pass); coordinator `tsc` build clean; full root `pnpm test` exits 0 end-to-end (packages, web tsc+vite build, `apps/chain` go). Code-review subagent: no substantive findings, tests deterministic (5/5 runs). cosmos go untouched (TS-only change). No deploy.
+
+### 2026-06-17T~UTC — Coordinator Hardening (XFF rate-limit bypass, memory bounds) + CI Go-version
 Maintenance pass (local-only; no deploys). Dispatched bug-hunt subagents over the dealer-daemon (clean — only a low-sev dead-code note: `daemon.ts:86`'s `dh.reveals` fallback reads a field the poker `DealerMeta` proto doesn't have, but the explicit `revealPos` path covers it) and the untrusted coordinator (3 findings, all closed). Also confirmed the prior session's shuffle "step 4/3" finding was already fixed in `1713655` (drop-modulo). Five changes, two commits:
 
 **XFF rate-limit / faucet-cooldown bypass (HIGH)** (`apps/coordinator/src/clientIp.ts` [new], `http.ts`, `ws.ts`, `config.ts`):
@@ -289,14 +306,6 @@ Fixed the final blocker preventing hands from completing on the public testnet:
 - **Deploy script**: Changed from hardcoded 3 dealers to dynamic detection of `dealer-*.env` files.
 - **Result**: Full hands play autonomously — shuffle proofs submit reliably, hands complete end-to-end, bots playing continuously.
 
-### 2026-03-07T~UTC — Public Testnet: Faucet + Bot Deploy Infrastructure
-Implemented public testnet infrastructure for anyone to play poker at discordwell.com/ocp:
-- **Faucet service**: New `FaucetService` class in coordinator with `GET /v1/faucet/status` and `POST /v1/faucet` endpoints. Address/IP rate limiting with configurable cooldowns, bech32 prefix validation, signing mutex, bounded cooldown maps. 7 new tests (18 total).
-- **Frontend faucet button**: "Get Testnet CHIPS" button in wallet panel with pending/success/error states and 8s auto-clear.
-- **Testnet genesis script**: `apps/cosmos/scripts/testnet-genesis.sh` — creates validator, faucet, bot-0/1/2 keys with mnemonic backup, pre-seeds table #1 (5k/10k blinds), patches denom metadata.
-- **Deploy fixes**: VITE env vars set at build time (relative paths for reverse proxy), bot restart detection (scans `bot-*.env`), coordinator ocp-sdk dependency wired for VPS.
-- **Config**: `FaucetConfig` type with 10 fields parsed from env, reuses existing COORDINATOR_COSMOS_* URLs as fallbacks.
-
 ## Key Findings
 
 - **Client IP behind nginx = the RIGHT-most `X-Forwarded-For` hop, not the left**: `deploy/nginx-ocp.conf` uses `$proxy_add_x_forwarded_for`, which APPENDS the real peer to whatever the client sent. So the trustworthy client IP is the last element (with 1 proxy in front); reading `split(",")[0]` trusts a fully client-controlled value and lets an attacker mint a fresh rate-limit key per request. Coordinator IP extraction is centralized in `apps/coordinator/src/clientIp.ts` (`clientIpFromForwarded`, `trustedHops` from the right, default 1 via `COORDINATOR_TRUSTED_PROXY_HOPS`). If the prod topology ever gains another proxy (CDN), bump the hop count or the cap collapses all clients into one bucket.
@@ -308,3 +317,4 @@ Implemented public testnet infrastructure for anyone to play poker at discordwel
 - **Vite base path**: Already configured to `/ocp/` in vite.config.ts.
 - **GoLevelDB empty-value quirk**: `GoLevelDB.Get()` returns `nil` for keys stored with `[]byte{}` (empty value). `GoLevelDB.Has()` uses `Get()` internally and checks `bytes != nil`, so it returns false for empty values. Iterators still find these keys. This affects IAVL's `SaveEmptyRoot()` which writes `[]byte{}` for empty trees, making `hasVersion()` and `GetRoot()` fail for stores with no data.
 - **Store version compatibility**: SDK pseudo-version `v0.54.0-rc.1` requires `cosmossdk.io/store v1.3.0-beta.0` (for `ObjKVStore`), forced via `replace` directive. Both SDK and ibc-go pin this same version.
+- **Coordinator has NO process-level safety net**: there is no `process.on("uncaughtException"|"unhandledRejection")` handler anywhere in `apps/coordinator`. Any synchronous throw inside the chain adapters' RPC-WebSocket `message` handler (`cosmos.ts`/`comet.ts`) crashes the entire relay and disconnects every player. Two invariants now keep that handler total: (1) `sendJson` (`ws.ts`) swallows `ws.send`/`JSON.stringify` failures — best-effort, never throws; keep it that way. (2) Chain-event fan-out goes through `chain/dispatch.ts` `dispatchChainEvents`, which isolates per-subscriber throws. If you ever add a process-global handler, prefer logging + graceful shutdown over silently swallowing (a swallowed `uncaughtException` can leave the process in a corrupt state).
