@@ -35,9 +35,7 @@ func (c Card) String() string {
 	case 10:
 		rch = 'T'
 	default:
-		rch = byte('0' + (r - 0))
-	}
-	if r >= 2 && r <= 9 {
+		// ranks 2..9 render as their digit
 		rch = byte('0' + r)
 	}
 	s := c.Suit()
@@ -78,4 +76,3 @@ func DeterministicDeck(seed []byte) []Card {
 	}
 	return deck
 }
-
