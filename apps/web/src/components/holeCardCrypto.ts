@@ -139,3 +139,32 @@ export function recoverCard(
   const M = pointSub(c2, D);
   return lookupCardId(M);
 }
+
+/**
+ * Decrypt a position's enc-share list (as returned by the coordinator's
+ * enc-shares route) into Lagrange-ready group shares.
+ *
+ * Each share carries its validator's Shamir x-coordinate as `index`, read
+ * straight off the chain's DealerEncShare.index — there is no separate epoch
+ * "members" table to consult (the poker module's DealerMeta never carried one).
+ * Shares with a missing/invalid index (the x-coordinate must be >= 1) or that
+ * fail to decrypt are skipped.
+ */
+export function decryptIndexedShares(
+  shares: ReadonlyArray<{ index?: number | string; encShare?: string }>,
+  skPlayer: bigint
+): Array<{ validatorIndex: bigint; d: GroupElement }> {
+  const out: Array<{ validatorIndex: bigint; d: GroupElement }> = [];
+  for (const share of shares) {
+    const idx = Number(share?.index);
+    if (!Number.isInteger(idx) || idx <= 0) continue;
+    try {
+      const encShareBytes = decodeShareBytes(String(share?.encShare ?? ""));
+      const d = decryptEncShare(encShareBytes, skPlayer);
+      out.push({ validatorIndex: BigInt(idx), d });
+    } catch {
+      continue;
+    }
+  }
+  return out;
+}

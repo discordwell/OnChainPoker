@@ -15,9 +15,21 @@ import {
   decodeShareBytes,
   lookupCardId,
   decryptEncShare,
+  decryptIndexedShares,
   recoverCard,
   CARD_TABLE,
 } from "../src/components/holeCardCrypto";
+
+// Build a real 64-byte enc share (U||V) that decrypts under skPlayer to point d.
+function makeEncShare(d: ReturnType<typeof mulBase>, skPlayer: bigint, r: bigint): string {
+  const pk = mulBase(skPlayer);
+  const U = mulBase(r);
+  const V = pointAdd(d, mulPoint(pk, r));
+  const bytes = new Uint8Array(64);
+  bytes.set(groupElementToBytes(U), 0);
+  bytes.set(groupElementToBytes(V), 32);
+  return btoa(String.fromCharCode(...bytes));
+}
 
 // ---------------------------------------------------------------------------
 // modQ
@@ -220,5 +232,55 @@ describe("recoverCard", () => {
   it("returns null for empty shares", () => {
     const C2 = mulBase(1n);
     expect(recoverCard(C2, [])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// decryptIndexedShares — reads the Shamir index off each enc-share
+// ---------------------------------------------------------------------------
+describe("decryptIndexedShares", () => {
+  const skPlayer = 31337n;
+
+  // Shamir-split xHand (threshold 2) and build per-validator enc shares.
+  const cardId = 23;
+  const M = mulBase(BigInt(cardId + 1));
+  const xHand = 555n;
+  const a1 = 4242n;
+  const f = (x: bigint) => modQ(xHand + modQ(a1 * x));
+  const C1 = mulBase(1n);
+  const C2 = pointAdd(M, mulPoint(C1, xHand));
+
+  function shareFor(index: number, r: bigint) {
+    const d = mulPoint(C1, f(BigInt(index)));
+    return { pos: 0, validator: `v${index}`, index, encShare: makeEncShare(d, skPlayer, r) };
+  }
+
+  it("recovers a card end-to-end using the index read off each share", () => {
+    const shares = [shareFor(1, 7n), shareFor(2, 8n), shareFor(3, 9n)];
+    const decrypted = decryptIndexedShares(shares, skPlayer);
+    expect(decrypted.map((s) => s.validatorIndex)).toEqual([1n, 2n, 3n]);
+    // Any threshold-2 subset reconstructs the card.
+    expect(recoverCard(C2, [decrypted[0]!, decrypted[2]!])).toBe(cardId);
+  });
+
+  it("skips shares with a missing or invalid Shamir index", () => {
+    const good = shareFor(2, 11n);
+    const shares = [
+      { ...shareFor(1, 7n), index: 0 }, // invalid: x-coord must be >= 1
+      { ...shareFor(1, 7n), index: -1 }, // invalid
+      { ...good }, // valid
+      { pos: 0, validator: "vx", encShare: good.encShare }, // missing index
+    ];
+    const decrypted = decryptIndexedShares(shares as any, skPlayer);
+    expect(decrypted.map((s) => s.validatorIndex)).toEqual([2n]);
+  });
+
+  it("skips shares whose ciphertext fails to decode", () => {
+    const shares = [
+      { pos: 0, validator: "v1", index: 1, encShare: "not-valid-base64-$$$" },
+      shareFor(2, 13n),
+    ];
+    const decrypted = decryptIndexedShares(shares, skPlayer);
+    expect(decrypted.map((s) => s.validatorIndex)).toEqual([2n]);
   });
 });

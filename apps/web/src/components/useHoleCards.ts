@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { groupElementFromBytes } from "@onchainpoker/ocp-crypto";
-import type { GroupElement } from "@onchainpoker/ocp-crypto";
-import { decodeShareBytes, decryptEncShare, recoverCard } from "./holeCardCrypto";
+import { decodeShareBytes, decryptIndexedShares, recoverCard } from "./holeCardCrypto";
 
 type HoleCardsState = {
   cards: [number, number] | null;
@@ -80,22 +79,10 @@ export function useHoleCards(args: {
         return;
       }
 
-      // 4. Get dealer hand state to learn validator indices
-      const dhRes = await fetch(
-        `${coordinatorBase}/v1/dealer/hand/${tableId}/${handId}`
-      );
-      if (!dhRes.ok) throw new Error("Failed to get dealer hand state");
-      const dhData = await dhRes.json();
-      const epochMembers: Array<{ validator: string; index: number }> =
-        dhData.hand?.members ?? dhData.hand?.epoch?.members ?? [];
-
-      // Build validator → index map
-      const validatorIndex = new Map<string, number>();
-      for (const m of epochMembers) {
-        validatorIndex.set(String(m.validator ?? "").toLowerCase(), m.index);
-      }
-
-      // 5. Decrypt each card
+      // 4. Decrypt each card. Each enc-share carries its validator's Shamir
+      // x-coordinate (DealerEncShare.index) directly, so the index for the
+      // Lagrange interpolation is read straight off the share — no separate
+      // epoch-members lookup is needed (and the DealerMeta never carried one).
       const cards: [number, number] = [-1, -1];
 
       for (let cardIdx = 0; cardIdx < 2; cardIdx++) {
@@ -106,36 +93,22 @@ export function useHoleCards(args: {
         const c2Bytes = decodeShareBytes(String(ctData.c2));
         const c2 = groupElementFromBytes(c2Bytes);
 
-        // Decrypt enc shares from each validator
-        const decryptedShares: Array<{ validatorIndex: bigint; d: GroupElement }> = [];
-
-        for (const share of esData.shares) {
-          const valAddr = String(share.validator ?? "").toLowerCase();
-          const idx = validatorIndex.get(valAddr);
-          if (idx === undefined) continue;
-
-          try {
-            const encShareBytes = decodeShareBytes(String(share.encShare));
-            const d = decryptEncShare(encShareBytes, skPlayer);
-            decryptedShares.push({ validatorIndex: BigInt(idx), d });
-          } catch {
-            // Skip invalid shares
-            continue;
-          }
-        }
+        // Decrypt the validators' enc shares (each tagged with its Shamir index)
+        const decryptedShares = decryptIndexedShares(esData.shares, skPlayer);
 
         if (decryptedShares.length === 0) {
           throw new Error(`No valid enc shares for card ${cardIdx}`);
         }
 
-        // Threshold sanity check: need at least ceil(members/2) shares for
-        // correct interpolation. With fewer, recoverCard returns null but the
-        // error message would be misleading ("no matching card ID").
-        const estimatedThreshold = Math.max(1, Math.ceil(epochMembers.length / 2));
+        // Threshold sanity check: each validator posts one share per position,
+        // so the number of shares present approximates the committee size; a
+        // majority must decrypt for the interpolation to land on a real card.
+        const sharesPresent = Array.isArray(esData.shares) ? esData.shares.length : 0;
+        const estimatedThreshold = Math.max(1, Math.ceil(sharesPresent / 2));
         if (decryptedShares.length < estimatedThreshold) {
           throw new Error(
             `Insufficient shares for card ${cardIdx}: have ${decryptedShares.length}, ` +
-            `need >= ${estimatedThreshold} (${epochMembers.length} members)`
+            `need >= ${estimatedThreshold} (${sharesPresent} posted)`
           );
         }
 

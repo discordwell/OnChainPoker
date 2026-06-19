@@ -15,6 +15,7 @@ export class MockChainAdapter implements ChainAdapter {
   private readonly emitter = new EventEmitter();
   private readonly tablesById = new Map<string, MockTableState>();
   private readonly events: ChainEvent[] = [];
+  private readonly queryResponses = new Map<string, unknown>();
   private nextEventIndex = 1;
 
   subscribe(cb: (event: ChainEvent) => void): () => void {
@@ -33,6 +34,15 @@ export class MockChainAdapter implements ChainAdapter {
 
   getEventsSince(eventIndex: number): ChainEvent[] {
     return this.events.filter((e) => e.eventIndex > eventIndex).map((e) => ({ ...e }));
+  }
+
+  /** Register a canned JSON response for an exact LCD query path (test helper). */
+  setQueryResponse(path: string, value: unknown): void {
+    this.queryResponses.set(path, value);
+  }
+
+  async queryJson<T = unknown>(path: string): Promise<T | null> {
+    return this.queryResponses.has(path) ? (this.queryResponses.get(path) as T) : null;
   }
 
   createTable(

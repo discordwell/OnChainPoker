@@ -3,6 +3,7 @@ import type { CardId } from "@onchainpoker/holdem-eval";
 import { cardToString } from "@onchainpoker/holdem-eval";
 import type { BotConfig } from "./config.js";
 import type { Strategy, GameState } from "./strategy.js";
+import { sanitizeAction } from "./sanitizeAction.js";
 import { decryptHoleCards } from "./holeCards.js";
 import { log, logError } from "./log.js";
 
@@ -359,21 +360,17 @@ export class PokerBot {
         isLastToAct,
       };
 
-      // Decide and execute
+      // Decide, then coerce the action into one the chain will accept (cap to
+      // all-in, downgrade an unaffordable raise to a call/check, floor a short
+      // raise to all-in). See sanitizeAction for the chain's raise-to rules.
       const decision = this.strategy.decide(gameState);
-      let { action } = decision;
-      let amount = decision.amount ?? 0n;
-
-      // Sanitize: can't bet/raise more than all-in
       const allIn = myStack + myStreetCommit;
-      if ((action === "bet" || action === "raise") && amount > allIn) {
-        amount = allIn;
-      }
-
-      // Ensure raise meets minimum
-      if (action === "raise" && amount < minRaise) {
-        amount = allIn >= minRaise ? minRaise : allIn;
-      }
+      const { action, amount } = sanitizeAction(decision, {
+        allIn,
+        betTo,
+        toCall,
+        minRaise,
+      });
 
       const holeStr = holeCards
         ? `[${cardToString(holeCards[0])} ${cardToString(holeCards[1])}]`

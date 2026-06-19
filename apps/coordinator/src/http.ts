@@ -423,6 +423,21 @@ export function createHttpApp(opts: {
 
   // ---- Dealer hand LCD proxy routes ----
 
+  // The dealer module's DealerHand carries the encrypted deck and the
+  // per-position threshold enc-shares (each tagged with its validator's Shamir
+  // index). The poker module's `table.hand.dealer` (DealerMeta) is only thin
+  // metadata — hole positions, cursor, reveal pos — and has NONE of the deck or
+  // share data, so ciphertext/enc-share lookups MUST hit the dealer module.
+  async function fetchDealerHand(tableId: string, handId: string): Promise<any | null> {
+    if (!chain.queryJson) return null;
+    const result = await chain
+      .queryJson<any>(
+        `/onchainpoker/dealer/v1/tables/${encodeURIComponent(tableId)}/hands/${encodeURIComponent(handId)}`
+      )
+      .catch(() => null);
+    return result?.hand ?? null;
+  }
+
   app.get("/v1/dealer/hand/:tableId/:handId", async (req, res) => {
     if (!chain.queryJson) {
       return res.status(400).json({ error: "chain adapter does not support dealer queries" });
@@ -487,14 +502,8 @@ export function createHttpApp(opts: {
       return res.status(400).json({ error: "tableId, handId, and pos required" });
     }
 
-    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
-    const table = result?.table ?? result;
-    if (!table) return res.status(404).json({ error: "table not found" });
-
-    const dh = table?.hand?.dealer;
-    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
-      return res.status(404).json({ error: "dealer hand not found" });
-    }
+    const dh = await fetchDealerHand(tableId, handId);
+    if (!dh) return res.status(404).json({ error: "dealer hand not found" });
 
     const encShares = Array.isArray(dh.encShares ?? dh.enc_shares)
       ? (dh.encShares ?? dh.enc_shares)
@@ -502,10 +511,15 @@ export function createHttpApp(opts: {
     const filtered = encShares.filter((s: any) => asNumber(s?.pos) === pos);
 
     return res.json({
+      // `index` is the validator's Shamir x-coordinate (DealerEncShare.index),
+      // required for the client's Lagrange interpolation. Forwarding it lets the
+      // client read the index straight off the share instead of trying to
+      // reconstruct it from an epoch members table the DealerMeta never carries.
       shares: filtered.map((s: any) => ({
-        validator: String(s.validatorId ?? s.validator_id ?? s.validator ?? ""),
+        validator: String(s.validator ?? s.validatorId ?? s.validator_id ?? ""),
+        index: asNumber(s.index) ?? 0,
         encShare: String(s.encShare ?? s.enc_share ?? ""),
-        proofEncShare: String(s.proofEncShare ?? s.proof_enc_share ?? ""),
+        proofEncShare: String(s.proof ?? s.proofEncShare ?? s.proof_enc_share ?? ""),
         pkPlayer: String(s.pkPlayer ?? s.pk_player ?? "")
       }))
     });
@@ -523,14 +537,8 @@ export function createHttpApp(opts: {
       return res.status(400).json({ error: "tableId, handId, and pos required" });
     }
 
-    const result = await chain.queryJson<any>(`/onchainpoker/poker/v1/tables/${encodeURIComponent(tableId)}`).catch(() => null);
-    const table = result?.table ?? result;
-    if (!table) return res.status(404).json({ error: "table not found" });
-
-    const dh = table?.hand?.dealer;
-    if (!dh || String(table?.hand?.handId ?? table?.hand?.hand_id ?? "") !== handId) {
-      return res.status(404).json({ error: "dealer hand not found" });
-    }
+    const dh = await fetchDealerHand(tableId, handId);
+    if (!dh) return res.status(404).json({ error: "dealer hand not found" });
 
     const deck = Array.isArray(dh.deck) ? dh.deck : [];
     const entry = deck[pos];
