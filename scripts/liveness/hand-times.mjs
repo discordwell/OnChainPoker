@@ -2,8 +2,8 @@
 // How long hands took, from the chain's own block heights and header times. Reads the output of
 // `dealer-events.mjs --time` and prints, for the hands that reached showdown:
 //   one row per hand, the median and the worst of "StartHand to first decision possible"
-//   (HoleCardsReady) and "StartHand to showdown result" (HandCompleted), and the steps of the
-//   median hand in blocks and seconds.
+//   (HoleCardsReady) and "StartHand to showdown result" (HandCompleted), and each step's median and
+//   worst over those hands, in blocks and seconds.
 //
 //   node scripts/liveness/hand-times.mjs <events.log> [--from HEIGHT] [--players N] [--json]
 //
@@ -128,10 +128,16 @@ const summary = {
   dealer: stat((h) => h.dealer),
   playersWait: stat((h) => h.playersWait),
 };
-const typical = timed.find((h) => h.toShowdown.seconds === summary.toShowdown.median.seconds);
+// Every timed hand has the same steps in the same order: the same number of players, all to showdown.
+const steps = timed[0].steps.map((step, i) => ({
+  name: step.name,
+  kind: step.kind,
+  median: { blocks: median(timed.map((h) => h.steps[i]?.blocks ?? 0)), seconds: median(timed.map((h) => h.steps[i]?.seconds ?? 0)) },
+  worst: { blocks: worst(timed.map((h) => h.steps[i]?.blocks ?? 0)), seconds: worst(timed.map((h) => h.steps[i]?.seconds ?? 0)) },
+}));
 
 if (flags.json) {
-  console.log(JSON.stringify({ summary, typical, hands: timed.map(({ steps, ...rest }) => rest) }));
+  console.log(JSON.stringify({ summary, steps, hands: timed.map(({ steps: _, ...rest }) => rest) }));
   process.exit(0);
 }
 
@@ -151,7 +157,9 @@ for (const row of ["median", "worst"]) {
     `${b(summary.dealer[row].blocks)} blk ${s(summary.dealer[row].seconds)} s  ${b(summary.playersWait[row].blocks)} blk ${s(summary.playersWait[row].seconds)} s`,
   );
 }
-console.log(`steps of hand ${typical.handId} (the median hand to showdown):`);
-for (const step of typical.steps) {
-  console.log(`  ${step.name.padEnd(18)} ${b(step.blocks)} blk ${s(step.seconds)} s${step.kind === "players" ? "  (players)" : ""}`);
+console.log("step                  median               worst");
+for (const step of steps) {
+  console.log(
+    `  ${step.name.padEnd(18)} ${b(step.median.blocks)} blk ${s(step.median.seconds)} s  ${b(step.worst.blocks)} blk ${s(step.worst.seconds)} s${step.kind === "players" ? "  (players)" : ""}`,
+  );
 }

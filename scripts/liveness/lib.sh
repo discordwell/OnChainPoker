@@ -335,7 +335,6 @@ bot_run() {
   echo $! >"$PIDS/$NET_NAME.$name"
 }
 bot_start() { bot_run "$ROOT" "bot-$1" "$1"; }
-bot_stop()  { proc_stop "bot-$1"; }
 
 # ---- the chain, read ------------------------------------------------------------------------
 
