@@ -20,8 +20,10 @@ export type OcpCosmosSigningClient = {
    * Throws OcpTxError "rejected" | "failed" | "expired" | "unknown" (see txFailureOf), and passes other
    * errors from before the broadcast through unchanged. Holds the caller at most
    * CONFIRM_LIMITS.maxWaitMs from the broadcast.
+   * `gasMultiplier` replaces the client's for this transaction: the gas limit is that many times
+   * what the simulation used.
    */
-  signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string) => Promise<DeliverTxResponse>;
+  signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string, opts?: { gasMultiplier?: number }) => Promise<DeliverTxResponse>;
 } & NodeReads;
 
 export async function walletFromMnemonic(args: { mnemonic: string; prefix: string }): Promise<DirectSecp256k1HdWallet> {
@@ -167,10 +169,10 @@ export async function connectOcpCosmosSigningClient(args: {
   }
 
   // Signs once. A second signature would be a second tx with the same sequence, and the caller would hear of one.
-  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = ""): Promise<DeliverTxResponse> {
+  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = "", opts: { gasMultiplier?: number } = {}): Promise<DeliverTxResponse> {
     const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
     const gasUsed = await simulate(msgs, memo);
-    const fee = calculateFee(Math.max(200_000, Math.ceil(gasUsed * gasMultiplier)), gasPrice);
+    const fee = calculateFee(Math.max(200_000, Math.ceil(gasUsed * (opts.gasMultiplier ?? gasMultiplier))), gasPrice);
     const timeoutHeight = sentAtHeight + ttlBlocks;
     const tx = TxRaw.encode(await client.sign(address, msgs, fee, memo, undefined, BigInt(timeoutHeight))).finish();
     const hash = txHashOf(tx);

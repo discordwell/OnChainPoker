@@ -9,6 +9,7 @@ import test from "node:test";
 import { decodeTxRaw } from "@cosmjs/proto-signing";
 
 import * as sdk from "../dist/index.js";
+import { createOcpCosmosClient } from "../dist/index.js";
 import { fakeChain, okResult, startFakeComet, txHash } from "./fake-comet.js";
 
 const failureOf = (err) => (sdk.txFailureOf ? sdk.txFailureOf(err) : { kind: "(the SDK has no typed failure)" });
@@ -54,6 +55,7 @@ async function connected(t, chainOver = {}, connectOver = {}) {
 }
 
 const timeoutOf = (tx) => Number(decodeTxRaw(tx).body.timeoutHeight);
+const gasLimitOf = (tx) => Number(decodeTxRaw(tx).authInfo.fee.gasLimit);
 
 // ---- group 1: signAndBroadcastAuto ----
 
@@ -93,6 +95,32 @@ test("an interactive signer (a person approves in a wallet) gets timeout height 
   const outcome = await signing.signAndBroadcastAuto([send]).catch((err) => err);
   assert.equal(timeoutOf(chain.broadcasts[0]), 100 + 60);
   assert.ifError(outcome instanceof Error ? outcome : null);
+});
+
+test("a hole-card share's gas limit covers the share that completes the set, which costs twice as much", async (t) => {
+  // The chain's SubmitEncShare opens the betting when its share completes the hand's set, and that
+  // branch cost 2.0 times the gas of a plain share on a local three-validator chain. Validators
+  // send into the same block, so a share simulated as a plain one can land as the completing one.
+  const { chain, signing } = await connected(t, { simulate: () => ({ gasUsed: 200_000n }) });
+  const client = createOcpCosmosClient({ signing });
+  const share = {
+    validator: "ocpvaloper1x",
+    tableId: 1,
+    handId: 1,
+    pos: 3,
+    pkPlayer: new Uint8Array(32),
+    encShare: new Uint8Array(64),
+    proofEncShare: new Uint8Array(160),
+  };
+
+  await client.dealerSubmitEncShare(share).catch(() => {});
+  const shareLimit = gasLimitOf(chain.broadcasts[0]);
+
+  await client.dealerSubmitPubShare({ ...share, pubShare: new Uint8Array(32), proofShare: new Uint8Array(96) }).catch(() => {});
+  const plainLimit = gasLimitOf(chain.broadcasts[1]);
+
+  assert.ok(shareLimit >= 2 * 200_000, `hole-card share gas limit ${shareLimit} is below twice the simulation`);
+  assert.ok(plainLimit < 2 * 200_000, `another message's limit ${plainLimit} also doubled`);
 });
 
 test("a tx in a block with code 5 throws failed with that height, code and the chain's log", async (t) => {

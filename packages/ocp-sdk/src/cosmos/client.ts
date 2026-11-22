@@ -245,12 +245,21 @@ export type OcpCosmosClient = {
   slashingUnjail: (args: { validator: string; memo?: string }) => Promise<DeliverTxResponse>;
 };
 
+/**
+ * The hole-card share that completes a hand's set also opens the betting, and that costs twice the
+ * gas of a share that does not (measured on a local chain: 519,091 against 266,329 with two
+ * players, 1,017,001 against 521,527 with six). Validators send their shares into the same blocks,
+ * so a share simulated as one more of the set can be the completing one in its block. Its limit
+ * covers that: twice the simulation, times the usual 1.3.
+ */
+const HOLE_SHARE_GAS_MULTIPLIER = 2.6;
+
 export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
   const { signing, lcd } = args;
 
   // Resolves for code 0 only; any other outcome is an OcpTxError (see txFailureOf).
-  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string): Promise<DeliverTxResponse> {
-    return signing.signAndBroadcastAuto(msgs, memo);
+  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string, opts?: { gasMultiplier?: number }): Promise<DeliverTxResponse> {
+    return signing.signAndBroadcastAuto(msgs, memo, opts);
   }
 
   function ensureLcd(): CosmosLcdClient {
@@ -651,7 +660,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
       proofEncShare: a.proofEncShare
     };
     const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.submitEncShare, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([eo], a.memo, { gasMultiplier: HOLE_SHARE_GAS_MULTIPLIER });
   }
 
   async function dealerFinalizeReveal(a: { caller?: string; tableId: UintLike; handId: UintLike; pos: number; memo?: string }): Promise<DeliverTxResponse> {
