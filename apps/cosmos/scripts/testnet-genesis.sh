@@ -41,6 +41,14 @@ GENTX_STAKE="${VALIDATOR_UCHIPS}"
 MIN_GAS_PRICES="0${DENOM}"
 TIMEOUT_COMMIT="6s"
 
+# Bounded history. Blocks: keep the consensus evidence window (max_age_num_blocks =
+# 100000, about 7 days at 6 s), which also covers the state-sync snapshots below.
+# State: keep the last 100 heights. Snapshots: every 1000 blocks, the newest 2 kept.
+MIN_RETAIN_BLOCKS="100000"
+PRUNING_KEEP_RECENT="100"
+PRUNING_INTERVAL="10"
+SNAPSHOT_INTERVAL="1000"
+
 # ── Paths ──
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -241,6 +249,14 @@ rm -f "$CONFIG_TOML.bak"
 
 log "patching app.toml: minimum-gas-prices=${MIN_GAS_PRICES}, api.enable=true"
 sed -i.bak -E "s/^minimum-gas-prices = .*/minimum-gas-prices = \"${MIN_GAS_PRICES}\"/" "$APP_TOML"
+rm -f "$APP_TOML.bak"
+
+log "patching app.toml: pruning=custom keep-recent=${PRUNING_KEEP_RECENT} interval=${PRUNING_INTERVAL}, min-retain-blocks=${MIN_RETAIN_BLOCKS}, snapshot-interval=${SNAPSHOT_INTERVAL}"
+sed -i.bak -E "s/^pruning = .*/pruning = \"custom\"/" "$APP_TOML"
+sed -i.bak -E "s/^pruning-keep-recent = .*/pruning-keep-recent = \"${PRUNING_KEEP_RECENT}\"/" "$APP_TOML"
+sed -i.bak -E "s/^pruning-interval = .*/pruning-interval = \"${PRUNING_INTERVAL}\"/" "$APP_TOML"
+sed -i.bak -E "s/^min-retain-blocks = .*/min-retain-blocks = ${MIN_RETAIN_BLOCKS}/" "$APP_TOML"
+sed -i.bak -E "s/^snapshot-interval = .*/snapshot-interval = ${SNAPSHOT_INTERVAL}/" "$APP_TOML"
 rm -f "$APP_TOML.bak"
 
 # Enable API (LCD)
