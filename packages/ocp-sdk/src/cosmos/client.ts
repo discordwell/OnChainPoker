@@ -5,7 +5,7 @@ import { parseValidators, readDealerState, type DealerState, type ValidatorInfo 
 import type { CosmosLcdClient } from "./lcd.js";
 import type { NodeStatus } from "./nodeReads.js";
 import { OCP_TYPE_URLS } from "./ocp.js";
-import type { OcpCosmosSigningClient } from "./signing.js";
+import type { Broadcast, OcpCosmosSigningClient, SendOptions } from "./signing.js";
 
 import type {
   MsgAct,
@@ -130,9 +130,35 @@ export function parseHandIdFromTx(tx: DeliverTxResponse): string | null {
   return v && /^\d+$/.test(v) ? v : null;
 }
 
+/** The messages a dealer sends with others in one transaction, or ahead of the block that makes them valid. */
+export type HandMessages = {
+  startHand: (args: { caller?: string; tableId: UintLike }) => EncodeObject;
+  initHand: (args: { caller?: string; tableId: UintLike; handId: UintLike; epochId: UintLike; deckSize?: number }) => EncodeObject;
+  submitShuffle: (args: { shuffler: string; tableId: UintLike; handId: UintLike; round: number; proofShuffle: Uint8Array }) => EncodeObject;
+  finalizeDeck: (args: { caller?: string; tableId: UintLike; handId: UintLike }) => EncodeObject;
+  submitEncShare: (args: {
+    validator: string;
+    tableId: UintLike;
+    handId: UintLike;
+    pos: number;
+    pkPlayer: Uint8Array;
+    encShare: Uint8Array;
+    proofEncShare: Uint8Array;
+  }) => EncodeObject;
+  submitPubShare: (args: { validator: string; tableId: UintLike; handId: UintLike; pos: number; pubShare: Uint8Array; proofShare: Uint8Array }) => EncodeObject;
+  finalizeReveal: (args: { caller?: string; tableId: UintLike; handId: UintLike; pos: number }) => EncodeObject;
+};
+
 export type OcpCosmosClient = {
   signing: OcpCosmosSigningClient;
   lcd?: CosmosLcdClient;
+
+  messages: HandMessages;
+  /**
+   * One transaction of these messages: resolves once the node took it, with its block as a promise
+   * (OcpCosmosSigningClient.broadcastAuto). Transactions are broadcast in the order of the calls.
+   */
+  send: (msgs: readonly EncodeObject[], opts?: SendOptions & { memo?: string }) => Promise<Broadcast>;
 
   // --- poker queries ---
   getTables: () => Promise<string[]>;
@@ -252,14 +278,86 @@ export type OcpCosmosClient = {
  * so a share simulated as one more of the set can be the completing one in its block. Its limit
  * covers that: twice the simulation, times the usual 1.3.
  */
-const HOLE_SHARE_GAS_MULTIPLIER = 2.6;
+export const HOLE_SHARE_GAS_MULTIPLIER = 2.6;
 
 export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
   const { signing, lcd } = args;
 
   // Resolves for code 0 only; any other outcome is an OcpTxError (see txFailureOf).
-  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string, opts?: { gasMultiplier?: number }): Promise<DeliverTxResponse> {
+  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string, opts?: SendOptions): Promise<DeliverTxResponse> {
     return signing.signAndBroadcastAuto(msgs, memo, opts);
+  }
+
+  const messages: HandMessages = {
+    startHand: (a) => {
+      const msg: MsgStartHand = { caller: (a.caller ?? signing.address).trim(), tableId: toU64String(a.tableId, "tableId") };
+      return { typeUrl: OCP_TYPE_URLS.poker.startHand, value: msg };
+    },
+    initHand: (a) => {
+      const msg: MsgInitHand = {
+        caller: (a.caller ?? signing.address).trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId"),
+        epochId: toU64String(a.epochId, "epochId"),
+        deckSize: a.deckSize ?? 0
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.initHand, value: msg };
+    },
+    submitShuffle: (a) => {
+      const msg: MsgSubmitShuffle = {
+        shuffler: a.shuffler.trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId"),
+        round: a.round,
+        proofShuffle: a.proofShuffle
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.submitShuffle, value: msg };
+    },
+    finalizeDeck: (a) => {
+      const msg: MsgFinalizeDeck = {
+        caller: (a.caller ?? signing.address).trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId")
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.finalizeDeck, value: msg };
+    },
+    submitEncShare: (a) => {
+      const msg: MsgSubmitEncShare = {
+        validator: a.validator.trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId"),
+        pos: a.pos,
+        pkPlayer: a.pkPlayer,
+        encShare: a.encShare,
+        proofEncShare: a.proofEncShare
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.submitEncShare, value: msg };
+    },
+    submitPubShare: (a) => {
+      const msg: MsgSubmitPubShare = {
+        validator: a.validator.trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId"),
+        pos: a.pos,
+        pubShare: a.pubShare,
+        proofShare: a.proofShare
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.submitPubShare, value: msg };
+    },
+    finalizeReveal: (a) => {
+      const msg: MsgFinalizeReveal = {
+        caller: (a.caller ?? signing.address).trim(),
+        tableId: toU64String(a.tableId, "tableId"),
+        handId: toU64String(a.handId, "handId"),
+        pos: a.pos
+      };
+      return { typeUrl: OCP_TYPE_URLS.dealer.finalizeReveal, value: msg };
+    },
+  };
+
+  function send(msgs: readonly EncodeObject[], opts: SendOptions & { memo?: string } = {}): Promise<Broadcast> {
+    const { memo, ...sendOpts } = opts;
+    return signing.broadcastAuto(msgs, memo, sendOpts);
   }
 
   function ensureLcd(): CosmosLcdClient {
@@ -373,12 +471,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
   }
 
   async function pokerStartHand(a: { caller?: string; tableId: UintLike; memo?: string }): Promise<DeliverTxResponse> {
-    const msg: MsgStartHand = {
-      caller: (a.caller ?? signing.address).trim(),
-      tableId: toU64String(a.tableId, "tableId")
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.poker.startHand, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.startHand(a)], a.memo);
   }
 
   async function pokerAct(a: {
@@ -579,15 +672,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     deckSize?: number;
     memo?: string;
   }): Promise<DeliverTxResponse> {
-    const msg: MsgInitHand = {
-      caller: (a.caller ?? signing.address).trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId"),
-      epochId: toU64String(a.epochId, "epochId"),
-      deckSize: a.deckSize ?? 0
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.initHand, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.initHand(a)], a.memo);
   }
 
   async function dealerSubmitShuffle(a: {
@@ -598,25 +683,11 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     proofShuffle: Uint8Array;
     memo?: string;
   }): Promise<DeliverTxResponse> {
-    const msg: MsgSubmitShuffle = {
-      shuffler: a.shuffler.trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId"),
-      round: a.round,
-      proofShuffle: a.proofShuffle
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.submitShuffle, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.submitShuffle(a)], a.memo);
   }
 
   async function dealerFinalizeDeck(a: { caller?: string; tableId: UintLike; handId: UintLike; memo?: string }): Promise<DeliverTxResponse> {
-    const msg: MsgFinalizeDeck = {
-      caller: (a.caller ?? signing.address).trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId")
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.finalizeDeck, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.finalizeDeck(a)], a.memo);
   }
 
   async function dealerSubmitPubShare(a: {
@@ -628,16 +699,7 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     proofShare: Uint8Array;
     memo?: string;
   }): Promise<DeliverTxResponse> {
-    const msg: MsgSubmitPubShare = {
-      validator: a.validator.trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId"),
-      pos: a.pos,
-      pubShare: a.pubShare,
-      proofShare: a.proofShare
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.submitPubShare, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.submitPubShare(a)], a.memo);
   }
 
   async function dealerSubmitEncShare(a: {
@@ -650,28 +712,11 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     proofEncShare: Uint8Array;
     memo?: string;
   }): Promise<DeliverTxResponse> {
-    const msg: MsgSubmitEncShare = {
-      validator: a.validator.trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId"),
-      pos: a.pos,
-      pkPlayer: a.pkPlayer,
-      encShare: a.encShare,
-      proofEncShare: a.proofEncShare
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.submitEncShare, value: msg };
-    return signAndBroadcast([eo], a.memo, { gasMultiplier: HOLE_SHARE_GAS_MULTIPLIER });
+    return signAndBroadcast([messages.submitEncShare(a)], a.memo, { gasMultiplier: HOLE_SHARE_GAS_MULTIPLIER });
   }
 
   async function dealerFinalizeReveal(a: { caller?: string; tableId: UintLike; handId: UintLike; pos: number; memo?: string }): Promise<DeliverTxResponse> {
-    const msg: MsgFinalizeReveal = {
-      caller: (a.caller ?? signing.address).trim(),
-      tableId: toU64String(a.tableId, "tableId"),
-      handId: toU64String(a.handId, "handId"),
-      pos: a.pos
-    };
-    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.dealer.finalizeReveal, value: msg };
-    return signAndBroadcast([eo], a.memo);
+    return signAndBroadcast([messages.finalizeReveal(a)], a.memo);
   }
 
   async function dealerTimeout(a: { caller?: string; tableId: UintLike; handId: UintLike; memo?: string }): Promise<DeliverTxResponse> {
@@ -712,6 +757,9 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
   return {
     signing,
     lcd,
+
+    messages,
+    send,
 
     getTables,
     getTable,

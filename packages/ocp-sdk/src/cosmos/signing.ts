@@ -2,7 +2,7 @@ import { sha256 } from "@cosmjs/crypto";
 import { toHex } from "@cosmjs/encoding";
 import type { EncodeObject, OfflineSigner, Registry } from "@cosmjs/proto-signing";
 import { DirectSecp256k1HdWallet, DirectSecp256k1Wallet } from "@cosmjs/proto-signing";
-import type { DeliverTxResponse, SigningStargateClientOptions } from "@cosmjs/stargate";
+import type { DeliverTxResponse, SigningStargateClientOptions, StdFee } from "@cosmjs/stargate";
 import { calculateFee, fromTendermintEvent, GasPrice, SigningStargateClient } from "@cosmjs/stargate";
 import { connectComet, type CometClient } from "@cosmjs/tendermint-rpc";
 import { TxRaw } from "cosmjs-types/cosmos/tx/v1beta1/tx.js";
@@ -10,20 +10,42 @@ import { TxRaw } from "cosmjs-types/cosmos/tx/v1beta1/tx.js";
 import { answerBy, type BlockSource, CONFIRM_LIMITS, confirmByBlockScan, OcpTxError, realClock } from "./confirm.js";
 import { nodeReadsOver, type NodeReads } from "./nodeReads.js";
 
+export type SendOptions = {
+  /** Replaces the client's multiplier for this transaction: the gas limit is that many times what the simulation used. */
+  gasMultiplier?: number;
+  /**
+   * The gas limit, and no simulation. For a transaction that is only valid after another one of this
+   * signer's that is not in a block yet: the node simulates at its last block and would refuse it.
+   */
+  gasLimit?: number;
+};
+
+/** A transaction the node took into its mempool, and the block it lands in. */
+export type Broadcast = {
+  readonly hash: string;
+  /** Resolves only for code 0 in a block; rejects with OcpTxError "failed" | "expired" | "unknown". Never unhandled. */
+  readonly landed: Promise<DeliverTxResponse>;
+};
+
 export type OcpCosmosSigningClient = {
   address: string;
   client: SigningStargateClient;
 
   /**
-   * Simulates, signs with a timeout height, broadcasts, and reads blocks until one holds the tx.
-   * Resolves only for a tx in a block with code 0, with that block's result.
-   * Throws OcpTxError "rejected" | "failed" | "expired" | "unknown" (see txFailureOf), and passes other
-   * errors from before the broadcast through unchanged. Holds the caller at most
-   * CONFIRM_LIMITS.maxWaitMs from the broadcast.
-   * `gasMultiplier` replaces the client's for this transaction: the gas limit is that many times
-   * what the simulation used.
+   * Simulates (unless opts.gasLimit), signs with a timeout height and this signer's next sequence,
+   * and broadcasts. Resolves once the node took the tx. Throws OcpTxError "rejected" when it did not,
+   * and passes other errors from before the broadcast through unchanged.
+   * Calls are broadcast in the order they are made, each with the sequence after the last one the
+   * node took, so several can be in the mempool at once and land in one block in that order.
    */
-  signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string, opts?: { gasMultiplier?: number }) => Promise<DeliverTxResponse>;
+  broadcastAuto: (msgs: readonly EncodeObject[], memo?: string, opts?: SendOptions) => Promise<Broadcast>;
+
+  /**
+   * broadcastAuto, then reads blocks until one holds the tx. Resolves only for a tx in a block with
+   * code 0, with that block's result. Throws OcpTxError "rejected" | "failed" | "expired" | "unknown"
+   * (see txFailureOf). Holds the caller at most CONFIRM_LIMITS.maxWaitMs from the broadcast.
+   */
+  signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string, opts?: SendOptions) => Promise<DeliverTxResponse>;
 } & NodeReads;
 
 export async function walletFromMnemonic(args: { mnemonic: string; prefix: string }): Promise<DirectSecp256k1HdWallet> {
@@ -141,7 +163,11 @@ export async function connectOcpCosmosSigningClient(args: {
 
   async function simulate(msgs: readonly EncodeObject[], memo: string): Promise<number> {
     try {
-      return await onceMoreOnSocketError(() => client.simulate(address, msgs, memo));
+      // cosmjs reads the account's sequence, then simulates: a block between the two makes them disagree.
+      return await onceMoreOnSocketError(() => client.simulate(address, msgs, memo)).catch((err) => {
+        if (!errorText(err).includes("account sequence mismatch")) throw err;
+        return client.simulate(address, msgs, memo);
+      });
     } catch (err) {
       const text = errorText(err);
       // cosmjs's wording for "the chain answered no": a failed query, or no account to sign for.
@@ -168,19 +194,71 @@ export async function connectOcpCosmosSigningClient(args: {
     await answerBy(comet.broadcastTxSync({ tx }), deadline, realClock).catch(() => undefined);
   }
 
-  // Signs once. A second signature would be a second tx with the same sequence, and the caller would hear of one.
-  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = "", opts: { gasMultiplier?: number } = {}): Promise<DeliverTxResponse> {
-    const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
-    const gasUsed = await simulate(msgs, memo);
-    const fee = calculateFee(Math.max(200_000, Math.ceil(gasUsed * (opts.gasMultiplier ?? gasMultiplier))), gasPrice);
-    const timeoutHeight = sentAtHeight + ttlBlocks;
-    const tx = TxRaw.encode(await client.sign(address, msgs, fee, memo, undefined, BigInt(timeoutHeight))).finish();
-    const hash = txHashOf(tx);
+  // The sequence of the next tx, counted here from the ones the node took: the node's query state
+  // can be a block behind its last block, and a tx still in the mempool is not in it at all.
+  // null: ask the chain. A refusal that names the expected sequence corrects it.
+  let nextSequence: number | null = null;
+  let signer: { accountNumber: number; chainId: string } | null = null;
+  let queue: Promise<unknown> = Promise.resolve();
+  const inOrder = <T>(step: () => Promise<T>): Promise<T> => {
+    const run = queue.then(step, step);
+    queue = run.catch(() => undefined);
+    return run;
+  };
 
-    const deadline = realClock.now() + CONFIRM_LIMITS.maxWaitMs;
-    await broadcast(tx, deadline);
-    return confirmByBlockScan(source, { hash, sentAtHeight, timeoutHeight }, realClock, deadline);
+  async function signAt(msgs: readonly EncodeObject[], fee: StdFee, memo: string, sequence: number, timeoutHeight: number): Promise<Uint8Array> {
+    signer ??= { accountNumber: (await client.getSequence(address)).accountNumber, chainId: await client.getChainId() };
+    return TxRaw.encode(await client.sign(address, msgs, fee, memo, { ...signer, sequence }, BigInt(timeoutHeight))).finish();
   }
 
-  return { address, client, signAndBroadcastAuto, ...nodeReadsOver(() => comet) };
+  // One signature per sequence the node took. A tx signed again is one the node refused at CheckTx,
+  // so it is in no mempool: only then is the same body signed at the sequence the node asked for.
+  async function broadcastAuto(msgs: readonly EncodeObject[], memo = "", opts: SendOptions = {}): Promise<Broadcast> {
+    // The simulation runs beside the sends ahead of this one; the place in line is taken now.
+    const gas =
+      opts.gasLimit !== undefined
+        ? Promise.resolve(opts.gasLimit)
+        : simulate(msgs, memo).then((used) => Math.max(200_000, Math.ceil(used * (opts.gasMultiplier ?? gasMultiplier))));
+    gas.catch(() => undefined);
+    const sent = await inOrder(async () => {
+      const fee = calculateFee(await gas, gasPrice);
+      const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
+      const timeoutHeight = sentAtHeight + ttlBlocks;
+      const deadline = realClock.now() + CONFIRM_LIMITS.maxWaitMs;
+      let sequence = nextSequence ?? (await onceMoreOnSocketError(() => client.getSequence(address))).sequence;
+      for (let tries = 0; ; tries++) {
+        const tx = await signAt(msgs, fee, memo, sequence, timeoutHeight);
+        try {
+          await broadcast(tx, deadline);
+        } catch (err) {
+          const expected = tries === 0 ? expectedSequence(err) : null;
+          if (expected === null || expected === sequence) throw err;
+          sequence = expected;
+          continue;
+        }
+        nextSequence = sequence + 1;
+        return { hash: txHashOf(tx), sentAtHeight, timeoutHeight, deadline };
+      }
+    });
+    const landed = confirmByBlockScan(source, sent, realClock, sent.deadline).catch((err): never => {
+      // A tx that never landed did not use its sequence, and the ones sent after it cannot land either.
+      if (err instanceof OcpTxError && (err.failure.kind === "expired" || err.failure.kind === "unknown")) nextSequence = null;
+      throw err;
+    });
+    landed.catch(() => undefined);
+    return { hash: sent.hash, landed };
+  }
+
+  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = "", opts: SendOptions = {}): Promise<DeliverTxResponse> {
+    return (await broadcastAuto(msgs, memo, opts)).landed;
+  }
+
+  return { address, client, broadcastAuto, signAndBroadcastAuto, ...nodeReadsOver(() => comet) };
+}
+
+/** The sequence a CheckTx refusal says the account is at: "account sequence mismatch, expected 61, got 60". */
+function expectedSequence(err: unknown): number | null {
+  if (!(err instanceof OcpTxError) || err.failure.kind !== "rejected") return null;
+  const m = /account sequence mismatch, expected (\d+)/.exec(err.failure.log);
+  return m ? Number(m[1]) : null;
 }

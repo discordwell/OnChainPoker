@@ -27,10 +27,16 @@ export type NodeStatus = {
 export type NodeReads = {
   queryStore: QueryStore;
   nodeStatus: () => Promise<NodeStatus>;
+  /**
+   * The last height the node's application committed (abci_info). Reads and simulations answer from
+   * it. The latest block in `nodeStatus` can be one ahead of it for a moment.
+   */
+  committedHeight: () => Promise<number>;
 };
 
 /** The two CometBFT RPC calls these reads make. CometClient of @cosmjs/tendermint-rpc has this shape. */
 export interface CometReads {
+  abciInfo(): Promise<{ readonly lastBlockHeight?: number }>;
   abciQuery(params: { path: string; data: Uint8Array; height?: number; prove?: boolean }): Promise<{
     readonly value: Uint8Array;
     readonly height?: number;
@@ -62,6 +68,12 @@ export function nodeReadsOver(comet: () => CometReads): NodeReads {
         throw new Error(`store "${store}" answered at height ${res.height}, not the height asked for, ${height}`);
       }
       return { value: res.value.length > 0 ? res.value : null, height: res.height };
+    },
+
+    async committedHeight() {
+      const height = (await comet().abciInfo()).lastBlockHeight;
+      if (height === undefined || height <= 0) throw new Error("abci_info answered without a height");
+      return height;
     },
 
     async nodeStatus() {
