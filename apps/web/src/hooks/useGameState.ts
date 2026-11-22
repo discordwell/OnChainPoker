@@ -1061,6 +1061,7 @@ export function useGameState() {
         signer,
         signerAddress: key.bech32Address,
         gasPrice: DEFAULT_COSMOS_GAS_PRICE,
+        interactive: true,
         registry: createOcpRegistry(),
       });
 
