@@ -157,6 +157,82 @@ test("CheckTx code 32 (sequence mismatch) throws rejected with the chain's log",
   assert.match(err.message, /account sequence mismatch/);
 });
 
+const sequenceOf = (tx) => Number(decodeTxRaw(tx).authInfo.signerInfos[0].sequence);
+
+test("two sends before either lands carry consecutive sequences, broadcast in the order they were made", async (t) => {
+  // The chain keeps answering sequence 3 until a block holds the first tx; the mempool already has it.
+  const { chain, signing, send } = await connected(t);
+
+  const [first, second] = await Promise.all([signing.signAndBroadcastAuto([send], "first"), signing.signAndBroadcastAuto([send], "second")]);
+
+  assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 4]);
+  assert.deepEqual(chain.broadcasts.map((tx) => decodeTxRaw(tx).body.memo), ["first", "second"]);
+  assert.deepEqual([first.transactionHash, second.transactionHash], chain.broadcasts.map(txHash));
+});
+
+test("a CheckTx refusal that names the expected sequence is signed once more at that sequence, and lands", async (t) => {
+  const { chain, signing, send, counter } = await connected(t, {
+    checkTx: (_tx, attempt) =>
+      attempt === 1 ? { code: 32, codespace: "sdk", log: "account sequence mismatch, expected 9, got 3: incorrect account sequence" } : { code: 0, log: "" },
+  });
+
+  const res = await signing.signAndBroadcastAuto([send]);
+
+  assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 9]);
+  assert.equal(counter.signs, 2);
+  assert.equal(res.transactionHash, txHash(chain.broadcasts[1]));
+});
+
+test("a refusal that is not about the sequence leaves the next send at the same sequence", async (t) => {
+  const { chain, signing, send } = await connected(t, {
+    checkTx: (_tx, attempt) => (attempt === 1 ? { code: 18, codespace: "sdk", log: "invalid request" } : { code: 0, log: "" }),
+  });
+
+  await rejectionOf(signing.signAndBroadcastAuto([send], "refused"));
+  await signing.signAndBroadcastAuto([send], "taken");
+
+  assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 3]);
+});
+
+test("a simulation refused for the sequence (a block between reading the account and simulating) is simulated once more", async (t) => {
+  let simulations = 0;
+  const { chain, signing, send } = await connected(t, {
+    simulate: () => (++simulations === 1 ? { code: 32, log: "account sequence mismatch, expected 4, got 3: incorrect account sequence" } : { gasUsed: 80_000n }),
+  });
+
+  const res = await signing.signAndBroadcastAuto([send]);
+
+  assert.equal(simulations, 2);
+  assert.equal(res.transactionHash, txHash(chain.broadcasts[0]));
+});
+
+test("a send with gasLimit is not simulated and carries that limit", async (t) => {
+  let simulations = 0;
+  const { chain, signing, send } = await connected(t, {
+    simulate: () => {
+      simulations += 1;
+      return { code: 18, log: "failed to execute message; message index: 0: insufficient shares: have 1 need 2" };
+    },
+  });
+
+  await signing.signAndBroadcastAuto([send], "", { gasLimit: 1_234_567 });
+
+  assert.equal(simulations, 0);
+  assert.equal(gasLimitOf(chain.broadcasts[0]), 1_234_567);
+});
+
+test("after a tx expires, the next send asks the chain for the sequence again", async (t) => {
+  let blocks = 0;
+  const { chain, signing, send } = await connected(t, {
+    land: (tx) => (++blocks === 1 ? Array.from({ length: 10 }, () => ({ txs: [], results: [] })) : [{ txs: [tx], results: [okResult()] }]),
+  });
+
+  assert.equal(failureOf(await rejectionOf(signing.signAndBroadcastAuto([send], "lost"))).kind, "expired");
+  await signing.signAndBroadcastAuto([send], "taken");
+
+  assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 3]);
+});
+
 test("a socket error on broadcast re-sends the same bytes, does not sign again, then finds the tx", async (t) => {
   const { chain, signing, send, counter } = await connected(t, {
     checkTx: (_tx, attempt) => (attempt === 1 ? "hang up" : { code: 0, log: "" }),
