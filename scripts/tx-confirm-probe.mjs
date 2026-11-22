@@ -135,6 +135,13 @@ if (!connected.error) {
   if (!QUIET_RPC) {
     console.log("SKIP a tx that no block takes expires: no --quiet-rpc");
   } else {
+    // The quiet node trails by a block or so. Until it holds the sender's last tx it answers with the old sequence.
+    const quietComet = await connectComet(QUIET_RPC);
+    const target = await latestHeight();
+    for (let i = 0; i < 40 && (await quietComet.status()).syncInfo.latestBlockHeight < target; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    quietComet.disconnect();
     const to2 = await freshAddress();
     const quiet = await connect(QUIET_RPC, false);
     const lost = await timed(() => quiet.signAndBroadcastAuto([send(to2, 1)], "tx-confirm-probe"));
