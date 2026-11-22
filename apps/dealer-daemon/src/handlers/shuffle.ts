@@ -2,7 +2,7 @@ import { groupElementFromBytes } from "@onchainpoker/ocp-crypto";
 import { shuffleProveV1, buildShuffleContext } from "@onchainpoker/ocp-shuffle";
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 
 function decodeBytes(raw: unknown): Uint8Array {
   if (raw instanceof Uint8Array) return raw;
@@ -87,7 +87,7 @@ export async function handleShuffle(args: {
     proofShuffle: proofBytes,
   });
 
-  log(`Shuffle: submitted round ${round} for table ${tableId} hand ${handId}`);
+  logProgress(`Shuffle: submitted round ${round} for table ${tableId} hand ${handId}`);
 }
 
 export { decodeBytes, decodeDeck };

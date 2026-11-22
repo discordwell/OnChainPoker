@@ -5,7 +5,8 @@ import type { BotConfig } from "./config.js";
 import type { Strategy, GameState } from "./strategy.js";
 import { sanitizeAction } from "./sanitizeAction.js";
 import { decryptHoleCards } from "./holeCards.js";
-import { log, logError } from "./log.js";
+import { log, logError, logProgress } from "./log.js";
+import { retryUntilOk } from "./retry.js";
 
 // ---------------------------------------------------------------------------
 // Helpers for accessing chain JSON (handles both camelCase and snake_case)
@@ -110,7 +111,7 @@ export class PokerBot {
     this.consecutiveFailures = 0;
 
     if (this.config.autoSit) {
-      await this.ensureSeated();
+      await retryUntilOk(`sit at table ${this.config.tableId}`, () => this.ensureSeated());
     }
 
     this.scheduleNext(this.config.pollIntervalMs);
@@ -216,7 +217,7 @@ export class PokerBot {
         break;
       }
     }
-    log(`Seated successfully at seat ${this.mySeat}`);
+    logProgress(`Seated successfully at seat ${this.mySeat}`);
   }
 
   // ---------- Poll loop ----------
@@ -256,17 +257,17 @@ export class PokerBot {
             void (async () => {
               try {
                 await this.client.pokerRebuy({ tableId: this.config.tableId, amount: buyIn });
-                log("Rebuy complete");
+                logProgress("Rebuy complete");
               } catch (err) {
                 // Fallback: leave and re-sit (for chains without MsgRebuy)
                 logError("pokerRebuy failed, falling back to leave-resit", err);
                 try {
                   await this.client.pokerLeave({ tableId: this.config.tableId });
-                  log("Left table for rebuy");
+                  logProgress("Left table for rebuy");
                   this.mySeat = -1;
                   await new Promise((r) => setTimeout(r, 1000));
                   await this.ensureSeated();
-                  log("Rebuy complete — re-seated");
+                  logProgress("Rebuy complete — re-seated");
                 } catch (err2) {
                   logError("Rebuy fallback failed", err2);
                 }
@@ -428,7 +429,7 @@ export class PokerBot {
 
       this.holeCardCache.set(handId, result);
       if (result) {
-        log(
+        logProgress(
           `Decrypted hole cards: ${cardToString(result[0])} ${cardToString(result[1])}`
         );
       }

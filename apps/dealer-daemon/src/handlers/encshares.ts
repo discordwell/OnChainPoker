@@ -15,7 +15,7 @@ import {
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import type { EpochStateStore } from "../state.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 import { decodeBytes, decodeDeck } from "./shuffle.js";
 
 function u64le(v: number | bigint): Uint8Array {
@@ -190,7 +190,7 @@ export async function handleEncShares(args: {
           encShare,
           proofEncShare: proofBytesEncoded,
         });
-        log(`EncShares: submitted for seat ${seat} card ${cardIdx} pos ${pos}`);
+        logProgress(`EncShares: submitted for seat ${seat} card ${cardIdx} pos ${pos}`);
       } catch (err) {
         const msg = String((err as Error)?.message ?? err);
         if (msg.includes("already") || msg.includes("duplicate")) {
@@ -205,5 +205,5 @@ export async function handleEncShares(args: {
     }
   }
 
-  log(`EncShares: all shares submitted for table ${tableId} hand ${handId}`);
+  logProgress(`EncShares: all shares submitted for table ${tableId} hand ${handId}`);
 }

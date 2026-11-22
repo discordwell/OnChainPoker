@@ -11,6 +11,7 @@ import { loadConfig } from "./config.js";
 import { EpochStateStore } from "./state.js";
 import { DealerDaemon } from "./daemon.js";
 import { log, logError } from "./log.js";
+import { retryUntilOk } from "./retry.js";
 
 async function main() {
   const config = loadConfig();
@@ -25,21 +26,23 @@ async function main() {
   if (!account) throw new Error("wallet has no accounts");
   log(`Wallet address: ${account.address}`);
 
-  // Connect signing client
+  // Initialize state store (a config error must exit before we wait for the chain)
+  const stateStore = new EpochStateStore(config.stateDir, config.statePassphrase);
+
+  // Connect signing client; an unreachable chain is waited for, not fatal
   const registry = createOcpRegistry();
-  const signing = await connectOcpCosmosSigningClient({
-    rpcUrl: config.cosmosRpcUrl,
-    lcdUrl: config.cosmosLcdUrl,
-    signer: wallet,
-    gasPrice: config.gasPrice,
-    registry,
-  });
+  const signing = await retryUntilOk("connect to chain RPC", () =>
+    connectOcpCosmosSigningClient({
+      rpcUrl: config.cosmosRpcUrl,
+      lcdUrl: config.cosmosLcdUrl,
+      signer: wallet,
+      gasPrice: config.gasPrice,
+      registry,
+    })
+  );
 
   const lcd = new CosmosLcdClient({ baseUrl: config.cosmosLcdUrl });
   const client = createOcpCosmosClient({ signing, lcd });
-
-  // Initialize state store
-  const stateStore = new EpochStateStore(config.stateDir, config.statePassphrase);
 
   // Create and start daemon
   const daemon = new DealerDaemon({ client, config, stateStore });

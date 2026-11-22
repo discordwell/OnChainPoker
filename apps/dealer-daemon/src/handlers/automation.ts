@@ -1,6 +1,6 @@
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 
 function pick(obj: any, ...keys: string[]): any {
   if (!obj || typeof obj !== "object") return undefined;
@@ -19,12 +19,12 @@ export async function maybeBeginEpoch(args: {
   const { client, config } = args;
   if (!config.autoBeginEpoch) return false;
 
-  // Check if there's already an active epoch
-  const epoch = await client.getDealerEpoch().catch(() => null);
+  // Check if there's already an active epoch (a failed read throws: it is not "none")
+  const epoch = await client.getDealerEpoch();
   if (epoch) return false; // already have an epoch
 
   // Check if DKG is in flight
-  const dkg = await client.getDealerDkg().catch(() => null);
+  const dkg = await client.getDealerDkg();
   if (dkg) return false; // DKG in progress
 
   log("Automation: no active epoch and no DKG, beginning new epoch");
@@ -34,7 +34,7 @@ export async function maybeBeginEpoch(args: {
       committeeSize: config.committeeSize,
       threshold: config.threshold,
     });
-    log("Automation: epoch begun");
+    logProgress("Automation: epoch begun");
     return true;
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
@@ -55,7 +55,7 @@ export async function maybeFinalizeEpoch(args: {
 
   try {
     await client.dealerFinalizeEpoch({ epochId });
-    log(`Automation: epoch ${epochId} finalized`);
+    logProgress(`Automation: epoch ${epochId} finalized`);
     return true;
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
@@ -92,7 +92,7 @@ export async function maybeStartAndInitHand(args: {
 
   try {
     await client.pokerStartHand({ tableId });
-    log(`Automation: hand started for table ${tableId}`);
+    logProgress(`Automation: hand started for table ${tableId}`);
 
     // Re-fetch table to get the new hand ID
     const updatedTable = await client.getTable(tableId).catch(() => null);
@@ -104,7 +104,7 @@ export async function maybeStartAndInitHand(args: {
       handId: newHandId,
       epochId,
     });
-    log(`Automation: dealer hand initialized for table ${tableId} hand ${newHandId}`);
+    logProgress(`Automation: dealer hand initialized for table ${tableId} hand ${newHandId}`);
     return true;
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
@@ -124,7 +124,7 @@ export async function maybeFinalizeDeck(args: {
 
   try {
     await client.dealerFinalizeDeck({ tableId, handId });
-    log(`Automation: deck finalized for table ${tableId} hand ${handId}`);
+    logProgress(`Automation: deck finalized for table ${tableId} hand ${handId}`);
     return true;
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
@@ -147,7 +147,7 @@ export async function maybeFinalizeReveal(args: {
 
   try {
     await client.dealerFinalizeReveal({ tableId, handId, pos });
-    log(`Automation: reveal finalized for pos ${pos} table ${tableId}`);
+    logProgress(`Automation: reveal finalized for pos ${pos} table ${tableId}`);
     return true;
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
@@ -167,7 +167,7 @@ export async function maybeTick(args: {
 
   try {
     await client.pokerTick({ tableId });
-    log(`Automation: tick for table ${tableId}`);
+    logProgress(`Automation: tick for table ${tableId}`);
     return true;
   } catch (err) {
     // Tick failures are expected when no timeout has elapsed
@@ -185,7 +185,7 @@ export async function maybeDealerTimeout(args: {
 
   try {
     await client.dealerTimeout({ tableId, handId });
-    log(`Automation: dealer timeout for table ${tableId} hand ${handId}`);
+    logProgress(`Automation: dealer timeout for table ${tableId} hand ${handId}`);
     return true;
   } catch (err) {
     // Timeout failures are expected when deadline hasn't passed
