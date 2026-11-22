@@ -2,7 +2,7 @@
 // windows and slashing (modelChain.ts), plus the checks the real chain makes on the bytes it is
 // sent: a beacon reveal against its commit, an encrypted share against its dealer's commitments, a
 // plaintext share likewise, and the epoch's public shares from the commitments at finalize.
-// A transaction a daemon sends is the only one in the next block.
+// A transaction a daemon sends is simulated at the current height, and is then the only one in the next block.
 
 import { createHash } from "node:crypto";
 import {
@@ -100,8 +100,8 @@ export class FakeChain {
     const b = this.model.beacon;
     const d = this.model.dkg;
     const marks = [
-      ...(b ? [b.commitClose - 12, b.commitClose, b.revealClose, b.revealClose + 1, b.revealClose + 2, b.revealClose + 4, b.revealClose + 6] : []),
-      ...(d ? [d.commitDeadline, d.commitDeadline + (d.complaintDeadline - d.commitDeadline) / 2, d.complaintDeadline, d.revealDeadline, d.revealDeadline + 2, d.revealDeadline + 4, d.revealDeadline + 6] : []),
+      ...(b ? [b.commitClose - 12, b.commitClose, b.commitClose + 1, b.revealClose, b.revealClose + 1, b.revealClose + 3, b.revealClose + 5, b.revealClose + 7] : []),
+      ...(d ? [d.commitDeadline, d.commitDeadline + (d.complaintDeadline - d.commitDeadline) / 2, d.complaintDeadline, d.revealDeadline, d.revealDeadline + 1, d.revealDeadline + 3, d.revealDeadline + 5, d.revealDeadline + 7] : []),
     ].filter((h) => h > this.model.height);
     return marks.length > 0 ? Math.min(...marks) : this.model.height + 1;
   }
@@ -112,6 +112,8 @@ export class FakeChain {
     if (refusal !== null) return refusal;
     const tx = this.txOf(msg);
     if (tx === null) return `not modelled: ${msg.typeUrl}`;
+    const simulated = this.model.simulate(tx);
+    if (simulated !== null) return simulated;
 
     const [refused] = this.model.block([tx]);
     if (refused === null) {

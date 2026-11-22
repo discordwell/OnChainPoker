@@ -7,7 +7,8 @@
 // complaint, because the first only brings a slash forward and the second can slash its sender.
 //
 // Every inequality on a height follows one rule: a transaction sent when the last committed height
-// is h executes at h + 1 or later. So "can still land by D" is h < D, and "lands after D" is h >= D.
+// is h is first simulated by the node at h, and then executes at h + 1 or later. The chain must
+// accept it at both. So "can still land by D" is h < D, and "is accepted after D" is h > D.
 
 import type {
   BeaconWindow,
@@ -156,7 +157,7 @@ export type Situation =
 /**
  * commit:      h < commitDeadline. A commit sent now can still land.
  * shares:      commitDeadline <= h < revealDeadline. The commit set is final. Shares, complaints, reveals.
- * finalizable: h >= revealDeadline. FinalizeEpoch sent now is accepted.
+ * finalizable: h >= revealDeadline. Nothing more can land in the DKG. FinalizeEpoch is accepted from the next height.
  */
 export type KeygenPhase = "commit" | "shares" | "finalizable";
 
@@ -529,16 +530,17 @@ function rollCallStep(
       ? `(waited ${memory.waitedBlocks} of ${me.patienceBlocks} blocks)`
       : "(DEALER_PATIENCE_BLOCKS is 0: holding until a person acts)";
 
-  // BeginEpoch needs h + 1 > revealClose, a bonded caller and no DKG.
+  // BeginEpoch needs h > revealClose, a bonded caller and no DKG.
   const beginIfMyTurn = (window: BeaconWindow, committeeSize: number, costs: readonly Valoper[], head: string): Step => {
     if (!me.mayBeginEpoch) return wait(`${head}; BeginEpoch is disabled on this daemon`);
     if (!inRoll) return wait(`${head}; my validator is not bonded, so another daemon has to begin`);
     const order = bonded.filter((v) => window.revealed.includes(v));
     const rank = order.includes(me.validator) ? order.indexOf(me.validator) : order.length;
     const stagger = POLICY.turnStaggerBlocks;
-    if (h < window.revealCloseHeight + rank * stagger) {
-      const turn = Math.min(order.length - 1, Math.floor((h - window.revealCloseHeight) / stagger));
-      return wait(`${head}; BeginEpoch is ${short(order[turn] ?? me.validator)}'s turn until ${window.revealCloseHeight + (turn + 1) * stagger}`);
+    const first = window.revealCloseHeight + 1;
+    if (h < first + rank * stagger) {
+      const turn = Math.min(order.length - 1, Math.max(0, Math.floor((h - first) / stagger)));
+      return wait(`${head}; BeginEpoch is ${short(order[turn] ?? me.validator)}'s turn until ${first + (turn + 1) * stagger}`);
     }
     return { action: { do: "beginEpoch", epochId: id, committeeSize, threshold: me.threshold }, why: head, costs };
   };
@@ -574,7 +576,7 @@ function rollCallStep(
     }
 
     case "revealing": {
-      // BeaconReveal needs commitClose < h + 1 <= revealClose, a bonded validator and its commit.
+      // BeaconReveal needs commitClose < h < revealClose, a bonded validator and its commit.
       const w = rc.window;
       const committed = [...w.committed].sort();
       if (!committed.includes(me.validator)) {
@@ -597,6 +599,10 @@ function rollCallStep(
       const forced = !complete && patient && committed.length >= w.threshold;
       if (!complete && !forced) {
         return wait(`Rotation: roll call for epoch ${id} incomplete: no commit from ${list(rc.absent)}; not revealing, so no DKG can start without it ${waited}`);
+      }
+
+      if (h <= w.commitCloseHeight) {
+        return wait(`Rotation: roll call for epoch ${id}: ${committed.length} of ${bonded.length} bonded validators committed; the chain takes reveals from height ${w.commitCloseHeight + 1}`);
       }
 
       // Reveals go in ascending validator order. A daemon that died after its commit and sorts
@@ -667,19 +673,20 @@ function keygenStep(s: Extract<Situation, { kind: "keygen" }>, view: ChainView, 
   if (duty?.action) return duty;
 
   if (s.phase === "finalizable") {
-    // FinalizeEpoch needs h + 1 > revealDeadline. Anyone may send it. A non-member goes last.
+    // FinalizeEpoch needs h > revealDeadline. Anyone may send it. A non-member goes last.
     const order = dkg.members.map((m) => m.validator).sort();
     const turn = member ? order.indexOf(me.validator) : order.length;
     const stagger = POLICY.turnStaggerBlocks;
     if (!me.mayFinalizeEpoch) {
       return duty ?? wait(`Rotation: DKG for epoch ${id} can be finalized; DEALER_AUTO_FINALIZE is off on this daemon`);
     }
-    if (h >= dkg.revealDeadline + turn * stagger) {
+    const first = dkg.revealDeadline + 1;
+    if (h >= first + turn * stagger) {
       return { action: { do: "finalizeEpoch", epochId: id }, why: `Rotation: finalizing epoch ${id}` };
     }
     if (duty) return duty;
-    const now = Math.min(order.length - 1, Math.floor((h - dkg.revealDeadline) / stagger));
-    return wait(`Rotation: DKG for epoch ${id} can be finalized; it is ${short(order[now] ?? me.validator)}'s turn until ${dkg.revealDeadline + (now + 1) * stagger}`);
+    const now = Math.min(order.length - 1, Math.max(0, Math.floor((h - first) / stagger)));
+    return wait(`Rotation: DKG for epoch ${id} can be finalized; it is ${short(order[now] ?? me.validator)}'s turn until ${first + (now + 1) * stagger}`);
   }
 
   if (duty) return duty;

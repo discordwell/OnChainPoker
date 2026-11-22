@@ -1,7 +1,8 @@
 // Three copies of decide() against the model of the dealer module in modelChain.ts, over seeded
 // schedules of polls, restarts and outages. Each daemon here does what DealerDaemon does around
 // decide(): it keeps the same memory, stores a commit before sending it, and sends at most one
-// transaction per poll, which the chain executes in the next block.
+// transaction per poll, which the node simulates at the height of the poll and the chain executes
+// in the next block.
 //
 // Hands are not modelled. A daemon that is down for longer than a hand's deadline is slashed by
 // the chain whatever the daemon does when it is up.
@@ -158,6 +159,8 @@ type Outcome = {
   /** A slash that no daemon announced as the cost of its action. */
   unannounced: Slash[];
   blockedAt: number | null;
+  /** Transactions a new daemon sent that the node's simulation refused. */
+  refused: Tx["type"][];
 };
 
 /** The patience these schedules run with unless one names its own. SIM_PATIENCE tries another; the cases that name 17,280 then fail by design. */
@@ -170,6 +173,7 @@ function run(schedule: Schedule): Outcome {
   let dealingAt: number | null = null;
   let blockedAt: number | null = null;
   let pending: { daemon: Daemon; tx: Tx }[] = [];
+  const refusedBySimulation: Tx["type"][] = [];
 
   for (let i = 0; i < schedule.blocks; i++) {
     const answers = chain.block(pending.map((p) => p.tx));
@@ -191,7 +195,7 @@ function run(schedule: Schedule): Outcome {
       if (schedule.restarts?.(n, chain.height)) d.rotatingSince = null;
       if (schedule.old) {
         const tx = oldDaemonTx(d, view);
-        if (tx) pending.push({ daemon: d, tx });
+        if (tx && chain.simulate(tx) === null) pending.push({ daemon: d, tx });
         continue;
       }
       const decision = decide(view, d.me, remember(d, view, chain));
@@ -201,10 +205,14 @@ function run(schedule: Schedule): Outcome {
         if (decision.situation.rollCall.at === "blocked") blockedAt ??= chain.height;
       }
       for (const v of decision.costs) announced.add(v);
-      if (decision.action) pending.push({ daemon: d, tx: txFor(d, decision.action, chain.height) });
+      if (decision.action) {
+        const tx = txFor(d, decision.action, chain.height);
+        if (chain.simulate(tx) === null) pending.push({ daemon: d, tx });
+        else refusedBySimulation.push(tx.type);
+      }
     }
   }
-  return { slashes: chain.slashes, dealingAt, chain, unannounced: chain.slashes.filter((s) => !announced.has(s.validator)), blockedAt };
+  return { slashes: chain.slashes, dealingAt, chain, unannounced: chain.slashes.filter((s) => !announced.has(s.validator)), blockedAt, refused: refusedBySimulation };
 }
 
 /** Outages of 1..maxLength blocks for each daemon, at least `gap` blocks apart, from a seed. */
@@ -231,6 +239,7 @@ describe("no schedule of polls, restarts and short outages slashes anyone", () =
     assert.deepEqual(out.slashes, []);
     assert.ok(out.dealingAt !== null, "no dealing epoch in 800 blocks");
     assert.deepEqual(out.chain.begun.map((b) => [b.epochId, b.committee.length]), [[44, 3]]);
+    assert.deepEqual(out.refused, [], "a daemon sent what the node's simulation refuses");
     console.log(`  healthy rotation: dealing ${out.dealingAt! - START.height} blocks after the start, epoch ${out.chain.epoch!.epochId}`);
   });
 
