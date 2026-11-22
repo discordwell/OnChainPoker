@@ -290,9 +290,10 @@ export class DealerDaemon {
     const { dealer } = view;
     const me = this.me.validator;
 
-    // Probed at start, then once per beacon window: a roll call is answered only on a fresh probe.
+    // Probed at start, then once per beacon window while the chain cannot deal: a roll call is
+    // answered only on a fresh probe. The chain opens windows all the time, so not while it deals.
     const window = dealer.beacon?.commitOpenHeight ?? null;
-    if (this.storeProbe === null || this.storeProbe.window !== window) await this.probeStore(window);
+    if (this.storeProbe === null || (this.rotatingSince !== null && this.storeProbe.window !== window)) await this.probeStore(window);
 
     const dkg = dealer.dkg;
     const epoch = dealer.epoch;

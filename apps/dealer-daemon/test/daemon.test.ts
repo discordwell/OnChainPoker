@@ -3,7 +3,7 @@
 
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, writeFileSync } from "node:fs";
+import { chmodSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { OCP_TYPE_URLS } from "@onchainpoker/ocp-sdk/cosmos";
 import {
@@ -115,6 +115,25 @@ describe("one rotation transaction per poll", () => {
 });
 
 describe("the secrets directory", () => {
+  it("a daemon that cannot write it stays out of the roll call and says so, and answers the next one once it can", { skip: process.getuid?.() === 0 }, async () => {
+    const node = deadEpoch(945);
+    const { daemon, stateDir } = daemonAgainst(node, A);
+    chmodSync(stateDir, 0o500);
+    try {
+      await pollOnce(daemon);
+    } finally {
+      chmodSync(stateDir, 0o700);
+    }
+    assert.deepEqual(node.sent, []);
+    assert.match(lines.join("\n"), /failed its write-read probe .*Staying out of roll call/);
+
+    // The chain replaces the window. The directory is probed again for it.
+    node.height = 1046;
+    node.beacon = BeaconState.fromPartial({ epochId: "8", commitOpenHeight: "1001", commitCloseHeight: "1051", revealCloseHeight: "1101", threshold: 2 });
+    await pollOnce(daemon);
+    assert.deepEqual(node.sent.map((m) => m.typeUrl), [MSG.beaconCommit]);
+  });
+
   it("after a poll holds only the current epoch's file: older epochs and an aborted DKG's are removed", async () => {
     const node = deadEpoch(905);
     node.nextEpochId = 10; // DKGs for 8 and 9 were begun and aborted
