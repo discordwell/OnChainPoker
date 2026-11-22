@@ -261,6 +261,8 @@ log "patching app.toml: minimum-gas-prices=${MIN_GAS_PRICES}, api.enable=true"
 sed -i.bak -E "s/^minimum-gas-prices = .*/minimum-gas-prices = \"${MIN_GAS_PRICES}\"/" "$APP_TOML"
 rm -f "$APP_TOML.bak"
 
+# For a new node only. Switching a node that already has history to custom pruning starts a
+# backlog prune that took 1.9 GB of memory per node on the live host: leave a live node on its setting.
 log "patching app.toml: pruning=custom keep-recent=${PRUNING_KEEP_RECENT} interval=${PRUNING_INTERVAL}, min-retain-blocks=${MIN_RETAIN_BLOCKS}, snapshot-interval=${SNAPSHOT_INTERVAL}"
 sed -i.bak -E "s/^pruning = .*/pruning = \"custom\"/" "$APP_TOML"
 sed -i.bak -E "s/^pruning-keep-recent = .*/pruning-keep-recent = \"${PRUNING_KEEP_RECENT}\"/" "$APP_TOML"

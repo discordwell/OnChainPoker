@@ -11,6 +11,11 @@ Restart=on-failure
 RestartSec=5
 RestartSteps=5
 RestartMaxDelaySec=60
+# The host is shared and has no spare memory. A node uses 100 to 200 MB, but a backlog
+# state prune took 1.9 GB per node and stalled every site on the host (2026-11-22).
+MemoryHigh=1200M
+MemoryMax=1600M
+MemorySwapMax=0
 
 [Install]
 WantedBy=multi-user.target
