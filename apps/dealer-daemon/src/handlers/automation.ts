@@ -1,6 +1,8 @@
 import { txFailureOf, type OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import { log, logProgress } from "../log.js";
+import { sharesNow, turnOrder } from "../turns.js";
+import type { HandSender } from "./send.js";
 
 /**
  * Tick and Timeout probe by sending, so a refusal says only "not due" and stays silent. A
@@ -21,95 +23,61 @@ function pick(obj: any, ...keys: string[]): any {
   return undefined;
 }
 
-export async function maybeStartAndInitHand(args: {
+/**
+ * A hand the chain shows started but not initialized: its InitHand did not land with it. The
+ * member whose turn it is sends at once, the others once an earlier block showed it too.
+ */
+export async function maybeInitHand(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
   tableId: string;
+  handId: string;
   epochId: number;
-}): Promise<boolean> {
-  const { client, config, tableId, epochId } = args;
-  if (!config.autoInitHand) return false;
-
-  const table = await client.getTable(tableId).catch(() => null);
-  if (!table) return false;
-
-  // Check if there's an active hand
-  const handId = pick(table?.hand, "handId", "hand_id");
-  if (handId) return false; // already has an active hand
-
-  // Check if enough players are seated
-  const seats = Array.isArray(table.seats) ? table.seats : [];
-  const seatedCount = seats.filter((s: any) => s?.player).length;
-  if (seatedCount < 2) return false;
-
-  log(`Automation: table ${tableId} has ${seatedCount} players, starting hand`);
-
-  try {
-    await client.pokerStartHand({ tableId });
-    logProgress(`Automation: hand started for table ${tableId}`);
-
-    // Re-fetch table to get the new hand ID
-    const updatedTable = await client.getTable(tableId).catch(() => null);
-    const newHandId = String(pick(updatedTable?.hand, "handId", "hand_id") ?? "1");
-
-    // Init the dealer hand
-    await client.dealerInitHand({
-      tableId,
-      handId: newHandId,
-      epochId,
-    });
-    logProgress(`Automation: dealer hand initialized for table ${tableId} hand ${newHandId}`);
-    return true;
-  } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    log(`Automation: startHand/initHand failed: ${msg}`);
-    return false;
-  }
+  qualified: readonly { validator: string }[];
+  /** The first height at which this daemon saw the hand uninitialized. */
+  seenSince: number;
+  sender: HandSender;
+}): Promise<void> {
+  const { client, config, tableId, handId, epochId, sender } = args;
+  const key = `t${tableId}:h${handId}:init`;
+  if (sender.inflight.holds(key, sender.height)) return;
+  const rank = turnOrder(args.qualified, Number(handId)).indexOf(config.validatorAddress);
+  if (rank < 0 || (rank > 0 && args.seenSince >= sender.height)) return;
+  await sender.send({
+    key,
+    msgs: [client.messages.initHand({ tableId, handId, epochId })],
+    holdBlocks: 1,
+    what: `init hand ${handId} of table ${tableId}`,
+  });
 }
 
+/**
+ * Every round shuffled and the deck not final: the FinalizeDeck behind the last shuffle did not
+ * land. The last shuffler sends again at once, the others from the block after the last shuffle.
+ */
 export async function maybeFinalizeDeck(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
   tableId: string;
   handId: string;
-}): Promise<boolean> {
-  const { client, config, tableId, handId } = args;
-  if (!config.autoFinalize) return false;
-
-  try {
-    await client.dealerFinalizeDeck({ tableId, handId });
-    logProgress(`Automation: deck finalized for table ${tableId} hand ${handId}`);
-    return true;
-  } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    if (!msg.includes("already") && !msg.includes("not ready")) {
-      log(`Automation: finalizeDeck failed: ${msg}`);
-    }
-    return false;
-  }
-}
-
-export async function maybeFinalizeReveal(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-  tableId: string;
-  handId: string;
-  pos: number;
-}): Promise<boolean> {
-  const { client, config, tableId, handId, pos } = args;
-  if (!config.autoFinalize) return false;
-
-  try {
-    await client.dealerFinalizeReveal({ tableId, handId, pos });
-    logProgress(`Automation: reveal finalized for pos ${pos} table ${tableId}`);
-    return true;
-  } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    if (!msg.includes("already") && !msg.includes("not enough")) {
-      log(`Automation: finalizeReveal failed: ${msg}`);
-    }
-    return false;
-  }
+  qualified: readonly { validator: string }[];
+  /** The block time of the last shuffle: the hand's shuffle deadline minus the table's dealer timeout. */
+  shuffledAtUnix: number;
+  nowUnix: number;
+  sender: HandSender;
+}): Promise<void> {
+  const { client, config, tableId, handId, sender } = args;
+  if (!config.autoFinalize) return;
+  const key = `t${tableId}:h${handId}:finalizeDeck`;
+  if (sender.inflight.holds(key, sender.height)) return;
+  const order = turnOrder(args.qualified, args.qualified.length - 1);
+  if (!sharesNow({ order, threshold: 1, me: config.validatorAddress, openedAtUnix: args.shuffledAtUnix, nowUnix: args.nowUnix })) return;
+  await sender.send({
+    key,
+    msgs: [client.messages.finalizeDeck({ tableId, handId })],
+    holdBlocks: 0,
+    what: `finalize deck of table ${tableId} hand ${handId}`,
+  });
 }
 
 export async function maybeTick(args: {

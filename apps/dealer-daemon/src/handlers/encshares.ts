@@ -12,10 +12,12 @@ import {
   encShareProve,
   encodeEncShareProof,
 } from "@onchainpoker/ocp-crypto";
-import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
+import { HOLE_SHARE_GAS_MULTIPLIER, type OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import type { EpochStateStore } from "../state.js";
 import { log, logProgress } from "../log.js";
+import { batches, sharesNow, turnOrder } from "../turns.js";
+import type { HandSender } from "./send.js";
 import { decodeBytes, decodeDeck } from "./shuffle.js";
 
 function u64le(v: number | bigint): Uint8Array {
@@ -66,6 +68,11 @@ function decodeSaltBytes(raw: unknown): Uint8Array {
   throw new Error(`unsupported initHashSalt bytes value: ${typeof raw}`);
 }
 
+/**
+ * Sends this daemon's encrypted shares of the hole cards it has not sent yet, all in one
+ * transaction: one block for every share instead of one block per share. When transactions of
+ * this step failed before, the shares go in halves, then one per transaction (turns.ts batches).
+ */
 export async function handleEncShares(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
@@ -73,16 +80,14 @@ export async function handleEncShares(args: {
   tableId: string;
   handId: string;
   epochId: number;
+  qualified: readonly { validator: string }[];
+  threshold: number;
+  nowUnix: number;
+  sender: HandSender;
 }): Promise<void> {
-  const { client, config, stateStore, tableId, handId, epochId } = args;
-
-  const secrets = await stateStore.load(epochId);
-  if (!secrets || secrets.secretShare === null) {
-    log(`EncShares: no secrets for epoch ${epochId}`);
-    return;
-  }
-
-  const secretShare = BigInt(`0x${secrets.secretShare}`);
+  const { client, config, stateStore, tableId, handId, epochId, sender } = args;
+  const key = `t${tableId}:h${handId}:holeShares`;
+  if (sender.inflight.holds(key, sender.height)) return;
 
   // Get the table to find player pubkeys and holePos (on table.hand.dealer)
   const table = await client.getTable(tableId);
@@ -109,17 +114,65 @@ export async function handleEncShares(args: {
     return;
   }
 
+  // The last shuffler and the member after it send at once, the others a block later (turns.ts).
+  const deadline = asNumber(dealerHand.holeSharesDeadline ?? dealerHand.hole_shares_deadline) ?? 0;
+  const order = turnOrder(args.qualified, args.qualified.length - 1);
+  if (!sharesNow({ order, threshold: args.threshold, me: config.validatorAddress, openedAtUnix: deadline - dealerTimeoutSecs(table), nowUnix: args.nowUnix })) return;
+  const sent = new Set(
+    ((dealerHand.encShares ?? dealerHand.enc_shares ?? []) as any[])
+      .filter((es) => es?.validator === config.validatorAddress)
+      .map((es) => asNumber(es?.pos)),
+  );
+
+  const shares = await holeShareMessages({ client, config, stateStore, tableId, handId, epochId, table, dealerHand, deck: dealerHand.deck ?? [], holePos, skip: sent });
+
+  // Every share has the same deadline, so a batch that fails must not hold back the others.
+  for (const batch of batches(shares, sender.inflight.failures(key))) {
+    const positions = batch.map((s) => s.pos).join(", ");
+    const ok = await sender.send({
+      key,
+      msgs: batch.map((s) => s.msg),
+      holdBlocks: 1,
+      gasMultiplier: HOLE_SHARE_GAS_MULTIPLIER,
+      what: `hole-card shares for table ${tableId} hand ${handId} pos ${positions}`,
+    });
+    if (ok) logProgress(`EncShares: sent ${batch.length === 1 ? "the share" : `${batch.length} shares`} for pos ${positions} of table ${tableId} hand ${handId}`);
+  }
+}
+
+/** This validator's encrypted share of each hole card at `holePos` over `deck`, but those in `skip`, as the messages that carry them. */
+export async function holeShareMessages(args: {
+  client: OcpCosmosClient;
+  config: DealerDaemonConfig;
+  stateStore: EpochStateStore;
+  tableId: string;
+  handId: string;
+  epochId: number;
+  table: any;
+  dealerHand: any;
+  deck: readonly { c1: unknown; c2: unknown }[];
+  holePos: readonly number[];
+  skip: ReadonlySet<number | undefined>;
+}): Promise<{ seat: number; pos: number; msg: ReturnType<OcpCosmosClient["messages"]["submitEncShare"]> }[]> {
+  const { client, config, stateStore, tableId, handId, epochId, table, dealerHand, holePos } = args;
+  const secrets = await stateStore.load(epochId);
+  if (!secrets || secrets.secretShare === null) {
+    log(`EncShares: no secrets for epoch ${epochId}`);
+    return [];
+  }
+  const secretShare = BigInt(`0x${secrets.secretShare}`);
+
   const initHeightRaw = dealerHand.initHeight ?? dealerHand.init_height;
   const initSaltRaw = dealerHand.initHashSalt ?? dealerHand.init_hash_salt;
   if (initHeightRaw == null || initSaltRaw == null) {
     log(`EncShares: dealer hand missing initHeight/initHashSalt (pre-v2 chain state?)`);
-    return;
+    return [];
   }
   const initHeight = BigInt(initHeightRaw as string | number);
   const initSalt = decodeSaltBytes(initSaltRaw);
   if (initSalt.length !== 32) {
     log(`EncShares: initHashSalt must be 32 bytes, got ${initSalt.length}`);
-    return;
+    return [];
   }
 
   const handScalar = hashToScalar(
@@ -133,11 +186,10 @@ export async function handleEncShares(args: {
   const xHand = scalarMul(secretShare, handScalar);
   const yHand = mulBase(xHand);
 
-  const rawDeck = dealerHand.deck ?? [];
-  const deck = decodeDeck(rawDeck);
+  const deck = decodeDeck([...args.deck]);
 
   const seats = Array.isArray(table.seats) ? table.seats : [];
-  let failed = 0;
+  const shares: { seat: number; pos: number; msg: ReturnType<OcpCosmosClient["messages"]["submitEncShare"]> }[] = [];
 
   for (let seat = 0; seat < 9; seat++) {
     const seatData = seats[seat];
@@ -157,7 +209,7 @@ export async function handleEncShares(args: {
 
     for (let cardIdx = 0; cardIdx < 2; cardIdx++) {
       const pos = holePos[seat * 2 + cardIdx];
-      if (pos === undefined || pos < 0 || pos === 255) continue;
+      if (pos === undefined || pos < 0 || pos === 255 || args.skip.has(pos)) continue;
 
       const c1 = deck[pos]?.c1;
       if (!c1) continue;
@@ -178,35 +230,27 @@ export async function handleEncShares(args: {
         wr: nonzeroScalar(),
       });
 
-      const encShare = concatBytes(groupElementToBytes(u), groupElementToBytes(v));
-      const proofBytesEncoded = encodeEncShareProof(proof);
-
-      try {
-        await client.dealerSubmitEncShare({
+      shares.push({
+        seat,
+        pos,
+        msg: client.messages.submitEncShare({
           validator: config.validatorAddress,
           tableId,
           handId,
           pos,
           pkPlayer: pkPlayerBytes,
-          encShare,
-          proofEncShare: proofBytesEncoded,
-        });
-        logProgress(`EncShares: submitted for seat ${seat} card ${cardIdx} pos ${pos}`);
-      } catch (err) {
-        const msg = String((err as Error)?.message ?? err);
-        if (msg.includes("already") || msg.includes("duplicate")) {
-          // Already submitted — skip this position
-        } else if (msg.includes("not in shuffle phase")) {
-          log(`EncShares: hand already advanced past shuffle, done`);
-          return;
-        } else {
-          // Every share has the same deadline, so one that fails must not hold back the rest.
-          failed++;
-          log(`EncShares: share for seat ${seat} card ${cardIdx} pos ${pos} failed: ${msg}`);
-        }
-      }
+          encShare: concatBytes(groupElementToBytes(u), groupElementToBytes(v)),
+          proofEncShare: encodeEncShareProof(proof),
+        }),
+      });
     }
   }
 
-  if (failed === 0) logProgress(`EncShares: all shares submitted for table ${tableId} hand ${handId}`);
+  return shares;
+}
+
+/** The chain's dealer timeout for a table: its own setting, or 120 s when it has none (x/dealer/keeper/logic.go tableDealerTimeoutSecs). */
+export function dealerTimeoutSecs(table: any): number {
+  const v = asNumber(table?.params?.dealerTimeoutSecs ?? table?.params?.dealer_timeout_secs) ?? 0;
+  return v > 0 ? v : 120;
 }

@@ -34,14 +34,19 @@ import { handleEncShares } from "./handlers/encshares.js";
 import { handlePubShare } from "./handlers/pubshares.js";
 import {
   maybeFinalizeDeck,
-  maybeFinalizeReveal,
+  maybeInitHand,
   maybeTick,
   maybeDealerTimeout,
-  maybeStartAndInitHand,
 } from "./handlers/automation.js";
+import { dealerTimeoutSecs } from "./handlers/encshares.js";
+import { handSender, type HandSender } from "./handlers/send.js";
+import { InFlight } from "./turns.js";
 
 /** A node that could not serve a finalized DKG at its past height is asked again after this many blocks. */
 const FINAL_DKG_RETRY_BLOCKS = 120;
+
+/** How often the node is asked whether it committed a new block. Each new block is read and acted on at once. */
+const BLOCK_WATCH_MS = 200;
 
 function asNumber(v: unknown): number | undefined {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
@@ -129,8 +134,13 @@ function expectedRevealPos(table: any): number | null {
 /** What dealTables hands each table: the epoch to deal on, who shuffles, and whether a new hand may start. */
 type HandDuty = {
   epochId: number;
+  threshold: number;
+  /** The epoch's members that are not slashed, in the chain's order: shufflers, and the members a step's turn goes to. */
   shufflers: readonly { validator: string; index: number }[];
   startHands: boolean;
+  /** Block time of the latest block, in Unix seconds: what a step's deadline is compared with. */
+  nowUnix: number;
+  sender: HandSender;
 };
 
 function failureSummary(f: Exclude<TxFailure, { kind: "not-a-tx" }>): string {
@@ -154,8 +164,11 @@ export class DealerDaemon {
   private readonly stateStore: EpochStateStore;
   private readonly me: Me;
   private abortController: AbortController | null = null;
-  private pollTimer: NodeJS.Timeout | null = null;
   private processing = false;
+  /** Hand transactions sent and not settled, by step. */
+  private readonly inflight = new InFlight();
+  /** "table/hand" to the first height this process saw that hand started and not initialized. */
+  private readonly uninitializedSince = new Map<string, number>();
 
   /** Height at which this process first saw the chain unable to deal, with no break since. In memory: a restart waits longer. */
   private rotatingSince: number | null = null;
@@ -198,17 +211,28 @@ export class DealerDaemon {
   async stop(): Promise<void> {
     log("Daemon stopping");
     this.abortController?.abort();
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
   }
 
+  /**
+   * One poll for every block the node commits, as soon as it has: a step that follows another
+   * lands in the next block. Without a new block, a poll still runs every pollIntervalMs.
+   */
   private startPolling(): void {
-    // Initial poll
-    void this.poll();
-    // Then interval
-    this.pollTimer = setInterval(() => void this.poll(), this.config.pollIntervalMs);
+    const signal = this.abortController!.signal;
+    void (async () => {
+      let seen = 0;
+      let polledAt = 0;
+      while (!signal.aborted) {
+        const height = await this.client.signing.committedHeight().catch(() => null);
+        if ((height !== null && height > seen) || Date.now() - polledAt >= this.config.pollIntervalMs) {
+          if (height !== null) seen = Math.max(seen, height);
+          polledAt = Date.now();
+          await this.poll();
+        } else {
+          await new Promise((resolve) => setTimeout(resolve, BLOCK_WATCH_MS));
+        }
+      }
+    })();
   }
 
   private async poll(): Promise<void> {
@@ -483,7 +507,15 @@ export class DealerDaemon {
   private async dealTables(view: ChainView, situation: Situation): Promise<void> {
     const epoch = view.dealer.epoch;
     if (!epoch) return;
-    const duty: HandDuty = { epochId: epoch.epochId, shufflers: shufflersOf(epoch), startHands: situation.kind === "dealing" };
+    const status = await this.client.getNodeStatus().catch(() => null);
+    const duty: HandDuty = {
+      epochId: epoch.epochId,
+      threshold: epoch.threshold,
+      shufflers: shufflersOf(epoch),
+      startHands: situation.kind === "dealing",
+      nowUnix: Math.floor((status?.latestBlockTimeMs ?? Date.now()) / 1000),
+      sender: handSender(this.client, this.inflight, view.dealer.height),
+    };
 
     const tableIds = await this.client.getTables().catch(() => [] as string[]);
     for (const tableId of tableIds) {
@@ -492,23 +524,19 @@ export class DealerDaemon {
   }
 
   private async processTable(tableId: string, duty: HandDuty): Promise<void> {
-    const { epochId } = duty;
+    const { epochId, sender } = duty;
     const table = await this.client.getTable(tableId).catch(() => null);
     if (!table) return;
 
     const hand = table?.hand;
     const handId = String(pick(hand, "handId", "hand_id") ?? "");
+    const handKey = handId || String(pick(table, "nextHandId", "next_hand_id") ?? "");
+    this.inflight.forgetAllBut(`t${tableId}:`, `t${tableId}:h${handKey}:`);
+    for (const k of this.uninitializedSince.keys()) if (k.startsWith(`${tableId}/`) && k !== `${tableId}/${handId}`) this.uninitializedSince.delete(k);
+    const turns = { qualified: duty.shufflers, sender };
 
     if (!hand || !handId) {
-      // No active hand — maybe start one, but not on an epoch that cannot deal it.
-      if (duty.startHands) {
-        await maybeStartAndInitHand({
-          client: this.client,
-          config: this.config,
-          tableId,
-          epochId,
-        }).catch(() => {});
-      }
+      // Only a seated player may start a hand (x/poker StartHand).
       return;
     }
 
@@ -523,32 +551,44 @@ export class DealerDaemon {
       const dealerEpochId = asNumber(pick(dealer, "epochId", "epoch_id")) ?? 0;
       if (dealerEpochId === 0) {
         if (duty.startHands) {
-          log(`Table ${tableId} hand ${handId}: dealer hand not initialized, calling initHand`);
-          await this.client.dealerInitHand({ tableId, handId, epochId }).catch((err) =>
-            logError(`initHand for table ${tableId} hand ${handId} failed`, err)
-          );
+          const seen = `${tableId}/${handId}`;
+          if (!this.uninitializedSince.has(seen)) this.uninitializedSince.set(seen, sender.height);
+          await maybeInitHand({
+            client: this.client,
+            config: this.config,
+            tableId,
+            handId,
+            epochId,
+            seenSince: this.uninitializedSince.get(seen)!,
+            ...turns,
+          });
         }
       } else {
-        // Try to shuffle (handleShuffle reads authoritative shuffleStep from DealerHand)
-        await handleShuffle({
-          client: this.client,
-          config: this.config,
-          tableId,
-          handId,
-          shufflers: duty.shufflers,
-        }).catch((err) => logError("shuffle error", err));
-
-        // Always attempt finalization — maybeFinalizeDeck checks readiness internally
-        await maybeFinalizeDeck({
-          client: this.client,
-          config: this.config,
-          tableId,
-          handId,
-        }).catch(() => {});
+        const dealerHand = await this.client.getDealerHand(tableId, handId).catch(() => null);
+        const step = Number(pick(dealerHand, "shuffleStep", "shuffle_step") ?? 0);
+        if (dealerHand && step >= duty.shufflers.length) {
+          await maybeFinalizeDeck({
+            client: this.client,
+            config: this.config,
+            tableId,
+            handId,
+            shuffledAtUnix: (asNumber(pick(dealerHand, "shuffleDeadline", "shuffle_deadline")) ?? 0) - dealerTimeoutSecs(table),
+            nowUnix: duty.nowUnix,
+            ...turns,
+          });
+        } else if (dealerHand) {
+          await handleShuffle({
+            client: this.client,
+            config: this.config,
+            tableId,
+            handId,
+            shufflers: duty.shufflers,
+            sender,
+          }).catch((err) => logError("shuffle error", err));
+        }
       }
-    } else if (deckFinalized && (phase === "shuffle" || phase === "betting")) {
-      // After deck finalization, submit enc shares for hole cards
-      // Phase may still be SHUFFLE (poker module transitions after enc shares) or BETTING
+    } else if (deckFinalized && phase === "shuffle") {
+      // The deck is final and the hole cards wait for their encrypted shares.
       await handleEncShares({
         client: this.client,
         config: this.config,
@@ -556,6 +596,9 @@ export class DealerDaemon {
         tableId,
         handId,
         epochId,
+        threshold: duty.threshold,
+        nowUnix: duty.nowUnix,
+        ...turns,
       }).catch((err) => logError("enc shares error", err));
     } else if (
       phase === "awaitFlop" ||
@@ -574,16 +617,12 @@ export class DealerDaemon {
           handId,
           epochId,
           pos,
+          threshold: duty.threshold,
+          revealDeadline: asNumber(pick(dealer, "revealDeadline", "reveal_deadline")) ?? 0,
+          dealerTimeoutSecs: dealerTimeoutSecs(table),
+          nowUnix: duty.nowUnix,
+          ...turns,
         }).catch((err) => logError("pub share error", err));
-
-        // Try to finalize the reveal
-        await maybeFinalizeReveal({
-          client: this.client,
-          config: this.config,
-          tableId,
-          handId,
-          pos,
-        }).catch(() => {});
       }
     }
 

@@ -18,8 +18,8 @@ import type { DealerDaemonConfig } from "../src/config.js";
 
 export type Sent = { typeUrl: string; value: any };
 
-/** What the chain does with one message: it lands, it is refused before the mempool, or its confirmation is lost. */
-export type Answer = "land" | "lose" | { refuse: string };
+/** What the chain does with one message: it lands, it is refused before the mempool, its confirmation is lost, or it waits in the mempool. */
+export type Answer = "land" | "lose" | "wait" | { refuse: string };
 
 export type FakeValidator = {
   operator: string;
@@ -54,7 +54,7 @@ export class FakeNode {
   beacon: BeaconState | null = null;
   validators: FakeValidator[] = [];
   /** What the node says of itself. By default it is caught up, holds a fresh block and has no validator key. */
-  nodeStatus: { catchingUp: boolean; blockAgeMs: number; consensusPubkey: Uint8Array | null } = { catchingUp: false, blockAgeMs: 0, consensusPubkey: null };
+  nodeStatus: { catchingUp: boolean; blockAgeMs: number; consensusPubkey: Uint8Array | null; blockTimeMs?: number } = { catchingUp: false, blockAgeMs: 0, consensusPubkey: null };
   /** Table id to the table as the LCD prints it. */
   readonly tables = new Map<string, unknown>();
   /** "tableId/handId" to the dealer hand as the LCD prints it. */
@@ -62,6 +62,8 @@ export class FakeNode {
 
   /** Every message handed to the signer, in order, whatever became of it. */
   readonly sent: Sent[] = [];
+  /** Every transaction: its messages, and whether it was sent without a simulation. */
+  readonly txs: { msgs: readonly Sent[]; gasLimit?: number }[] = [];
   /** How the chain answers the nth message of a type (n from 0). Everything lands unless a test says otherwise. */
   answer: (msg: Sent, nthOfType: number) => Answer = () => "land";
   /** A read that fails: "store:0x03" for a dealer store key, "lcd:<path>" for an LCD path. Returns the error text, or null. */
@@ -115,7 +117,7 @@ export class FakeNode {
     return undefined;
   }
 
-  private failure(answer: Exclude<Answer, "land">, hash: string): Error {
+  private failure(answer: Exclude<Answer, "land" | "wait">, hash: string): Error {
     // The typed failure exists once the SDK confirms from blocks; before that the SDK threw plain errors.
     const Typed = (sdk as Record<string, any>).OcpTxError;
     if (answer === "lose") {
@@ -142,18 +144,31 @@ export class FakeNode {
       };
     }) as unknown as typeof fetch;
 
+    // A transaction is atomic: every message is sent, and the first one the chain does not take decides it.
+    const broadcastAuto = async (msgs: readonly Sent[], _memo?: string, opts: { gasLimit?: number } = {}) => {
+      this.txs.push({ msgs, gasLimit: opts.gasLimit });
+      const answers = msgs.map((msg) => {
+        const nth = this.sentOf(msg.typeUrl).length;
+        this.sent.push(msg);
+        return this.answer(msg, nth);
+      });
+      const hash = `${"AB".repeat(31)}${String(this.sent.length).padStart(2, "0")}`;
+      const refused = answers.find((a): a is { refuse: string } => typeof a === "object");
+      if (refused) throw this.failure(refused, hash);
+      const landed = answers.includes("wait")
+        ? new Promise<never>(() => {})
+        : answers.includes("lose")
+        ? Promise.reject(this.failure("lose", hash))
+        : Promise.resolve({ code: 0, height: this.height + 1, txIndex: 0, events: [], rawLog: "", transactionHash: hash, msgResponses: [], gasUsed: 0n, gasWanted: 0n });
+      landed.catch(() => undefined);
+      return { hash, landed };
+    };
     const signing = {
       address: signer,
       client: {} as any,
-      signAndBroadcastAuto: async (msgs: readonly Sent[]) => {
-        for (const msg of msgs) {
-          const nth = this.sentOf(msg.typeUrl).length;
-          this.sent.push(msg);
-          const answer = this.answer(msg, nth);
-          if (answer !== "land") throw this.failure(answer, `${"AB".repeat(31)}${String(this.sent.length).padStart(2, "0")}`);
-        }
-        return { code: 0, height: this.height + 1, txIndex: 0, events: [], rawLog: "", transactionHash: "", msgResponses: [], gasUsed: 0n, gasWanted: 0n };
-      },
+      broadcastAuto,
+      signAndBroadcastAuto: async (msgs: readonly Sent[]) => (await broadcastAuto(msgs)).landed,
+      committedHeight: async () => this.height,
       queryStore: async (store: string, key: Uint8Array, height?: number) => {
         if (store !== "dealer") throw new Error(`fake node: unknown store ${store}`);
         const failure = this.failRead(`store:0x${key[0]!.toString(16).padStart(2, "0")}`);
@@ -163,7 +178,7 @@ export class FakeNode {
       },
       nodeStatus: async () => ({
         latestHeight: this.height,
-        latestBlockTimeMs: Date.now() - this.nodeStatus.blockAgeMs,
+        latestBlockTimeMs: this.nodeStatus.blockTimeMs ?? Date.now() - this.nodeStatus.blockAgeMs,
         catchingUp: this.nodeStatus.catchingUp,
         consensusPubkey: this.nodeStatus.consensusPubkey,
       }),
