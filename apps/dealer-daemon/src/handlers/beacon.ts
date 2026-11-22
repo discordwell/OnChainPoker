@@ -1,7 +1,7 @@
 import { createHash, createHmac } from "node:crypto";
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 
 const BEACON_COMMIT_DOMAIN = "ocp/v1/beacon/commit";
 const SALT_DOMAIN = "ocp/v1/beacon/salt/v1";
@@ -78,7 +78,7 @@ export async function maybeBeaconParticipate(args: {
 }): Promise<void> {
   const { client, config } = args;
 
-  const epoch = await client.getDealerEpoch().catch(() => null);
+  const epoch = await client.getDealerEpoch();
   const currentEpochId = epoch ? BigInt(epoch.epoch_id ?? epoch.epochId ?? "0") : 0n;
   const targetEpoch = currentEpochId + 1n;
 
@@ -92,7 +92,7 @@ export async function maybeBeaconParticipate(args: {
       epochId: targetEpoch.toString(),
       commit,
     });
-    log(`Beacon: committed for epoch ${targetEpoch}`);
+    logProgress(`Beacon: committed for epoch ${targetEpoch}`);
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
     if (!isExpectedBeaconError(msg)) {
@@ -106,7 +106,7 @@ export async function maybeBeaconParticipate(args: {
       epochId: targetEpoch.toString(),
       salt,
     });
-    log(`Beacon: revealed for epoch ${targetEpoch}`);
+    logProgress(`Beacon: revealed for epoch ${targetEpoch}`);
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
     if (!isExpectedBeaconError(msg)) {

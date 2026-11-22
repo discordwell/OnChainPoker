@@ -20,7 +20,7 @@ import {
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { EpochStateStore } from "../state.js";
 import type { DealerDaemonConfig } from "../config.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 
 function modQ(n: bigint): bigint {
   const x = n % CURVE_ORDER;
@@ -97,7 +97,7 @@ export async function handleDkgCommit(args: {
     ephemeralSk: ephemeralSk.toString(16),
   });
 
-  log(`DKG: commit submitted for epoch ${epochId}`);
+  logProgress(`DKG: commit submitted for epoch ${epochId}`);
 }
 
 function decodeOnchainBytes(raw: unknown): Uint8Array | undefined {
@@ -223,7 +223,7 @@ export async function handleDkgEncryptedShares(args: {
         proof: proofBytes,
         scalarCt,
       });
-      log(`DKG: submitted encrypted share for recipient index ${recipient.index}`);
+      logProgress(`DKG: submitted encrypted share for recipient index ${recipient.index}`);
     } catch (err) {
       const msg = String((err as Error)?.message ?? err);
       if (!msg.includes("already") && !msg.includes("deadline")) {
@@ -343,7 +343,7 @@ async function collectEncryptedShareScalars(args: {
           dhShare: groupElementToBytes(dh),
           dleqProof: encodeChaumPedersenProof(proof),
         });
-        log(`DKG: filed AEAD-bad complaint against ${dealerAddr}`);
+        logProgress(`DKG: filed AEAD-bad complaint against ${dealerAddr}`);
       } catch (err) {
         const msg = String((err as Error)?.message ?? err);
         log(`DKG: failed to file AEAD-bad complaint against ${dealerAddr}: ${msg}`);
@@ -404,7 +404,7 @@ export async function handleDkgComplaints(args: {
         epochId,
         dealer: member.validator,
       });
-      log(`DKG: filed missing complaint against ${member.validator}`);
+      logProgress(`DKG: filed missing complaint against ${member.validator}`);
     } catch (err) {
       const msg = String((err as Error)?.message ?? err);
       if (!msg.includes("already") && !msg.includes("deadline") && !msg.includes("too early")) {
@@ -473,7 +473,7 @@ export async function handleDkgReveals(args: {
         to: complaint.complainer,
         share: shareBytes,
       });
-      log(`DKG: revealed share for ${complaint.complainer} (index ${complainerMember.index})`);
+      logProgress(`DKG: revealed share for ${complaint.complainer} (index ${complainerMember.index})`);
     } catch (err) {
       const msg = String((err as Error)?.message ?? err);
       if (!msg.includes("already") && !msg.includes("deadline") && !msg.includes("too early")) {
@@ -601,7 +601,7 @@ export async function handleDkgAggregate(args: {
 
   const updated = { ...secrets, secretShare: aggregated.toString(16) };
   await stateStore.save(updated);
-  log(
+  logProgress(
     `DKG: computed aggregated secret share for epoch ${epochId} from ${counted.size + 1} contributions (${encScalars.size} encrypted + ${counted.size - encScalars.size} plaintext reveals + 1 self)`
   );
   return true;

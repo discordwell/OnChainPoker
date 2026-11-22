@@ -13,7 +13,7 @@ import {
 import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
 import type { EpochStateStore } from "../state.js";
-import { log } from "../log.js";
+import { log, logProgress } from "../log.js";
 import { decodeBytes, decodeDeck } from "./shuffle.js";
 
 function u64le(v: number | bigint): Uint8Array {
@@ -134,7 +134,7 @@ export async function handlePubShare(args: {
       pubShare: pubShareBytes,
       proofShare: proofBytes,
     });
-    log(`PubShare: submitted for pos ${pos} table ${tableId} hand ${handId}`);
+    logProgress(`PubShare: submitted for pos ${pos} table ${tableId} hand ${handId}`);
   } catch (err) {
     const msg = String((err as Error)?.message ?? err);
     if (msg.includes("already") || msg.includes("duplicate")) {

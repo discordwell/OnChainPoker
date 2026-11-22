@@ -137,6 +137,7 @@ export type OcpCosmosClient = {
   getTable: (tableId: UintLike) => Promise<any | null>;
 
   // --- dealer queries ---
+  // Epoch and DKG reads reject when the chain cannot answer; null means it answered that there is none.
   getDealerEpoch: () => Promise<any | null>;
   getDealerDkg: () => Promise<any | null>;
   getDealerHand: (tableId: UintLike, handId: UintLike) => Promise<any | null>;
@@ -255,13 +256,13 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
 
   async function getDealerEpoch(): Promise<any | null> {
     const c = ensureLcd();
-    const json = await c.getJson<any>("/onchainpoker/dealer/v1/epoch").catch(() => null);
+    const json = await c.getJson<any>("/onchainpoker/dealer/v1/epoch");
     return json?.epoch || null;
   }
 
   async function getDealerDkg(): Promise<any | null> {
     const c = ensureLcd();
-    const json = await c.getJson<any>("/onchainpoker/dealer/v1/dkg").catch(() => null);
+    const json = await c.getJson<any>("/onchainpoker/dealer/v1/dkg");
     return json?.dkg || null;
   }
 

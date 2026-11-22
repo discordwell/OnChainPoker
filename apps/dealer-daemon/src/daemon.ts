@@ -200,9 +200,10 @@ export class DealerDaemon {
   }
 
   private async pollOnce(): Promise<void> {
-    // 1. Check epoch/DKG state
-    const epoch = await this.client.getDealerEpoch().catch(() => null);
-    const dkg = await this.client.getDealerDkg().catch(() => null);
+    // 1. Check epoch/DKG state. A failed read throws and ends this poll: it must
+    // never be taken for "no epoch", which would send BeginEpoch.
+    const epoch = await this.client.getDealerEpoch();
+    const dkg = await this.client.getDealerDkg();
 
     // Beacon participation runs every cycle so the chain can finalize an
     // unpredictable rand_epoch before BeginEpoch is attempted.

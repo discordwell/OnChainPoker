@@ -19,6 +19,7 @@ import { CallingStation } from "./strategies/callingStation.js";
 import { TagStrategy } from "./strategies/tag.js";
 import { LagStrategy } from "./strategies/lag.js";
 import { log, logError } from "./log.js";
+import { retryUntilOk } from "./retry.js";
 import type { Strategy } from "./strategy.js";
 
 function deriveRistrettoKey(seed: string): { sk: bigint; pkBytes: Uint8Array } {
@@ -61,15 +62,17 @@ async function main() {
   const { sk, pkBytes } = deriveRistrettoKey(keySeed);
   log(`Player PK: ${Buffer.from(pkBytes).toString("hex").slice(0, 16)}...`);
 
-  // Connect to chain
+  // Connect to chain; an unreachable chain is waited for, not fatal
   const registry = createOcpRegistry();
-  const signing = await connectOcpCosmosSigningClient({
-    rpcUrl: config.cosmosRpcUrl,
-    lcdUrl: config.cosmosLcdUrl,
-    signer: wallet,
-    gasPrice: config.gasPrice,
-    registry,
-  });
+  const signing = await retryUntilOk("connect to chain RPC", () =>
+    connectOcpCosmosSigningClient({
+      rpcUrl: config.cosmosRpcUrl,
+      lcdUrl: config.cosmosLcdUrl,
+      signer: wallet,
+      gasPrice: config.gasPrice,
+      registry,
+    })
+  );
 
   const lcd = new CosmosLcdClient({ baseUrl: config.cosmosLcdUrl });
   const client = createOcpCosmosClient({ signing, lcd });
