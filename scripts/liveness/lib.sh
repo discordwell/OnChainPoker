@@ -50,6 +50,8 @@ build_ocpd() {
   echo "$dir/ocpd"
 }
 
+ocpd_origin() { if [[ -n "${OCPD_BIN:-}" ]]; then echo "given as OCPD_BIN"; else echo "built from $CHAIN_REF"; fi; }
+
 build_new() {
   say "building the SDK, the dealer daemon and the bot from the working tree"
   local p

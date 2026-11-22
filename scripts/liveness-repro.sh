@@ -77,11 +77,11 @@ ev_wait_n() {
 hands_check() {
   local id="$1" from="$2" what="$3" ready completed verdict=FAIL
   ev_wait_n HoleCardsReady "$from" 3 $((3 * HAND_BLOCKS)) >/dev/null || true
-  ev_wait HandCompleted "$from" $((3 * HAND_BLOCKS)) >/dev/null || true
+  ev_wait HandCompleted "$from" $((3 * HAND_BLOCKS)) reason=showdown >/dev/null || true
   ready="$(ev_count HoleCardsReady "$from" 999999999)"
-  completed="$(ev_count HandCompleted "$from" 999999999)"
+  completed="$(ev_count HandCompleted "$from" 999999999 reason=showdown)"
   if ((ready >= 3 && completed >= 1)); then verdict=PASS; fi
-  check "$id" "$what" "at least 3 HoleCardsReady, 1 HandCompleted" "$ready HoleCardsReady, $completed HandCompleted" "$verdict"
+  check "$id" "$what" "at least 3 HoleCardsReady, 1 hand completed at showdown" "$ready HoleCardsReady, $completed completed at showdown" "$verdict"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -259,7 +259,7 @@ scenario_kill9() {
   wait_chain_seconds 20
   daemon_start "$a"; daemon_start "$b"
   fin="$(ev_wait DealerEpochFinalized "$INITIAL_HEIGHT" "$ROTATION_BLOCKS" epochId=1)" || die "epoch 1 was not finalized"
-  ev_wait HandCompleted "${fin%% *}" "$((2 * HAND_BLOCKS))" >/dev/null || true
+  ev_wait HandCompleted "${fin%% *}" "$((2 * HAND_BLOCKS))" reason=showdown >/dev/null || true
   local i written=0 matches=0 commits=0 settled=0
   for i in "$a" "$b"; do
     written=$((written + $(grep -c 'DKG: secrets for epoch 1 written to disk' "$(daemon_log $i)" || true)))
@@ -268,9 +268,9 @@ scenario_kill9() {
     commits=$((commits + $(ev_count DKGCommitAccepted "$INITIAL_HEIGHT" "${fin%% *}" "dealer=${VALOPER[$i]}")))
   done
   log_has "$(since_start "$(daemon_log $a)")" 'Rotation: dkg commit for epoch 1 landed' && say "daemon $a sent its commit again after the restart, and the chain took it"
-  check_is 23 "two daemons killed -9, one as its commit was sent and one after it landed, restarted 20 s later: commits on chain from them, times they wrote secrets, restarts that found the chain's commit equal to the disk's, restarts whose share matches the chain; the epoch; slashes; hands completed" \
+  check_is 23 "two daemons killed -9, one as its commit was sent and one after it landed, restarted 20 s later: commits on chain from them, times they wrote secrets, restarts that found the chain's commit equal to the disk's, restarts whose share matches the chain; the epoch; slashes; hands completed at showdown" \
     "2 2 2 2; committeeSize=3 slashed=0; 0; at least 1" \
-    "$commits $written $matches $settled; committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $(ev_count ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)"); $( (($(ev_count HandCompleted "${fin%% *}" 999999999) >= 1)) && echo "at least 1" || echo 0)"
+    "$commits $written $matches $settled; committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $(ev_count ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)"); $( (($(ev_count HandCompleted "${fin%% *}" 999999999 reason=showdown) >= 1)) && echo "at least 1" || echo 0)"
 }
 
 scenario_fallback() {
@@ -288,10 +288,10 @@ scenario_fallback() {
   fin="$(ev_wait DealerEpochFinalized "$INITIAL_HEIGHT" "$ROTATION_BLOCKS" epochId=1)" || die "epoch 1 was not finalized"
   local fin_h="${fin%% *}" matched=no
   log_wait "$(daemon_log $to)" 20 'share for epoch 1 matches my on-chain pub_share' && matched=yes
-  ev_wait HandCompleted "$fin_h" "$((2 * HAND_BLOCKS))" >/dev/null || true
-  check_is 29 "one share lost on the way: shares lost by the proxy; encrypted shares, complaints against that dealer by that member, plaintext reveals; the epoch; slashes; the member's share matches; hands completed" \
+  ev_wait HandCompleted "$fin_h" "$((2 * HAND_BLOCKS))" reason=showdown >/dev/null || true
+  check_is 29 "one share lost on the way: shares lost by the proxy; encrypted shares, complaints against that dealer by that member, plaintext reveals; the epoch; slashes; the member's share matches; hands completed at showdown" \
     "lost; 5 1 1; committeeSize=3 slashed=0; 0; yes; at least 1" \
-    "$( (($(grep -c ' lost ' "$NET/logs/proxy.log" || true) >= 1)) && echo lost || echo none); $(ev_count DKGEncryptedShareAccepted "$INITIAL_HEIGHT" "$fin_h") $(ev_count DKGComplaintAccepted "$INITIAL_HEIGHT" "$fin_h") $(ev_count DKGShareRevealed "$INITIAL_HEIGHT" "$fin_h"); committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $(ev_count ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)"); $matched; $( (($(ev_count HandCompleted "$fin_h" 999999999) >= 1)) && echo "at least 1" || echo 0)"
+    "$( (($(grep -c ' lost ' "$NET/logs/proxy.log" || true) >= 1)) && echo lost || echo none); $(ev_count DKGEncryptedShareAccepted "$INITIAL_HEIGHT" "$fin_h") $(ev_count DKGComplaintAccepted "$INITIAL_HEIGHT" "$fin_h") $(ev_count DKGShareRevealed "$INITIAL_HEIGHT" "$fin_h"); committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $(ev_count ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)"); $matched; $( (($(ev_count HandCompleted "$fin_h" 999999999 reason=showdown) >= 1)) && echo "at least 1" || echo 0)"
 }
 
 scenario_absent() {
@@ -376,11 +376,11 @@ scenario_unrevealed() {
   daemon_stop "$last" KILL
   begun="$(ev_wait DealerEpochBegun "$INITIAL_HEIGHT" "$ROTATION_BLOCKS" epochId=1)" || die "epoch 1 was not begun"
   fin="$(ev_wait DealerEpochFinalized "$INITIAL_HEIGHT" "$ROTATION_BLOCKS" epochId=1)" || die "epoch 1 was not finalized"
-  ev_wait HandCompleted "${fin%% *}" "$((2 * HAND_BLOCKS))" >/dev/null || true
+  ev_wait HandCompleted "${fin%% *}" "$((2 * HAND_BLOCKS))" reason=showdown >/dev/null || true
   members="$(ocpq dealer epoch | jq -r --arg v "${VALOPER[$last]}" '.epoch.members | "\(length) members, \([.[] | select(.validator == $v)] | length) of them the unrevealed one"')"
-  check_is 32 "a validator that committed to the beacon and never revealed: who BeginEpoch slashed and why, at which height; the committee; the epoch; hands completed" \
+  check_is 32 "a validator that committed to the beacon and never revealed: who BeginEpoch slashed and why, at which height; the committee; the epoch; hands completed at showdown" \
     "${VALOPER[$last]} beacon-missing-reveal at the begin height; committeeSize=2; 2 members, 0 of them the unrevealed one; committeeSize=2 slashed=0; at least 1" \
-    "$(ev_list ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)" | awk -v b="${begun%% *}" '{ at = ($1 == b) ? "at the begin height" : "at height " $1; for (i = 4; i <= NF; i++) { split($i, kv, "="); a[kv[1]] = kv[2] } printf "%s %s %s", a["validator"], a["reason"], at }'); committeeSize=$(ev_attr "$begun" committeeSize); $members; committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $( (($(ev_count HandCompleted "${fin%% *}" 999999999) >= 1)) && echo "at least 1" || echo 0)"
+    "$(ev_list ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)" | awk -v b="${begun%% *}" '{ at = ($1 == b) ? "at the begin height" : "at height " $1; for (i = 4; i <= NF; i++) { split($i, kv, "="); a[kv[1]] = kv[2] } printf "%s %s %s", a["validator"], a["reason"], at }'); committeeSize=$(ev_attr "$begun" committeeSize); $members; committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $( (($(ev_count HandCompleted "${fin%% *}" 999999999 reason=showdown) >= 1)) && echo "at least 1" || echo 0)"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -416,7 +416,7 @@ main() {
   [[ "${SKIP_BUILD:-}" == 1 ]] || build_new
   OLD_TREE=""
   [[ " $selected " != *" main "* ]] || OLD_TREE="$(build_old)"
-  say "chain binary $OCPD ($CHAIN_REF), ${BLOCK_SECONDS} s blocks, scenarios: $selected"
+  say "chain binary $OCPD ($(ocpd_origin)), ${BLOCK_SECONDS} s blocks, scenarios: $selected"
 
   exec 3>&1
   SCENARIO_PIDS=""

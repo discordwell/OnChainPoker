@@ -109,8 +109,8 @@ const timed = [...hands.values()]
   .sort((a, b) => a.handId - b.handId);
 
 if (timed.length === 0) {
-  console.log("hands timed 0");
-  process.exit(1);
+  console.log(flags.json ? JSON.stringify({ summary: { hands: 0 } }) : "hands timed 0");
+  process.exit(flags.json ? 0 : 1);
 }
 
 /** The middle value, the lower of the two middle ones for an even count: always a value that was measured. */
