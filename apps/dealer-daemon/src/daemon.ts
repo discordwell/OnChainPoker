@@ -9,6 +9,7 @@ import {
   describe,
   headlines,
   short,
+  shufflersOf,
   type Action,
   type ChainView,
   type Decision,
@@ -432,7 +433,7 @@ export class DealerDaemon {
   private async dealTables(view: ChainView, situation: Situation): Promise<void> {
     const epoch = view.dealer.epoch;
     if (!epoch) return;
-    const duty: HandDuty = { epochId: epoch.epochId, shufflers: epoch.members, startHands: situation.kind === "dealing" };
+    const duty: HandDuty = { epochId: epoch.epochId, shufflers: shufflersOf(epoch), startHands: situation.kind === "dealing" };
 
     const tableIds = await this.client.getTables().catch(() => [] as string[]);
     for (const tableId of tableIds) {
@@ -484,7 +485,7 @@ export class DealerDaemon {
           config: this.config,
           tableId,
           handId,
-          epochMembers: [...duty.shufflers],
+          shufflers: duty.shufflers,
         }).catch((err) => logError("shuffle error", err));
 
         // Always attempt finalization — maybeFinalizeDeck checks readiness internally
