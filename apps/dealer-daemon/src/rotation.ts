@@ -54,8 +54,12 @@ export const POLICY = {
   /** Daemons that may send the same permissionless message take turns, this many blocks apart. */
   turnStaggerBlocks: 2,
 
-  /** DEALER_PATIENCE_BLOCKS when unset: a day at 5 s blocks. */
-  defaultPatienceBlocks: 17_280,
+  /**
+   * DEALER_PATIENCE_BLOCKS when unset: 10 minutes at 5 s blocks. Ruling 2026-11-22: "how long can a
+   * poker table wait for somebody? I say, like 20 seconds". Minutes, not seconds, while the chain
+   * takes half an absent validator's stake.
+   */
+  defaultPatienceBlocks: 120,
 
   unjail: {
     /** The chain refuses until the jail time is over. Ask it once a minute. */

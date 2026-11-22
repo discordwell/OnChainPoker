@@ -160,9 +160,12 @@ type Outcome = {
   blockedAt: number | null;
 };
 
+/** The patience these schedules run with unless one names its own. SIM_PATIENCE tries another; the cases that name 17,280 then fail by design. */
+const PATIENCE = Number(process.env.SIM_PATIENCE ?? 17_280);
+
 function run(schedule: Schedule): Outcome {
   const chain = new ModelChain(VALIDATORS, START);
-  const daemons = VALIDATORS.map((v) => daemonFor(v, schedule.patienceBlocks ?? POLICY.defaultPatienceBlocks));
+  const daemons = VALIDATORS.map((v) => daemonFor(v, schedule.patienceBlocks ?? PATIENCE));
   const announced = new Set<string>();
   let dealingAt: number | null = null;
   let blockedAt: number | null = null;
