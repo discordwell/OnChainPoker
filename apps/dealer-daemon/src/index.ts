@@ -43,8 +43,14 @@ async function main() {
   const lcd = new CosmosLcdClient({ baseUrl: config.cosmosLcdUrl });
   const client = createOcpCosmosClient({ signing, lcd });
 
-  // Create and start daemon
   const daemon = new DealerDaemon({ client, config, stateStore });
+
+  // --explain: print what the daemon sees and what it would send, send nothing, and exit.
+  if (process.argv.includes("--explain")) {
+    await daemon.explain();
+    process.exit(0);
+  }
+
   await daemon.start();
 
   // Graceful shutdown

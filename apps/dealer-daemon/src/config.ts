@@ -1,3 +1,5 @@
+import { POLICY } from "./rotation.js";
+
 export interface DealerDaemonConfig {
   /** Validator operator bech32 address (ocpvaloper1...) */
   validatorAddress: string;
@@ -30,6 +32,11 @@ export interface DealerDaemonConfig {
   threshold: number;
   /** Shuffle rounds */
   shuffleRounds: number;
+  /**
+   * Blocks this daemon watches the chain unable to deal before it takes a step that it knows gets
+   * an absent validator slashed. 0: never, wait for a person.
+   */
+  patienceBlocks: number;
 }
 
 function envStr(key: string, fallback: string): string {
@@ -95,13 +102,16 @@ export function loadConfig(): DealerDaemonConfig {
   }
 
   const committeeSize = envInt("DEALER_COMMITTEE_SIZE", 3);
-  const threshold = envInt("DEALER_THRESHOLD", 3);
+  const threshold = envInt("DEALER_THRESHOLD", 2);
   if (committeeSize < 1) throw new Error("DEALER_COMMITTEE_SIZE must be >= 1");
   if (threshold < 1) throw new Error("DEALER_THRESHOLD must be >= 1");
   if (threshold > committeeSize) throw new Error("DEALER_THRESHOLD must be <= DEALER_COMMITTEE_SIZE");
 
   const shuffleRounds = envInt("DEALER_SHUFFLE_ROUNDS", 26);
   if (shuffleRounds < 1) throw new Error("DEALER_SHUFFLE_ROUNDS must be >= 1");
+
+  const patienceBlocks = envInt("DEALER_PATIENCE_BLOCKS", POLICY.defaultPatienceBlocks);
+  if (patienceBlocks < 0) throw new Error("DEALER_PATIENCE_BLOCKS must be >= 0");
 
   const statePassphrase = envStr("DEALER_STATE_PASSPHRASE", "");
   if (isProductionEnv()) {
@@ -130,5 +140,6 @@ export function loadConfig(): DealerDaemonConfig {
     committeeSize,
     threshold,
     shuffleRounds,
+    patienceBlocks,
   };
 }

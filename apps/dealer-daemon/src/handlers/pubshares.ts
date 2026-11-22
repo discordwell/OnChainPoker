@@ -67,7 +67,7 @@ export async function handlePubShare(args: {
   const { client, config, stateStore, tableId, handId, epochId, pos } = args;
 
   const secrets = await stateStore.load(epochId);
-  if (!secrets || secrets.secretShare === "0") {
+  if (!secrets || secrets.secretShare === null) {
     log(`PubShare: no secrets for epoch ${epochId}`);
     return;
   }

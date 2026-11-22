@@ -28,9 +28,14 @@ export async function handleShuffle(args: {
   config: DealerDaemonConfig;
   tableId: string;
   handId: string;
-  epochMembers: Array<{ validator: string; index: number }>;
+  /**
+   * The members the chain asks to shuffle, in its order: shufflersOf(epoch). The chain indexes its
+   * list of members that are not slashed with shuffleStep. Indexing all members made a daemon wait
+   * for a slashed member while the chain waited for, and then slashed, the next one.
+   */
+  shufflers: readonly { validator: string; index: number }[];
 }): Promise<void> {
-  const { client, config, tableId, handId, epochMembers } = args;
+  const { client, config, tableId, handId, shufflers } = args;
 
   // Fetch current dealer hand state — this is the authoritative source for shuffleStep
   const dealerHand = await client.getDealerHand(tableId, handId);
@@ -41,17 +46,17 @@ export async function handleShuffle(args: {
   // Shuffle phase has N rounds (one per qualified member). When actualStep
   // reaches N the chain refuses further submissions and the next message is
   // FinalizeDeck. Without this guard, modulo wraparound (step 3 % 3 = 0)
-  // would tell whoever is epochMembers[0] to re-shuffle, producing wasted
+  // would tell whoever is shufflers[0] to re-shuffle, producing wasted
   // proofs that the chain rejects with "deck already finalized".
-  if (actualStep >= epochMembers.length) return;
+  if (actualStep >= shufflers.length) return;
 
-  const expectedShuffler = epochMembers[actualStep]?.validator;
+  const expectedShuffler = shufflers[actualStep]?.validator;
   if (!expectedShuffler || expectedShuffler.toLowerCase() !== config.validatorAddress.toLowerCase()) {
     return; // Not our turn
   }
 
   const round = actualStep + 1;
-  log(`Shuffle: our turn (step ${round}/${epochMembers.length}) for table ${tableId} hand ${handId}`);
+  log(`Shuffle: our turn (step ${round}/${shufflers.length}) for table ${tableId} hand ${handId}`);
 
   const pkHandRaw = dealerHand.pkHand ?? dealerHand.pk_hand;
   if (!pkHandRaw) throw new Error("dealer hand missing pkHand");

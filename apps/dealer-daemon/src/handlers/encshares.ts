@@ -77,7 +77,7 @@ export async function handleEncShares(args: {
   const { client, config, stateStore, tableId, handId, epochId } = args;
 
   const secrets = await stateStore.load(epochId);
-  if (!secrets || secrets.secretShare === "0") {
+  if (!secrets || secrets.secretShare === null) {
     log(`EncShares: no secrets for epoch ${epochId}`);
     return;
   }
@@ -137,6 +137,7 @@ export async function handleEncShares(args: {
   const deck = decodeDeck(rawDeck);
 
   const seats = Array.isArray(table.seats) ? table.seats : [];
+  let failed = 0;
 
   for (let seat = 0; seat < 9; seat++) {
     const seatData = seats[seat];
@@ -199,11 +200,13 @@ export async function handleEncShares(args: {
           log(`EncShares: hand already advanced past shuffle, done`);
           return;
         } else {
-          throw err;
+          // Every share has the same deadline, so one that fails must not hold back the rest.
+          failed++;
+          log(`EncShares: share for seat ${seat} card ${cardIdx} pos ${pos} failed: ${msg}`);
         }
       }
     }
   }
 
-  logProgress(`EncShares: all shares submitted for table ${tableId} hand ${handId}`);
+  if (failed === 0) logProgress(`EncShares: all shares submitted for table ${tableId} hand ${handId}`);
 }

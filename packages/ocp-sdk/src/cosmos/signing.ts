@@ -8,6 +8,7 @@ import { connectComet, type CometClient } from "@cosmjs/tendermint-rpc";
 import { TxRaw } from "cosmjs-types/cosmos/tx/v1beta1/tx.js";
 
 import { answerBy, type BlockSource, CONFIRM_LIMITS, confirmByBlockScan, OcpTxError, realClock } from "./confirm.js";
+import { nodeReadsOver, type NodeReads } from "./nodeReads.js";
 
 export type OcpCosmosSigningClient = {
   address: string;
@@ -21,7 +22,7 @@ export type OcpCosmosSigningClient = {
    * CONFIRM_LIMITS.maxWaitMs from the broadcast.
    */
   signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string) => Promise<DeliverTxResponse>;
-};
+} & NodeReads;
 
 export async function walletFromMnemonic(args: { mnemonic: string; prefix: string }): Promise<DirectSecp256k1HdWallet> {
   return DirectSecp256k1HdWallet.fromMnemonic(args.mnemonic, { prefix: args.prefix });
@@ -179,5 +180,5 @@ export async function connectOcpCosmosSigningClient(args: {
     return confirmByBlockScan(source, { hash, sentAtHeight, timeoutHeight }, realClock, deadline);
   }
 
-  return { address, client, signAndBroadcastAuto };
+  return { address, client, signAndBroadcastAuto, ...nodeReadsOver(() => comet) };
 }

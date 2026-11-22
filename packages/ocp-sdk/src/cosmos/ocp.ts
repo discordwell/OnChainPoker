@@ -1,5 +1,6 @@
 import { Registry } from "@cosmjs/proto-signing";
 import { defaultRegistryTypes } from "@cosmjs/stargate";
+import { MsgUnjail } from "cosmjs-types/cosmos/slashing/v1beta1/tx.js";
 
 import {
   MsgAct,
@@ -62,6 +63,9 @@ export const OCP_TYPE_URLS = {
     openBeaconWindow: "/onchainpoker.dealer.v1.MsgOpenBeaconWindow",
     beaconCommit: "/onchainpoker.dealer.v1.MsgBeaconCommit",
     beaconReveal: "/onchainpoker.dealer.v1.MsgBeaconReveal"
+  },
+  slashing: {
+    unjail: "/cosmos.slashing.v1beta1.MsgUnjail"
   }
 } as const;
 
@@ -100,6 +104,9 @@ export function createOcpRegistry(): Registry {
   registry.register(OCP_TYPE_URLS.dealer.openBeaconWindow, MsgOpenBeaconWindow);
   registry.register(OCP_TYPE_URLS.dealer.beaconCommit, MsgBeaconCommit);
   registry.register(OCP_TYPE_URLS.dealer.beaconReveal, MsgBeaconReveal);
+
+  // The stargate defaults carry no x/slashing message.
+  registry.register(OCP_TYPE_URLS.slashing.unjail, MsgUnjail);
 
   return registry;
 }

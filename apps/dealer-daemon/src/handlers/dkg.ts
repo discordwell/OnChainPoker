@@ -1,26 +1,35 @@
+// The DKG's secret arithmetic and its bookkeeping on disk: the polynomial, the shares I owe, the
+// shares I am owed, and my share of the epoch key.
+//
+// Nothing here takes a chain client, so nothing here can send a transaction or read the chain. It
+// is handed the DKG or the epoch as the SDK parsed it. When to do each thing is decided in
+// rotation.ts.
+
 import { randomBytes } from "node:crypto";
 import {
   CURVE_ORDER,
-  chaumPedersenProve,
   decryptShareScalar,
   dkgEncShareProve,
-  encodeChaumPedersenProof,
   encodeDkgEncShareProof,
   encryptShareScalar,
+  evalCommitments,
   groupElementFromBytes,
   groupElementToBytes,
   mulBase,
   mulPoint,
   pointAdd,
   pointEq,
-  pointSub,
+  scalarFromBytes,
   scalarFromBytesModOrder,
   scalarToBytes,
 } from "@onchainpoker/ocp-crypto";
-import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
-import type { EpochStateStore } from "../state.js";
-import type { DealerDaemonConfig } from "../config.js";
-import { log, logProgress } from "../log.js";
+import type { DealerDkg, DealerEpoch, DealerMember, Valoper } from "@onchainpoker/ocp-sdk/cosmos";
+import { logProgress } from "../log.js";
+import type { KeygenFacts, ShareStatus } from "../rotation.js";
+import { SecretsUnreadableError, type EpochSecrets, type EpochStateStore } from "../state.js";
+
+/** The two things this file needs of the secrets directory. A read-only caller passes a save that does nothing. */
+export type SecretsStore = Pick<EpochStateStore, "load" | "save">;
 
 function modQ(n: bigint): bigint {
   const x = n % CURVE_ORDER;
@@ -44,567 +53,253 @@ function nonzeroScalar(): bigint {
   }
 }
 
-export async function handleDkgCommit(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-  stateStore: EpochStateStore;
-  epochId: number;
-  members: Array<{ validator: string; index: number }>;
-}): Promise<void> {
-  const { client, config, stateStore, epochId, members } = args;
+const scalarOf = (hex: string): bigint => BigInt(`0x${hex}`);
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => a.length === b.length && a.every((x, i) => x === b[i]);
 
-  // Check if we already committed for this epoch
-  if (stateStore.has(epochId)) {
-    log(`DKG: already have secrets for epoch ${epochId}, skipping commit`);
-    return;
-  }
+declare const onDisk: unique symbol;
 
-  const myMember = members.find(
-    (m) => m.validator.toLowerCase() === config.validatorAddress.toLowerCase()
-  );
-  if (!myMember) {
-    log(`DKG: not a member for epoch ${epochId}, skipping`);
-    return;
-  }
+/**
+ * What goes into MsgDkgCommit. Only prepareCommit makes one, and it makes one only after the
+ * secrets behind it are durable. A commit that is not on disk has no type, so it cannot be sent.
+ */
+export type StoredCommit = {
+  readonly commitments: Uint8Array[];
+  readonly ephemeralPubkey: Uint8Array;
+  readonly [onDisk]: true;
+};
 
-  // Generate polynomial of degree (threshold - 1)
-  const polyCoeffs: bigint[] = Array.from({ length: config.threshold }, () => nonzeroScalar());
-  const commitments = polyCoeffs.map((c) => groupElementToBytes(mulBase(c)));
-
-  // DKG v2: fresh per-epoch ElGamal keypair for encrypted-share receipt.
-  // skR stays local to the daemon; pkR is published with the commit so other
-  // dealers can encrypt shares destined for us. Rotating per epoch preserves
-  // forward secrecy if a later epoch's keys are compromised.
-  const ephemeralSk = nonzeroScalar();
-  const ephemeralPk = groupElementToBytes(mulBase(ephemeralSk));
-
-  log(`DKG: submitting commit for epoch ${epochId}, validator index ${myMember.index}`);
-
-  await client.dealerDkgCommit({
-    dealer: config.validatorAddress,
-    epochId,
-    commitments,
-    ephemeralPubkey: ephemeralPk,
-  });
-
-  // Store the polynomial + ephemeral secret now; we'll compute the aggregated
-  // share after encrypted shares / reveals arrive.
-  await stateStore.save({
-    epochId,
-    validatorIndex: myMember.index,
-    polyCoeffs: polyCoeffs.map((c) => c.toString(16)),
-    secretShare: "0", // placeholder until aggregation
-    ephemeralSk: ephemeralSk.toString(16),
-  });
-
-  logProgress(`DKG: commit submitted for epoch ${epochId}`);
-}
-
-function decodeOnchainBytes(raw: unknown): Uint8Array | undefined {
-  if (raw == null) return undefined;
-  if (raw instanceof Uint8Array) return raw;
-  if (Array.isArray(raw)) return Uint8Array.from(raw.map((x) => Number(x)));
-  if (typeof raw === "object" && (raw as any).length != null) {
-    return new Uint8Array(Object.values(raw as Record<string, number>));
-  }
-  if (typeof raw === "string") {
-    const s = raw.startsWith("0x") ? raw.slice(2) : raw;
-    if (/^[0-9a-fA-F]+$/.test(s) && s.length % 2 === 0) {
-      const out = new Uint8Array(s.length / 2);
-      for (let i = 0; i < out.length; i++) {
-        out[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-      }
-      return out;
-    }
-    const buf = Buffer.from(raw, "base64");
-    return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-  }
-  return undefined;
-}
-
-function evalPolyScalar(coeffs: bigint[], j: number): bigint {
-  return evalPoly(coeffs, BigInt(j));
+function publicHalf(secrets: EpochSecrets): { commitments: Uint8Array[]; ephemeralPubkey: Uint8Array } {
+  return {
+    commitments: secrets.polyCoeffs.map((c) => groupElementToBytes(mulBase(scalarOf(c)))),
+    ephemeralPubkey: groupElementToBytes(mulBase(scalarOf(secrets.ephemeralSk))),
+  };
 }
 
 /**
- * DKG v2: for every other committee member that has committed and published
- * an ephemeral pubkey, publish one encrypted share. Idempotent: skips pairs
- * already present in `dkg.encryptedShares`.
+ * The commit for this DKG, the same one every time it is called.
  *
- * Runs after `handleDkgCommit` (we need our own `polyCoeffs` to compute
- * `s = f(j)` for each recipient index `j`). Parallel with the legacy
- * "missing complaint → plaintext reveal" path; the chain accepts both and
- * aggregation prefers encrypted shares when available.
- */
-export async function handleDkgEncryptedShares(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-  stateStore: EpochStateStore;
-  epochId: number;
-  members: Array<{ validator: string; index: number; ephemeralPubkey?: Uint8Array }>;
-  dkg: any;
-}): Promise<void> {
-  const { client, config, stateStore, epochId, members, dkg } = args;
-
-  const secrets = await stateStore.load(epochId);
-  if (!secrets || !secrets.polyCoeffs?.length) return;
-
-  const myAddress = config.validatorAddress.toLowerCase();
-  const myMember = members.find((m) => m.validator.toLowerCase() === myAddress);
-  if (!myMember) return;
-
-  const polyCoeffs = secrets.polyCoeffs.map((c) => BigInt(`0x${c}`));
-  // Parse the dealer's Feldman commitments back to group elements.
-  const commits = Array.isArray(dkg.commits) ? dkg.commits : [];
-  const myCommit = commits.find(
-    (c: any) => String(c.dealer ?? "").toLowerCase() === myAddress
-  );
-  if (!myCommit) return; // We haven't committed yet.
-  const commitmentsBytes: Uint8Array[] = [];
-  for (const cb of myCommit.commitments ?? []) {
-    const b = decodeOnchainBytes(cb);
-    if (!b || b.length !== 32) return; // malformed; skip this cycle
-    commitmentsBytes.push(b);
-  }
-  const commitmentsPts = commitmentsBytes.map((b) => groupElementFromBytes(b));
-
-  // Index existing encrypted-shares we've already submitted so we don't re-submit.
-  const existing = new Set<string>();
-  for (const es of (Array.isArray(dkg.encryptedShares) ? dkg.encryptedShares : [])) {
-    const d = String(es.dealer ?? "").toLowerCase();
-    const j = Number(es.recipientIndex ?? es.recipient_index ?? 0) | 0;
-    if (d && j > 0) existing.add(`${d}:${j}`);
-  }
-
-  for (const recipient of members) {
-    if (recipient.validator.toLowerCase() === myAddress) continue;
-    const key = `${myAddress}:${recipient.index}`;
-    if (existing.has(key)) continue;
-
-    // Recipient must have published a valid ephemeral pubkey.
-    const pkRBytes = decodeOnchainBytes(recipient.ephemeralPubkey);
-    if (!pkRBytes || pkRBytes.length !== 32) continue;
-    let pkR;
-    try {
-      pkR = groupElementFromBytes(pkRBytes);
-    } catch {
-      continue;
-    }
-
-    // Build the encrypted share: ElGamal on the share-point s*G under pkR,
-    // plus the NIZK binding it to the Feldman commitments, plus the AEAD
-    // ciphertext carrying the scalar s.
-    const s = evalPolyScalar(polyCoeffs, recipient.index);
-    const r = nonzeroScalar();
-    const u = mulBase(r);                    // U = r*G
-    const v = pointAdd(mulBase(s), mulPoint(pkR, r)); // V = s*G + r*pkR
-
-    const proof = dkgEncShareProve({
-      commitments: commitmentsPts,
-      j: recipient.index,
-      pkR,
-      u,
-      v,
-      s,
-      r,
-      ws: nonzeroScalar(),
-      wr: nonzeroScalar(),
-    });
-    const proofBytes = encodeDkgEncShareProof(proof);
-    const scalarCt = encryptShareScalar({ pkR, r, s, proofBytes });
-
-    try {
-      await client.dealerDkgEncryptedShare({
-        dealer: config.validatorAddress,
-        epochId,
-        recipientIndex: recipient.index,
-        u: groupElementToBytes(u),
-        v: groupElementToBytes(v),
-        proof: proofBytes,
-        scalarCt,
-      });
-      logProgress(`DKG: submitted encrypted share for recipient index ${recipient.index}`);
-    } catch (err) {
-      const msg = String((err as Error)?.message ?? err);
-      if (!msg.includes("already") && !msg.includes("deadline")) {
-        log(`DKG: encrypted share for idx=${recipient.index} failed: ${msg}`);
-      }
-    }
-  }
-}
-
-/**
- * DKG v2 aggregation: decrypt encrypted shares destined for us and return
- * their scalars (keyed by dealer address). Recipient-side verification:
- *   1. AEAD decrypts successfully.
- *   2. s*G matches v - skR*u (i.e., scalar is consistent with the
- *      NIZK-verified share point).
+ * The first call draws `dkg.threshold` coefficients and an ephemeral key, saves them durably, and
+ * only then returns. Later calls load that file and return the same commitments, so a commit that
+ * was sent and lost, or sent and unconfirmed, is sent again byte for byte, and whichever copy lands
+ * matches the disk.
  *
- * When either check fails, the dealer is malicious: the NIZK they posted
- * proves the share *point* is correct, but a wrong scalar_ct can still ship.
- * We file MsgDkgComplaintAEADBad with dh = skR*U plus a Chaum-Pedersen DLEQ
- * proof so the chain can verify our claim without us revealing skR. The
- * chain then independently runs AES-GCM open and slashes the dealer (or, if
- * the chain finds the share is actually valid, slashes us for griefing).
+ * A file for this epoch id with another coefficient count or member index is left over from
+ * something that was not this DKG (the chain never reuses an epoch id). The caller asks for a
+ * commit only while its commit is not on chain, so nothing depends on that file yet: it is
+ * replaced. A file that cannot be read is not replaced: load() throws.
  */
-async function collectEncryptedShareScalars(args: {
-  client: OcpCosmosClient;
-  stateStore: EpochStateStore;
-  config: DealerDaemonConfig;
-  epochId: number;
-  dkg: any;
-}): Promise<Map<string, bigint>> {
-  const { client, stateStore, config, epochId, dkg } = args;
-  const out = new Map<string, bigint>();
+export async function prepareCommit(stateStore: SecretsStore, dkg: DealerDkg, me: Valoper): Promise<StoredCommit> {
+  const member = dkg.members.find((m) => m.validator === me);
+  if (!member) throw new Error(`${me} is not a member of the DKG for epoch ${dkg.epochId}`);
 
-  const secrets = await stateStore.load(epochId);
-  if (!secrets?.ephemeralSk) return out;
-
-  const skR = BigInt(`0x${secrets.ephemeralSk}`);
-  const myAddress = config.validatorAddress.toLowerCase();
-  const myIndex = secrets.validatorIndex;
-
-  // Idempotency: skip dealers we already complained about.
-  const existingComplaints = Array.isArray(dkg.complaints) ? dkg.complaints : [];
-  const myAEADComplaints = new Set(
-    existingComplaints
-      .filter(
-        (c: any) =>
-          String(c.complainer ?? "").toLowerCase() === myAddress &&
-          (String(c.kind ?? "") === "aead-bad" ||
-            String(c.kind ?? "") === "aead-spurious")
-      )
-      .map((c: any) => String(c.dealer ?? "").toLowerCase())
-  );
-
-  const shares = Array.isArray(dkg.encryptedShares) ? dkg.encryptedShares : [];
-  for (const es of shares) {
-    const dealerAddrCanonical = String(es.dealer ?? "");
-    const dealerAddr = dealerAddrCanonical.toLowerCase();
-    if (dealerAddr === myAddress) continue;
-    const recipientIndex = Number(es.recipientIndex ?? es.recipient_index ?? 0) | 0;
-    if (recipientIndex !== myIndex) continue;
-
-    const uBytes = decodeOnchainBytes(es.u);
-    const vBytes = decodeOnchainBytes(es.v);
-    const proofBytes = decodeOnchainBytes(es.proof);
-    const ct = decodeOnchainBytes(es.scalarCt ?? es.scalar_ct);
-    if (!uBytes || !vBytes || !proofBytes || !ct) continue;
-
-    let u: ReturnType<typeof groupElementFromBytes>;
-    let v: ReturnType<typeof groupElementFromBytes>;
-    try {
-      u = groupElementFromBytes(uBytes);
-      v = groupElementFromBytes(vBytes);
-    } catch (err) {
-      // Stored point bytes are malformed — chain would have rejected on
-      // submit, so don't complain.
-      log(`DKG: encrypted share from ${dealerAddr} has non-canonical u/v — skipping`);
-      continue;
-    }
-
-    let s: bigint | null = null;
-    let aeadFailed = false;
-    try {
-      s = decryptShareScalar({ skR, u, proofBytes, ct });
-    } catch (err) {
-      aeadFailed = true;
-      const msg = String((err as Error)?.message ?? err);
-      log(`DKG: failed to decrypt encrypted share from ${dealerAddr}: ${msg}`);
-    }
-
-    let consistencyFailed = false;
-    if (!aeadFailed && s !== null) {
-      const sharePointFromScalar = mulBase(s);
-      const sharePointFromElGamal = pointSub(v, mulPoint(u, skR));
-      if (!pointEq(sharePointFromScalar, sharePointFromElGamal)) {
-        consistencyFailed = true;
-        log(`DKG: encrypted share from ${dealerAddr} fails s*G == V - skR*U`);
-      }
-    }
-
-    if (aeadFailed || consistencyFailed) {
-      if (myAEADComplaints.has(dealerAddr)) continue;
-      myAEADComplaints.add(dealerAddr);
-      try {
-        const dh = mulPoint(u, skR);
-        const proof = chaumPedersenProve({
-          y: mulBase(skR), // y = skR*G = pkR
-          c1: u,
-          d: dh, // d = skR*u
-          x: skR,
-          w: nonzeroScalar(),
-        });
-        await client.dealerDkgComplaintAEADBad({
-          complainer: config.validatorAddress,
-          epochId,
-          dealer: dealerAddrCanonical || dealerAddr,
-          recipientIndex: myIndex,
-          dhShare: groupElementToBytes(dh),
-          dleqProof: encodeChaumPedersenProof(proof),
-        });
-        logProgress(`DKG: filed AEAD-bad complaint against ${dealerAddr}`);
-      } catch (err) {
-        const msg = String((err as Error)?.message ?? err);
-        log(`DKG: failed to file AEAD-bad complaint against ${dealerAddr}: ${msg}`);
-      }
-      continue;
-    }
-
-    if (s !== null) out.set(dealerAddr, s);
+  let secrets = await stateStore.load(dkg.epochId);
+  const fits = secrets !== null && secrets.polyCoeffs.length === dkg.threshold && secrets.validatorIndex === member.index && secrets.ephemeralSk !== "";
+  if (secrets === null || !fits) {
+    secrets = {
+      epochId: dkg.epochId,
+      validatorIndex: member.index,
+      polyCoeffs: Array.from({ length: dkg.threshold }, () => nonzeroScalar().toString(16)),
+      ephemeralSk: nonzeroScalar().toString(16),
+      received: {},
+      secretShare: null,
+    };
+    await stateStore.save(secrets);
+    logProgress(`DKG: secrets for epoch ${dkg.epochId} written to disk (index ${member.index})`);
+  } else if (Object.keys(secrets.received).length > 0 || secrets.secretShare !== null) {
+    // No share of this DKG can have reached me before my commit landed, so these came from elsewhere.
+    secrets = { ...secrets, received: {}, secretShare: null };
+    await stateStore.save(secrets);
   }
-  return out;
+  return publicHalf(secrets) as StoredCommit;
 }
 
-/**
- * File "missing" complaints for all other committee members.
- * In an on-chain-only DKG (no off-chain channels), every validator files
- * a complaint against every other validator to force on-chain share reveals.
- */
-export async function handleDkgComplaints(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-  epochId: number;
-  members: Array<{ validator: string; index: number }>;
-  dkg: any;
-}): Promise<void> {
-  const { client, config, epochId, members, dkg } = args;
-
-  const myAddress = config.validatorAddress.toLowerCase();
-
-  // Only file complaints if we've already committed
-  const commits = Array.isArray(dkg.commits) ? dkg.commits : [];
-  const myCommit = commits.find(
-    (c: any) => String(c.dealer ?? "").toLowerCase() === myAddress
-  );
-  if (!myCommit) return;
-
-  // Check existing complaints from us
-  const complaints = Array.isArray(dkg.complaints) ? dkg.complaints : [];
-  const myComplaints = new Set(
-    complaints
-      .filter((c: any) => String(c.complainer ?? "").toLowerCase() === myAddress)
-      .map((c: any) => String(c.dealer ?? "").toLowerCase())
-  );
-
-  // Only file complaints against members who have actually committed
-  const committedAddrs = new Set(
-    commits.map((c: any) => String(c.dealer ?? "").toLowerCase())
-  );
-
-  for (const member of members) {
-    const memberAddr = member.validator.toLowerCase();
-    if (memberAddr === myAddress) continue;
-    if (myComplaints.has(memberAddr)) continue;
-    if (!committedAddrs.has(memberAddr)) continue;
-
-    try {
-      await client.dealerDkgComplaintMissing({
-        complainer: config.validatorAddress,
-        epochId,
-        dealer: member.validator,
-      });
-      logProgress(`DKG: filed missing complaint against ${member.validator}`);
-    } catch (err) {
-      const msg = String((err as Error)?.message ?? err);
-      if (!msg.includes("already") && !msg.includes("deadline") && !msg.includes("too early")) {
-        log(`DKG: complaint against ${member.validator} failed: ${msg}`);
-      }
-    }
-  }
+async function committedSecrets(stateStore: SecretsStore, dkg: DealerDkg): Promise<EpochSecrets> {
+  const secrets = await stateStore.load(dkg.epochId);
+  if (!secrets) throw new Error(`no secrets on disk for the DKG for epoch ${dkg.epochId}`);
+  return secrets;
 }
 
-/**
- * Reveal shares in response to complaints targeting us.
- * When another validator files a "missing" complaint against us,
- * we must reveal our polynomial evaluation at their index.
- */
-export async function handleDkgReveals(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-  stateStore: EpochStateStore;
-  epochId: number;
-  members: Array<{ validator: string; index: number }>;
-  dkg: any;
-}): Promise<void> {
-  const { client, config, stateStore, epochId, members, dkg } = args;
+/** The fields of MsgDkgEncryptedShare for one recipient: ElGamal of f(j)G, its proof, and the AEAD of f(j). */
+export async function encryptShareFor(
+  stateStore: SecretsStore,
+  dkg: DealerDkg,
+  recipientIndex: number,
+): Promise<{ recipientIndex: number; u: Uint8Array; v: Uint8Array; proof: Uint8Array; scalarCt: Uint8Array }> {
+  const secrets = await committedSecrets(stateStore, dkg);
+  const recipient = dkg.members.find((m) => m.index === recipientIndex);
+  if (!recipient?.ephemeralPubkey) throw new Error(`member ${recipientIndex} of the DKG for epoch ${dkg.epochId} has published no ephemeral key`);
 
-  const myAddress = config.validatorAddress.toLowerCase();
-
-  const secrets = await stateStore.load(epochId);
-  if (!secrets) return; // haven't committed
-
-  const polyCoeffs = secrets.polyCoeffs.map((c) => BigInt(`0x${c}`));
-
-  // Find complaints against us
-  const complaints = Array.isArray(dkg.complaints) ? dkg.complaints : [];
-  const complaintsAgainstUs = complaints.filter(
-    (c: any) => String(c.dealer ?? "").toLowerCase() === myAddress
+  const coeffs = secrets.polyCoeffs.map(scalarOf);
+  const pkR = groupElementFromBytes(recipient.ephemeralPubkey);
+  const s = evalPoly(coeffs, BigInt(recipientIndex));
+  // Fresh randomness on every call is fine: the chain keeps the first share per dealer and recipient.
+  const r = nonzeroScalar();
+  const u = mulBase(r);
+  const v = pointAdd(mulBase(s), mulPoint(pkR, r));
+  const proof = encodeDkgEncShareProof(
+    dkgEncShareProve({ commitments: coeffs.map(mulBase), j: recipientIndex, pkR, u, v, s, r, ws: nonzeroScalar(), wr: nonzeroScalar() }),
   );
-
-  if (complaintsAgainstUs.length === 0) return;
-
-  // Check existing reveals from us
-  const reveals = Array.isArray(dkg.reveals) ? dkg.reveals : [];
-  const myReveals = new Set(
-    reveals
-      .filter((r: any) => String(r.dealer ?? "").toLowerCase() === myAddress)
-      .map((r: any) => String(r.to ?? "").toLowerCase())
-  );
-
-  for (const complaint of complaintsAgainstUs) {
-    const complainerId = String(complaint.complainer ?? "").toLowerCase();
-    if (myReveals.has(complainerId)) continue;
-
-    // Find complainer's index
-    const complainerMember = members.find(
-      (m) => m.validator.toLowerCase() === complainerId
-    );
-    if (!complainerMember) continue;
-
-    // Evaluate our polynomial at the complainer's index
-    const share = evalPoly(polyCoeffs, BigInt(complainerMember.index));
-    const shareBytes = scalarToBytes(share);
-
-    try {
-      await client.dealerDkgShareReveal({
-        dealer: config.validatorAddress,
-        epochId,
-        to: complaint.complainer,
-        share: shareBytes,
-      });
-      logProgress(`DKG: revealed share for ${complaint.complainer} (index ${complainerMember.index})`);
-    } catch (err) {
-      const msg = String((err as Error)?.message ?? err);
-      if (!msg.includes("already") && !msg.includes("deadline") && !msg.includes("too early")) {
-        log(`DKG: share reveal for ${complaint.complainer} failed: ${msg}`);
-      }
-    }
-  }
+  return {
+    recipientIndex,
+    u: groupElementToBytes(u),
+    v: groupElementToBytes(v),
+    proof,
+    scalarCt: encryptShareScalar({ pkR, r, s, proofBytes: proof }),
+  };
 }
 
-/**
- * Compute the aggregated secret share from own polynomial self-evaluation
- * plus revealed shares from other dealers. Must be called BEFORE FinalizeEpoch
- * since finalization clears the DKG state (including reveals).
- */
-export async function handleDkgAggregate(args: {
-  client: OcpCosmosClient;
-  stateStore: EpochStateStore;
-  config: DealerDaemonConfig;
-  epochId: number;
-  members: Array<{ validator: string; index: number }>;
-  dkg: any;
-}): Promise<boolean> {
-  const { client, stateStore, config, epochId, members, dkg } = args;
+/** The 32-byte f(j) for the member `to`, to answer that member's complaint in the clear. */
+export async function plainShareFor(stateStore: SecretsStore, dkg: DealerDkg, to: Valoper): Promise<Uint8Array> {
+  const secrets = await committedSecrets(stateStore, dkg);
+  const recipient = dkg.members.find((m) => m.validator === to);
+  if (!recipient) throw new Error(`${to} is not a member of the DKG for epoch ${dkg.epochId}`);
+  return scalarToBytes(evalPoly(secrets.polyCoeffs.map(scalarOf), BigInt(recipient.index)));
+}
 
-  const secrets = await stateStore.load(epochId);
-  if (!secrets) return false;
-  if (secrets.secretShare !== "0") return true; // already computed
-
-  const myAddress = config.validatorAddress.toLowerCase();
-  const myMember = members.find(
-    (m) => m.validator.toLowerCase() === myAddress
-  );
-  if (!myMember) return false;
-
-  const polyCoeffs = secrets.polyCoeffs.map((c) => BigInt(`0x${c}`));
-
-  // Start with self-evaluation
-  let aggregated = evalPoly(polyCoeffs, BigInt(myMember.index));
-
-  const slashed = new Set(
-    (Array.isArray(dkg.slashed) ? dkg.slashed : []).map((s: string) =>
-      String(s).toLowerCase()
-    )
-  );
-
-  // DKG v2: prefer scalars recovered from encrypted shares (AEAD-decrypted
-  // locally via our ephemeralSk). Keys are lowercased dealer addresses.
-  const encScalars = await collectEncryptedShareScalars({ client, stateStore, config, epochId, dkg });
-
-  // Track which dealers we've counted so v1 reveals don't double-count a
-  // dealer who also published an encrypted share.
-  const counted = new Set<string>();
-  for (const [dealerAddr, s] of encScalars) {
-    if (slashed.has(dealerAddr)) continue;
-    aggregated = modQ(aggregated + s);
-    counted.add(dealerAddr);
-  }
-
-  // Legacy v1 path: collect reveals where other dealers revealed their share
-  // to us via the plaintext MsgDkgShareReveal path. Fills in gaps for dealers
-  // that haven't migrated to the encrypted-share flow yet.
-  const reveals = Array.isArray(dkg.reveals) ? dkg.reveals : [];
-  for (const reveal of reveals) {
-    const dealerAddr = String(reveal.dealer ?? "").toLowerCase();
-    const toAddr = String(reveal.to ?? "").toLowerCase();
-    if (toAddr !== myAddress) continue;
-    if (dealerAddr === myAddress) continue;
-    if (slashed.has(dealerAddr)) continue;
-    if (counted.has(dealerAddr)) continue; // encrypted share already contributed
-
-    const shareBytes = reveal.share;
-    if (!shareBytes) continue;
-
-    let shareBigint: bigint;
+/** A dealer's share for me as the DKG record holds it: the encrypted one if it opens, else its plaintext reveal. */
+function sharesOffered(dkg: DealerDkg, dealer: Valoper, me: DealerMember, ephemeralSk: string): bigint[] {
+  const offered: bigint[] = [];
+  const encrypted = dkg.encryptedShares.find((e) => e.dealer === dealer && e.recipientIndex === me.index);
+  if (encrypted && ephemeralSk !== "") {
     try {
-      if (shareBytes instanceof Uint8Array || (typeof shareBytes === "object" && shareBytes.length)) {
-        const buf = shareBytes instanceof Uint8Array ? shareBytes : new Uint8Array(Object.values(shareBytes));
-        let x = 0n;
-        for (let i = buf.length - 1; i >= 0; i--) {
-          x = (x << 8n) + BigInt(buf[i]!);
-        }
-        shareBigint = modQ(x);
-      } else if (typeof shareBytes === "string") {
-        const hex = shareBytes.startsWith("0x") ? shareBytes.slice(2) : shareBytes;
-        if (/^[0-9a-fA-F]+$/.test(hex) && hex.length === 64) {
-          const buf = new Uint8Array(32);
-          for (let i = 0; i < 32; i++) {
-            buf[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-          }
-          let x = 0n;
-          for (let i = buf.length - 1; i >= 0; i--) {
-            x = (x << 8n) + BigInt(buf[i]!);
-          }
-          shareBigint = modQ(x);
-        } else {
-          const raw = Buffer.from(shareBytes, "base64");
-          let x = 0n;
-          for (let i = raw.length - 1; i >= 0; i--) {
-            x = (x << 8n) + BigInt(raw[i]!);
-          }
-          shareBigint = modQ(x);
-        }
-      } else {
-        continue;
-      }
+      offered.push(decryptShareScalar({ skR: scalarOf(ephemeralSk), u: groupElementFromBytes(encrypted.u), proofBytes: encrypted.proof, ct: encrypted.scalarCt }));
     } catch {
-      log(`DKG: failed to decode reveal share from ${dealerAddr}`);
-      continue;
+      // It does not open. The dealer is asked for it again with a "missing" complaint, which cannot slash me.
     }
-
-    aggregated = modQ(aggregated + shareBigint);
-    counted.add(dealerAddr);
   }
-
-  const expectedOtherMembers = members.filter(
-    (m) => m.validator.toLowerCase() !== myAddress && !slashed.has(m.validator.toLowerCase())
-  ).length;
-
-  if (counted.size < expectedOtherMembers) {
-    log(
-      `DKG: have ${counted.size}/${expectedOtherMembers} contributions for epoch ${epochId} (${encScalars.size} encrypted + ${counted.size - encScalars.size} reveals), waiting for more`
-    );
-    return false;
+  const revealed = dkg.reveals.find((r) => r.dealer === dealer && r.to === me.validator);
+  if (revealed) {
+    try {
+      offered.push(scalarFromBytes(revealed.share));
+    } catch {
+      // Not a canonical scalar. The chain refuses such a reveal, so this is not expected.
+    }
   }
+  return offered;
+}
 
-  const updated = { ...secrets, secretShare: aggregated.toString(16) };
-  await stateStore.save(updated);
-  logProgress(
-    `DKG: computed aggregated secret share for epoch ${epochId} from ${counted.size + 1} contributions (${encScalars.size} encrypted + ${counted.size - encScalars.size} plaintext reveals + 1 self)`
+/**
+ * Brings the disk up to date with the DKG and says what I hold.
+ *
+ * For each dealer that committed, other than me, whose share is not yet on disk: its encrypted
+ * share for my index if it opens, else its plaintext reveal to me. A share is stored only if
+ * share * G equals that dealer's commitments evaluated at my index, which is the chain's own check.
+ * A share that fails is not stored and the dealer is not in `holds`.
+ *
+ * Writes only when something new arrived. Safe to call every poll and after a restart.
+ */
+export async function syncShares(stateStore: SecretsStore, dkg: DealerDkg, me: Valoper): Promise<KeygenFacts> {
+  let secrets: EpochSecrets | null;
+  try {
+    secrets = await stateStore.load(dkg.epochId);
+  } catch (err) {
+    if (err instanceof SecretsUnreadableError) return { disk: "unreadable", reason: err.reason };
+    throw err;
+  }
+  const member = dkg.members.find((m) => m.validator === me);
+  const myCommit = dkg.commits.find((c) => c.dealer === me);
+  if (!myCommit) return { disk: "ok", commitMatchesDisk: null, holds: new Set() };
+  if (!secrets || !member?.ephemeralPubkey || secrets.ephemeralSk === "") return { disk: "ok", commitMatchesDisk: false, holds: new Set() };
+
+  const mine = publicHalf(secrets);
+  const commitMatchesDisk =
+    mine.commitments.length === myCommit.commitments.length &&
+    mine.commitments.every((c, i) => sameBytes(c, myCommit.commitments[i]!)) &&
+    sameBytes(mine.ephemeralPubkey, member.ephemeralPubkey);
+  if (!commitMatchesDisk) return { disk: "ok", commitMatchesDisk: false, holds: new Set() };
+
+  const received = { ...secrets.received };
+  let arrived = false;
+  for (const commit of dkg.commits) {
+    if (commit.dealer === me || received[commit.dealer] !== undefined) continue;
+    const expected = evalCommitments(commit.commitments.map(groupElementFromBytes), member.index);
+    const share = sharesOffered(dkg, commit.dealer, member, secrets.ephemeralSk).find((s) => pointEq(mulBase(s), expected));
+    if (share === undefined) continue;
+    received[commit.dealer] = share.toString(16);
+    arrived = true;
+  }
+  if (arrived) {
+    await stateStore.save({ ...secrets, received });
+    logProgress(`DKG: holding shares from ${Object.keys(received).length} of ${dkg.commits.length - 1} other dealers for epoch ${dkg.epochId}`);
+  }
+  return { disk: "ok", commitMatchesDisk: true, holds: new Set(Object.keys(received)) };
+}
+
+type Sum = { is: "ready"; share: bigint; dealers: number } | Extract<ShareStatus, { is: "missing" | "mismatch" }>;
+
+/**
+ * My share as the sum of f_d(my index) over the dealers the chain counted at finalize.
+ *
+ * The chain fixed my pub_share from the dealers that were not slashed at finalize. epoch.slashed
+ * starts as that list and then grows with every hand timeout, so a member slashed today may still
+ * be part of the key. Members that are not slashed certainly count. For slashed members whose share
+ * I hold, the chain's pub_share decides: the subset that makes share * G equal it is the one.
+ */
+function sumShares(secrets: EpochSecrets, epoch: DealerEpoch, member: DealerMember): Sum {
+  const others = epoch.members.filter((m) => m.validator !== member.validator).map((m) => m.validator);
+  const certain = others.filter((v) => !epoch.slashed.includes(v));
+  const missing = certain.filter((v) => secrets.received[v] === undefined);
+  if (missing.length > 0) return { is: "missing", from: missing };
+  if (!member.pubShare) return { is: "mismatch" };
+
+  const target = groupElementFromBytes(member.pubShare);
+  const base = certain.reduce(
+    (sum, v) => modQ(sum + scalarOf(secrets.received[v]!)),
+    evalPoly(secrets.polyCoeffs.map(scalarOf), BigInt(member.index)),
   );
-  return true;
+  const maybe = others.filter((v) => epoch.slashed.includes(v) && secrets.received[v] !== undefined).slice(0, 16);
+  for (let subset = 0; subset < 1 << maybe.length; subset++) {
+    const extra = maybe.filter((_, i) => subset & (1 << i));
+    const share = extra.reduce((sum, v) => modQ(sum + scalarOf(secrets.received[v]!)), base);
+    if (pointEq(mulBase(share), target)) return { is: "ready", share, dealers: 1 + certain.length + extra.length };
+  }
+  return { is: "mismatch" };
+}
+
+/**
+ * My share of a finalized epoch's key. Computed after finalize, not before, because finalize itself
+ * can remove a dealer. It is saved only if share * G equals my pub_share on chain: that one check
+ * shows that the disk, the decryption and the member order all agree with the chain before a hand
+ * depends on them.
+ *
+ * `readFinalDkg` is asked only when the shares on disk do not make the sum, which means this
+ * daemon was down between a share landing and finalize. It reads the DKG at a past height.
+ */
+export async function settleShare(
+  stateStore: SecretsStore,
+  epoch: DealerEpoch,
+  me: Valoper,
+  readFinalDkg: () => Promise<DealerDkg | null>,
+): Promise<ShareStatus> {
+  const member = epoch.members.find((m) => m.validator === me);
+  if (!member) return { is: "not-member" };
+  if (epoch.slashed.includes(me)) return { is: "slashed" };
+
+  try {
+    let secrets = await stateStore.load(epoch.epochId);
+    if (secrets?.secretShare != null) return { is: "ready" };
+
+    let sum = secrets ? sumShares(secrets, epoch, member) : null;
+    if (sum?.is !== "ready") {
+      const dkg = await readFinalDkg();
+      if (dkg) {
+        const held = Object.keys(secrets?.received ?? {}).length;
+        logProgress(`DKG: epoch ${epoch.epochId} finalized while I held shares from ${held} of ${epoch.members.length - 1} dealers; read the DKG at height ${dkg.revealDeadline}`);
+        await syncShares(stateStore, dkg, me);
+        secrets = await stateStore.load(epoch.epochId);
+        sum = secrets ? sumShares(secrets, epoch, member) : null;
+      }
+    }
+    if (!secrets || !sum) return { is: "missing", from: epoch.members.map((m) => m.validator).filter((v) => v !== me && !epoch.slashed.includes(v)) };
+    if (sum.is !== "ready") return sum;
+
+    await stateStore.save({ ...secrets, secretShare: sum.share.toString(16) });
+    logProgress(`DKG: share for epoch ${epoch.epochId} matches my on-chain pub_share (${sum.dealers} qualified dealers)`);
+    return { is: "ready" };
+  } catch (err) {
+    if (err instanceof SecretsUnreadableError) return { is: "unreadable", reason: err.reason };
+    throw err;
+  }
 }
 
 export { nonzeroScalar, modQ, evalPoly };

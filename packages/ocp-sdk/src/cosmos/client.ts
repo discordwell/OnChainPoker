@@ -1,7 +1,9 @@
 import type { EncodeObject } from "@cosmjs/proto-signing";
 import type { DeliverTxResponse, Event } from "@cosmjs/stargate";
 
+import { parseValidators, readDealerState, type DealerState, type ValidatorInfo } from "./dealerState.js";
 import type { CosmosLcdClient } from "./lcd.js";
+import type { NodeStatus } from "./nodeReads.js";
 import { OCP_TYPE_URLS } from "./ocp.js";
 import type { OcpCosmosSigningClient } from "./signing.js";
 
@@ -142,6 +144,19 @@ export type OcpCosmosClient = {
   getDealerDkg: () => Promise<any | null>;
   getDealerHand: (tableId: UintLike, handId: UintLike) => Promise<any | null>;
 
+  /**
+   * The dealer module at one height: next epoch id, epoch, DKG, beacon window.
+   * Rejects when the node cannot answer any part of it from one state. A null field means the
+   * chain answered "none". `at.height` reads a past height, if the node still holds that state.
+   */
+  getDealerState: (at?: { height: number }) => Promise<DealerState>;
+
+  // --- staking and node queries ---
+  /** Every validator with its bonded and jailed flags, its power and its consensus key. */
+  getValidators: () => Promise<ValidatorInfo[]>;
+  /** The connected node's own status: how far it is, and which consensus key it signs with. */
+  getNodeStatus: () => Promise<NodeStatus>;
+
   // --- poker tx helpers ---
   pokerCreateTable: (args: {
     creator?: string;
@@ -224,6 +239,10 @@ export type OcpCosmosClient = {
   dealerTimeout: (args: { caller?: string; tableId: UintLike; handId: UintLike; memo?: string }) => Promise<DeliverTxResponse>;
   dealerBeaconCommit: (args: { validator: string; epochId: UintLike; commit: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
   dealerBeaconReveal: (args: { validator: string; epochId: UintLike; salt: Uint8Array; memo?: string }) => Promise<DeliverTxResponse>;
+
+  // --- staking tx helpers ---
+  /** x/slashing MsgUnjail. The signer must be the operator of `validator`. */
+  slashingUnjail: (args: { validator: string; memo?: string }) => Promise<DeliverTxResponse>;
 };
 
 export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
@@ -271,6 +290,18 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     const hid = toU64String(handId, "handId");
     const json = await c.getJson<any>(`/onchainpoker/dealer/v1/tables/${encodeURIComponent(tid)}/hands/${encodeURIComponent(hid)}`).catch(() => null);
     return json?.hand || null;
+  }
+
+  async function getDealerState(at?: { height: number }): Promise<DealerState> {
+    return readDealerState(signing.queryStore, at);
+  }
+
+  async function getValidators(): Promise<ValidatorInfo[]> {
+    return parseValidators(await ensureLcd().getJson<unknown>("/cosmos/staking/v1beta1/validators?pagination.limit=500"));
+  }
+
+  async function getNodeStatus(): Promise<NodeStatus> {
+    return signing.nodeStatus();
   }
 
   async function pokerCreateTable(a: {
@@ -664,6 +695,11 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     return signAndBroadcast([eo], a.memo);
   }
 
+  async function slashingUnjail(a: { validator: string; memo?: string }): Promise<DeliverTxResponse> {
+    const eo: EncodeObject = { typeUrl: OCP_TYPE_URLS.slashing.unjail, value: { validatorAddr: a.validator.trim() } };
+    return signAndBroadcast([eo], a.memo);
+  }
+
   return {
     signing,
     lcd,
@@ -674,6 +710,10 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     getDealerEpoch,
     getDealerDkg,
     getDealerHand,
+    getDealerState,
+
+    getValidators,
+    getNodeStatus,
 
     pokerCreateTable,
     pokerSit,
@@ -700,6 +740,8 @@ export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; l
     dealerFinalizeReveal,
     dealerTimeout,
     dealerBeaconCommit,
-    dealerBeaconReveal
+    dealerBeaconReveal,
+
+    slashingUnjail
   };
 }

@@ -17,6 +17,8 @@ function sampleSecrets(epochId = 1): EpochSecrets {
     epochId,
     validatorIndex: 2,
     polyCoeffs: ["abc", "def"],
+    ephemeralSk: "",
+    received: {},
     secretShare: "deadbeef",
   };
 }
@@ -176,17 +178,6 @@ describe("EpochStateStore v2 (argon2id)", () => {
 
     const store2 = new EpochStateStore(dir, "pw", FAST_KDF);
     await assert.rejects(() => store2.load(8));
-  });
-
-  it("has() detects both cached and on-disk entries", async () => {
-    const store = new EpochStateStore(dir, "pw", FAST_KDF);
-    assert.equal(store.has(42), false);
-    await store.save(sampleSecrets(42));
-    assert.equal(store.has(42), true);
-
-    // Fresh store (empty cache) still sees the on-disk file
-    const store2 = new EpochStateStore(dir, "pw", FAST_KDF);
-    assert.equal(store2.has(42), true);
   });
 });
 

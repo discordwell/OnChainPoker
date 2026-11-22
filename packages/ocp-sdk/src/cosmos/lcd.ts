@@ -25,7 +25,9 @@ function joinUrl(baseUrl: string, path: string): string {
   const basePath = u.pathname.replace(/\/+$/, "");
   const rel = String(path ?? "").trim();
   if (!rel.startsWith("/")) throw new Error(`LCD path must start with '/': ${rel}`);
-  u.pathname = `${basePath}${rel}`;
+  const query = rel.indexOf("?");
+  u.pathname = `${basePath}${query < 0 ? rel : rel.slice(0, query)}`;
+  u.search = query < 0 ? "" : rel.slice(query);
   return u.toString();
 }
 
