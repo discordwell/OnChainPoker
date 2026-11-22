@@ -138,12 +138,24 @@ scenario_main() {
   check_is 08 "ValidatorSlashed since the first block" 0 "$(ev_count ValidatorSlashed "$h0" "$(ev_scanned)")"
 
   # ---- the live chain's dead-epoch state, by the cheapest honest route ----
-  # What the 120 s stall did to hand 15164: no daemon delivered its hole-card shares.
-  local deck hand
-  deck="$(ev_wait DeckFinalized "$(ev_scanned)" "$HAND_BLOCKS")" || die "no hand reached DeckFinalized"
+  # What the 120 s stall did to hand 15164: no daemon delivered its hole-card shares. The daemons
+  # send those shares into the block that makes the deck final, so killing them at DeckFinalized is
+  # too late: each one reaches its node through a proxy that loses them.
+  local deck hand from i port
+  for i in 0 1 2; do
+    port=$((BASE_PORT + NET_INDEX * 100 + 91 + i))
+    node "$LIVENESS_DIR/drop-tx-proxy.mjs" --listen "$port" --upstream "$(rpc_url "$i")" \
+      --type /onchainpoker.dealer.v1.MsgSubmitEncShare >"$NET/logs/proxy-$i.log" 2>&1 &
+    echo $! >"$PIDS/$NET_NAME.proxy$i"
+    daemon_stop "$i"
+    daemon_start "$i" "DEALER_COSMOS_RPC_URL=http://127.0.0.1:$port"
+  done
+  from="$(ev_scanned)"
+  deck="$(ev_wait DeckFinalized $((from + 2)) "$HAND_BLOCKS")" || die "no hand reached DeckFinalized"
   stop_daemons KILL
+  for i in 0 1 2; do proc_stop "proxy$i"; done
   hand="$(ev_attr "$deck" handId)"
-  say "daemons killed at DeckFinalized of hand $hand; waiting out the 120 s dealer deadline"
+  say "hole-card shares lost and daemons killed at DeckFinalized of hand $hand; waiting out the 120 s dealer deadline"
   wait_chain_seconds 125
   cli_tx 0 faucet dealer timeout --table-id 1 --hand-id "$hand" >/dev/null
   ev_sync "$(chain_height)"
