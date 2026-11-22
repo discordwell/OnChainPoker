@@ -123,6 +123,8 @@ describe("three daemons rotate a dead epoch, end to end", () => {
     // Nothing that only slashes was ever sent, accepted or not.
     const never = [MSG.dkgTimeout, MSG.dkgComplaintAEADBad, MSG.dkgComplaintInvalid, MSG.openBeaconWindow];
     assert.deepEqual(f.chain.node.sent.filter((m) => never.includes(m.typeUrl)), []);
+    // The node simulates each message at the height it is sent at. None was sent a block early.
+    assert.deepEqual(f.chain.node.sent.filter((m) => !f.chain.accepted.includes(m)).map((m) => m.typeUrl), []);
 
     await assertEveryShareMatches(f);
     assert.equal(lines.filter((l) => /share for epoch 44 matches my on-chain pub_share \(3 qualified dealers\)/.test(l)).length, 3);

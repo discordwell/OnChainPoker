@@ -125,7 +125,7 @@ describe("the epoch the daemon works on is the chain's next epoch id", () => {
 
   it("BeginEpoch carries the next epoch id (44), not the current epoch plus one (43) and not 0", () => {
     const ready = { ...LIVE_WINDOW, committed: ALL, revealed: ALL };
-    const d = decide(liveAt(1_536_568, ready), me(A), memory());
+    const d = decide(liveAt(1_536_569, ready), me(A), memory());
     assert.deepEqual(d.action, { do: "beginEpoch", epochId: 44, committeeSize: 3, threshold: 2 });
   });
 });
@@ -171,6 +171,7 @@ describe("an epoch that cannot deal is replaced, one that can is left alone", ()
 
 describe("roll call: a DKG starts only when every bonded validator's daemon was just seen", () => {
   // Window 900..950..1000. The chain takes a commit at heights 900..950 and a reveal at 951..1000.
+  // The node simulates a transaction at the height it is sent at, and the block after executes it.
   const open = beacon(900);
 
   it("does not commit before the last 12 blocks of the commit window", () => {
@@ -200,7 +201,7 @@ describe("roll call: a DKG starts only when every bonded validator's daemon was 
   });
 
   it("the first committer in validator order reveals once every bonded validator committed", () => {
-    const d = decide(rotating(950, { ...open, committed: ALL }), me(A), memory());
+    const d = decide(rotating(951, { ...open, committed: ALL }), me(A), memory());
     assert.deepEqual(d.action, { do: "beaconReveal", epochId: 8, commitOpenHeight: 900 });
   });
 
@@ -224,8 +225,14 @@ describe("roll call: a DKG starts only when every bonded validator's daemon was 
     assert.equal(act(decide(rotating(999, window), me(C), memory())), "beaconReveal");
   });
 
+  it("does not reveal at commitClose, where the node's simulation still refuses a reveal", () => {
+    const d = decide(rotating(950, { ...open, committed: ALL }), me(A), memory());
+    assert.equal(d.action, null);
+    assert.match(d.why, /takes reveals from height 951/);
+  });
+
   it("does not wait for a jailed validator", () => {
-    const view = rotating(950, { ...open, committed: [A, B] }, validators({ [C]: { bonded: false, jailed: true } }));
+    const view = rotating(951, { ...open, committed: [A, B] }, validators({ [C]: { bonded: false, jailed: true } }));
     assert.equal(act(decide(view, me(A), memory())), "beaconReveal");
   });
 
@@ -293,12 +300,12 @@ describe("roll call: a DKG starts only when every bonded validator's daemon was 
 });
 
 describe("BeginEpoch is sent only when it slashes nobody", () => {
-  // Window 900..950..1000. BeginEpoch is accepted from height 1001.
+  // Window 900..950..1000. BeginEpoch is accepted from height 1001, by the node's simulation too.
   const usable = beacon(900, { committed: ALL, revealed: ALL });
 
-  it("not while a BeginEpoch would land inside the reveal window", () => {
-    assert.equal(act(decide(rotating(999, usable), me(A), memory())), null);
-    assert.equal(act(decide(rotating(1000, usable), me(A), memory())), "beginEpoch");
+  it("not while the node would simulate a BeginEpoch inside the reveal window", () => {
+    assert.equal(act(decide(rotating(1000, usable), me(A), memory())), null);
+    assert.equal(act(decide(rotating(1001, usable), me(A), memory())), "beginEpoch");
   });
 
   it("not with fewer reveals than the beacon's threshold", () => {
@@ -326,8 +333,8 @@ describe("BeginEpoch is sent only when it slashes nobody", () => {
   it("the validator that took no part itself may begin: its own poll shows it is alive", () => {
     // C was unjailed after the others had revealed. For A and B the window is blocked on C.
     const window = { ...usable, committed: [A, B], revealed: [A, B] };
-    assert.equal(act(decide(rotating(1003, window), me(C), memory())), null); // after both revealers' turns
-    assert.deepEqual(decide(rotating(1004, window), me(C), memory()).action, { do: "beginEpoch", epochId: 8, committeeSize: 3, threshold: 2 });
+    assert.equal(act(decide(rotating(1004, window), me(C), memory())), null); // after both revealers' turns
+    assert.deepEqual(decide(rotating(1005, window), me(C), memory()).action, { do: "beginEpoch", epochId: 8, committeeSize: 3, threshold: 2 });
   });
 
   it("not with fewer bonded validators than the threshold", () => {
@@ -361,18 +368,18 @@ describe("BeginEpoch is sent only when it slashes nobody", () => {
     assert.equal(sizeFor(noPower, me(A)), 2);
   });
 
-  it("the first revealer in validator order sends at revealClose, the next two blocks later, the third four blocks later", () => {
+  it("the first revealer in validator order sends one block after revealClose, the next two blocks later, the third four blocks later", () => {
     const firstHeight = (who: string) => {
       for (let h = 995; h < 1010; h++) if (act(decide(rotating(h, usable), me(who), memory())) === "beginEpoch") return h;
       return null;
     };
-    assert.deepEqual(ALL.map(firstHeight), [1000, 1002, 1004]);
+    assert.deepEqual(ALL.map(firstHeight), [1001, 1003, 1005]);
   });
 
   it("when the first in turn stays silent the others still send, each at its own turn", () => {
-    // The chain still shows no DKG at 1002 and 1004: nobody waits for A.
-    assert.equal(act(decide(rotating(1002, usable), me(B), memory())), "beginEpoch");
-    assert.equal(act(decide(rotating(1004, usable), me(C), memory())), "beginEpoch");
+    // The chain still shows no DKG at 1003 and 1005: nobody waits for A.
+    assert.equal(act(decide(rotating(1003, usable), me(B), memory())), "beginEpoch");
+    assert.equal(act(decide(rotating(1005, usable), me(C), memory())), "beginEpoch");
   });
 });
 
@@ -577,19 +584,19 @@ describe("DKG steps are read off the chain", () => {
     assert.notEqual(act(decide(keygen(REVEAL_DL, owing), me(A), facts(ALL))), "dkgRevealShare");
   });
 
-  it("finalizes from revealDeadline in turn order, two blocks apart, and a validator outside the committee goes last", () => {
+  it("finalizes from one block after revealDeadline in turn order, two blocks apart, and a validator outside the committee goes last", () => {
     const done = dkg({ encryptedShares: sharesFrom(ALL) });
     const firstHeight = (who: string, record: DealerDkg) => {
       for (let h = REVEAL_DL - 3; h < REVEAL_DL + 12; h++) if (act(decide(keygen(h, record), me(who), facts(ALL))) === "finalizeEpoch") return h;
       return null;
     };
-    assert.deepEqual(ALL.map((who) => firstHeight(who, done)), [1240, 1242, 1244]);
+    assert.deepEqual(ALL.map((who) => firstHeight(who, done)), [1241, 1243, 1245]);
     const withoutC = { ...done, members: done.members.filter((m) => m.validator !== C), commits: done.commits.filter((c) => c.dealer !== C) };
-    assert.equal(firstHeight(C, withoutC), 1244);
+    assert.equal(firstHeight(C, withoutC), 1245);
   });
 
   it("does not wait for a member that never committed", () => {
-    const d = decide(keygen(REVEAL_DL, dkg({ committed: [A, B], encryptedShares: sharesFrom([A, B]) })), me(A), facts([B]));
+    const d = decide(keygen(REVEAL_DL + 1, dkg({ committed: [A, B], encryptedShares: sharesFrom([A, B]) })), me(A), facts([B]));
     assert.deepEqual(d.action, { do: "finalizeEpoch", epochId: 8 });
   });
 

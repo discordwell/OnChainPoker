@@ -103,6 +103,17 @@ export class ModelChain {
     };
   }
 
+  /**
+   * What the node answers when a transaction is sent: its simulation, which runs the rules at the
+   * last committed height although the block that executes the transaction is one higher (seen on
+   * a real chain: "too early to finalize: height=1100342 revealDeadline=1100342"). null, or the
+   * reason it was refused. A refused transaction is never broadcast. Changes nothing.
+   */
+  simulate(tx: Tx): string | null {
+    const copy: ModelChain = Object.setPrototypeOf(structuredClone(this), ModelChain.prototype);
+    return copy.deliver(tx);
+  }
+
   /** The next block: BeginBlock, then the transactions in order. Each answer is null or the reason it was refused. */
   block(txs: readonly Tx[]): (string | null)[] {
     this.height++;

@@ -10,7 +10,7 @@ const VALIDATORS = ["ocpvaloper1a", "ocpvaloper1b", "ocpvaloper1c"];
 // BeginEpoch. Each case below breaks one read of that same state.
 function readyToBegin(): FakeNode {
   const node = new FakeNode();
-  node.height = 1000;
+  node.height = 1001;
   node.nextEpochId = 1;
   node.beacon = BeaconState.fromPartial({
     epochId: "1",
