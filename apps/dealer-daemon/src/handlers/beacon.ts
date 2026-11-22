@@ -59,6 +59,34 @@ function deriveSalt(passphrase: string, validator: string, epochId: bigint): Uin
   return new Uint8Array(mac.digest());
 }
 
+type Identity = Pick<DealerDaemonConfig, "statePassphrase" | "validatorAddress">;
+
+/** One beacon window: the epoch it seeds and the height at which the chain opened it. */
+export type BeaconWindowId = { epochId: number; commitOpenHeight: number };
+
+const WINDOW_SALT_DOMAIN = "ocp/v1/beacon/salt/v2";
+
+/**
+ * The 32-byte salt this validator commits to and later reveals in one beacon window.
+ * Derived, not stored, so a restart between the commit and the reveal still reveals the same salt.
+ * Bound to the window's commit-open height: the chain replaces a window that closed below its
+ * threshold with one for the same epoch id, and a salt revealed in the old one must not be the
+ * secret of the new one.
+ */
+export function beaconSalt(config: Identity, window: BeaconWindowId): Uint8Array {
+  const mac = createHmac("sha256", Buffer.from(config.statePassphrase, "utf8"));
+  mac.update(Buffer.from(WINDOW_SALT_DOMAIN, "utf8"));
+  mac.update(Buffer.from(config.validatorAddress, "utf8"));
+  mac.update(u64LE(BigInt(window.epochId)));
+  mac.update(u64LE(BigInt(window.commitOpenHeight)));
+  return new Uint8Array(mac.digest());
+}
+
+/** What MsgBeaconCommit carries: the chain's hash of (validator, epoch id, salt), which it recomputes at the reveal. */
+export function beaconCommitment(config: Identity, window: BeaconWindowId): Uint8Array {
+  return computeCommit(config.validatorAddress, BigInt(window.epochId), beaconSalt(config, window));
+}
+
 function isExpectedBeaconError(msg: string): boolean {
   return (
     msg.includes("already committed") ||
