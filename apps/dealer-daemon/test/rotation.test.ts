@@ -492,16 +492,32 @@ describe("DKG steps are read off the chain", () => {
     assert.deepEqual([d.action, d.alarm], [null, true]);
   });
 
-  it("sends an encrypted share to each member that has an ephemeral key and none from me, lowest index first, one per poll", () => {
-    const first = decide(keygen(1010, dkg()), me(B), facts([]));
-    assert.deepEqual(first.action && { do: first.action.do, to: first.action.do === "dkgEncryptedShare" && first.action.recipientIndex }, { do: "dkgEncryptedShare", to: 1 });
+  const recipientAt = (h: number, record: DealerDkg) => {
+    const a = decide(keygen(h, record), me(B), facts([])).action;
+    return a?.do === "dkgEncryptedShare" ? a.recipientIndex : a;
+  };
 
-    const oneSent = dkg({ encryptedShares: [{ dealer: B, recipientIndex: 1, u: bytes(1), v: bytes(2), proof: bytes(3), scalarCt: bytes(4) }] });
-    const second = decide(keygen(1011, oneSent), me(B), facts([]));
-    assert.equal(second.action?.do === "dkgEncryptedShare" && second.action.recipientIndex, 3);
+  it("sends an encrypted share to each member that has an ephemeral key and none from me, one per poll", () => {
+    const first = recipientAt(1010, dkg());
+    assert.ok(first === 1 || first === 3, `sent ${JSON.stringify(first)}`);
+    const other = first === 1 ? 3 : 1;
+    const oneSent = dkg({ encryptedShares: [{ dealer: B, recipientIndex: first as number, u: bytes(1), v: bytes(2), proof: bytes(3), scalarCt: bytes(4) }] });
+    assert.deepEqual([1011, 1012].map((h) => recipientAt(h, oneSent)), [other, other]);
 
-    const allSent = decide(keygen(1012, dkg({ encryptedShares: sharesFrom([B]) })), me(B), facts(ALL));
+    const allSent = decide(keygen(1013, dkg({ encryptedShares: sharesFrom([B]) })), me(B), facts(ALL));
     assert.equal(allSent.action, null);
+  });
+
+  it("a share the chain keeps refusing does not hold back the other recipient's: the next block tries the other", () => {
+    // Nothing lands between these two polls.
+    assert.deepEqual(new Set([recipientAt(1010, dkg()), recipientAt(1011, dkg())]), new Set([1, 3]));
+  });
+
+  it("a share the chain keeps refusing does not hold back a complaint that is due", () => {
+    // B still owes A its share, and lacks C's. In the complaint window both get their turn.
+    const record = dkg({ encryptedShares: sharesFrom([A, B]).filter((e) => !(e.dealer === B && e.recipientIndex === 1)) });
+    const turns = [1160, 1161].map((h) => act(decide(keygen(h, record), me(B), facts([A]))));
+    assert.deepEqual(new Set(turns), new Set(["dkgEncryptedShare", "dkgComplainMissing"]));
   });
 
   it("sends no share to a member that has published no ephemeral key", () => {

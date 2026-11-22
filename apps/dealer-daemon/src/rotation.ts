@@ -729,13 +729,16 @@ function memberStep(s: Extract<Situation, { kind: "keygen" }>, h: number, me: Me
     return { action: { do: "dkgRevealShare", dkg, to: complaint.complainer }, why: `Rotation: answering ${short(complaint.complainer)}'s complaint in the DKG for epoch ${id}` };
   }
 
+  // What is left has no order of its own: the shares I owe, and the complaints that are due. One a
+  // poll, a different one each block, so that one the chain keeps refusing does not hold back the rest.
   const owed = dkg.members
     .filter((m) => m.validator !== me.validator && m.ephemeralPubkey !== null)
     .filter((m) => !dkg.encryptedShares.some((e) => e.dealer === me.validator && e.recipientIndex === m.index))
-    .sort((a, b) => a.index - b.index)[0];
-  if (owed) {
-    return { action: { do: "dkgEncryptedShare", dkg, recipientIndex: owed.index }, why: `Rotation: sending ${short(owed.validator)} its share in the DKG for epoch ${id}` };
-  }
+    .sort((a, b) => a.index - b.index)
+    .map((m): Step => ({
+      action: { do: "dkgEncryptedShare", dkg, recipientIndex: m.index },
+      why: `Rotation: sending ${short(m.validator)} its share in the DKG for epoch ${id}`,
+    }));
 
   // A "missing" complaint only against a dealer whose share I do not hold. It is a deadline with a
   // 50% penalty on that dealer, so a DKG where every share arrived has none.
@@ -743,14 +746,19 @@ function memberStep(s: Extract<Situation, { kind: "keygen" }>, h: number, me: Me
     .map((c) => c.dealer)
     .filter((d) => d !== me.validator && !facts.holds.has(d) && !dkg.slashed.includes(d))
     .filter((d) => !dkg.complaints.some((c) => c.complainer === me.validator && c.dealer === d));
-  if (lacking.length > 0) {
-    // Complaints need commitDeadline <= h + 1 <= complaintDeadline. The first half of the window is left for late shares.
-    const from = dkg.commitDeadline + Math.ceil((dkg.complaintDeadline - dkg.commitDeadline) / 2);
-    if (h < from) return wait(`DKG: no usable share from ${list(lacking)} for epoch ${id}; a complaint can be filed from height ${from}`);
-    if (h < dkg.complaintDeadline) {
-      return { action: { do: "dkgComplainMissing", dkg, dealer: lacking[0]! }, why: `DKG: no usable share from ${short(lacking[0]!)} for epoch ${id}; filing a complaint so that it reveals the share` };
-    }
-    return alarm(`DKG: no usable share from ${list(lacking)} for epoch ${id}, and the complaint deadline ${dkg.complaintDeadline} has passed`);
-  }
-  return null;
+  // Complaints need commitDeadline <= h + 1 <= complaintDeadline. The first half of the window is left for late shares.
+  const from = dkg.commitDeadline + Math.ceil((dkg.complaintDeadline - dkg.commitDeadline) / 2);
+  const complaints =
+    h >= from && h < dkg.complaintDeadline
+      ? lacking.map((dealer): Step => ({
+          action: { do: "dkgComplainMissing", dkg, dealer },
+          why: `DKG: no usable share from ${short(dealer)} for epoch ${id}; filing a complaint so that it reveals the share`,
+        }))
+      : [];
+
+  const duties = [...owed, ...complaints];
+  if (duties.length > 0) return duties[h % duties.length]!;
+  if (lacking.length === 0) return null;
+  if (h < from) return wait(`DKG: no usable share from ${list(lacking)} for epoch ${id}; a complaint can be filed from height ${from}`);
+  return alarm(`DKG: no usable share from ${list(lacking)} for epoch ${id}, and the complaint deadline ${dkg.complaintDeadline} has passed`);
 }
