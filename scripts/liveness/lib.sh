@@ -110,7 +110,7 @@ configure_node() { # index peers
   app="$home/config/app.toml"
   set_toml "$cfg" indexer '"null"'
   set_toml "$cfg" discard_abci_responses false
-  set_toml "$cfg" timeout_commit "\"${BLOCK_SECONDS}s\""
+  set_toml "$cfg" timeout_commit "\"${NET_BLOCK_SECONDS:-$BLOCK_SECONDS}s\""
   set_toml "$cfg" persistent_peers "\"$2\""
   set_toml "$cfg" pex false
   set_toml "$cfg" addr_book_strict false
@@ -247,9 +247,26 @@ net_start() {
     sleep 1
     ((++tries < STALL_SECS)) || die "no first block after $STALL_SECS s: $NET/logs/node0.log"
   done
-  node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url 0)" --from "$INITIAL_HEIGHT" --follow --time --heartbeat >"$EVENTS" 2>"$NET/logs/events.err" 3>&- &
+  : >"$EVENTS"
+  events_follow "$INITIAL_HEIGHT"
+  say "chain is up at height $(chain_height) (rpc $(rpc_url 0), ${NET_BLOCK_SECONDS:-$BLOCK_SECONDS} s blocks)"
+}
+
+events_follow() { # from: appends the chain's events from that height to $EVENTS
+  node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url 0)" --from "$1" --follow --time --heartbeat >>"$EVENTS" 2>>"$NET/logs/events.err" 3>&- &
   echo $! >"$PIDS/$NET_NAME.events"
-  say "chain is up at height $(chain_height) (rpc $(rpc_url 0), ${BLOCK_SECONDS} s blocks)"
+}
+
+# Restarts the three validators with SECONDS between blocks. Daemons and players keep running and
+# reconnect; the event scan continues from the block after the last one it printed.
+net_set_block_seconds() {
+  local i
+  proc_stop events
+  for i in 0 1 2; do node_stop "$i"; set_toml "$NET/node$i/config/config.toml" timeout_commit "\"$1s\""; done
+  for i in 0 1 2; do node_start "$i"; done
+  wait_height $(($(ev_scanned) + 1))
+  events_follow $(($(ev_scanned) + 1))
+  say "validators restarted with $1 s blocks at height $(chain_height)"
 }
 
 # ---- processes -----------------------------------------------------------------------------
