@@ -12,6 +12,9 @@ Restart=on-failure
 RestartSec=5
 RestartSteps=5
 RestartMaxDelaySec=60
+# The host is shared and has no memory headroom: a runaway process is stopped, not swapped.
+MemoryMax=1500M
+MemorySwapMax=0
 
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/ocp/config/dealer-%i.env
