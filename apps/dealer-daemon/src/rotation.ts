@@ -43,11 +43,13 @@ export const POLICY = {
   beaconCommitTailBlocks: 12,
 
   /**
-   * The reveal that brings a window to its threshold is not sent with fewer blocks than this left.
-   * From that reveal on the window is binding, and a validator that reveals after it needs room to
-   * land its own reveal or BeginEpoch slashes it.
+   * The reveal that brings a window to its threshold makes it binding: from then on every committer
+   * must reveal, or BeginEpoch slashes it. That reveal is sent only in the first 8 blocks of the
+   * reveal window. The commits, at most 12 blocks before the window, are then still fresh evidence
+   * that the validators revealing later are alive, and one that stops right after has the rest of
+   * the window, at least 40 blocks, to come back and land its own.
    */
-  beaconRevealMarginBlocks: 10,
+  beaconBindingRevealBlocks: 8,
 
   /** Daemons that may send the same permissionless message take turns, this many blocks apart. */
   turnStaggerBlocks: 2,
@@ -601,9 +603,13 @@ function rollCallStep(
         return wait(`Rotation: reveals go in validator order; waiting for ${short(before[0]!)} to reveal first (window closes at ${w.revealCloseHeight})`);
       }
 
-      const left = w.revealCloseHeight - h;
-      if (w.revealed.length + 1 >= w.threshold && left < POLICY.beaconRevealMarginBlocks) {
-        return wait(`Rotation: not revealing for epoch ${id}: my reveal would make this window usable with ${left} blocks left for the others to reveal. It closes short and the chain opens another.`);
+      if (w.revealed.length + 1 >= w.threshold) {
+        // On a window shorter than twice the limit, the limit is half the window.
+        const length = w.revealCloseHeight - w.commitCloseHeight;
+        const since = h - w.commitCloseHeight;
+        if (since > Math.min(POLICY.beaconBindingRevealBlocks, Math.ceil(length / 2))) {
+          return wait(`Rotation: not revealing for epoch ${id}: my reveal would make this window usable ${since} blocks after the commits, with ${w.revealCloseHeight - h} left for the validators that reveal after me. It closes short and the chain opens another.`);
+        }
       }
 
       if (forced) {

@@ -242,11 +242,26 @@ describe("roll call: a DKG starts only when every bonded validator's daemon was 
     assert.notEqual(act(decide(rotating(1000, window), me(C), memory())), "beaconReveal");
   });
 
-  it("does not send the reveal that reaches the threshold with fewer than 10 blocks left", () => {
-    // B's reveal is the second of a threshold of two. After it C must still land a reveal or be slashed.
+  it("sends the reveal that reaches the threshold only in the first 8 blocks of the reveal window", () => {
+    // B's reveal is the second of a threshold of two. After it C must reveal or be slashed, and
+    // C was last seen at its commit, so B does not make the window binding long after the commits.
     const window = { ...open, committed: ALL, revealed: [A] };
-    assert.equal(act(decide(rotating(990, window), me(B), memory())), "beaconReveal"); // 10 blocks left
-    assert.equal(act(decide(rotating(991, window), me(B), memory())), null); // 9 blocks left
+    assert.equal(act(decide(rotating(958, window), me(B), memory())), "beaconReveal");
+    assert.equal(act(decide(rotating(959, window), me(B), memory())), null);
+  });
+
+  it("never sends the reveal that reaches the threshold with fewer than 10 blocks of the window left", () => {
+    const window = { ...open, committed: ALL, revealed: [A] };
+    const sentAt = [];
+    for (let h = 950; h < 1000; h++) if (act(decide(rotating(h, window), me(B), memory())) === "beaconReveal") sentAt.push(h);
+    assert.ok(sentAt.length > 0 && sentAt.every((h) => 1000 - h >= 10), `sent at ${sentAt}`);
+  });
+
+  it("on a window shorter than the production one, it reaches the threshold only in the first half", () => {
+    // The chain's devnet window: 5 blocks to reveal, 951..955.
+    const devnet = { ...open, revealCloseHeight: 955, committed: ALL, revealed: [A] };
+    assert.equal(act(decide(rotating(953, devnet), me(B), memory())), "beaconReveal");
+    assert.equal(act(decide(rotating(954, devnet), me(B), memory())), null);
   });
 
   it("sends a reveal that does not reach the threshold however late it is", () => {
