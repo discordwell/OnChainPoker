@@ -1,7 +1,7 @@
 import { sha256 } from "@cosmjs/crypto";
-import { toHex } from "@cosmjs/encoding";
+import { fromBase64, toHex } from "@cosmjs/encoding";
 import type { EncodeObject, OfflineSigner, Registry } from "@cosmjs/proto-signing";
-import { DirectSecp256k1HdWallet, DirectSecp256k1Wallet } from "@cosmjs/proto-signing";
+import { decodeTxRaw, DirectSecp256k1HdWallet, DirectSecp256k1Wallet } from "@cosmjs/proto-signing";
 import type { DeliverTxResponse, SigningStargateClientOptions, StdFee } from "@cosmjs/stargate";
 import { calculateFee, fromTendermintEvent, GasPrice, SigningStargateClient } from "@cosmjs/stargate";
 import { connectComet, type CometClient } from "@cosmjs/tendermint-rpc";
@@ -46,6 +46,13 @@ export type OcpCosmosSigningClient = {
    * (see txFailureOf). Holds the caller at most CONFIRM_LIMITS.maxWaitMs from the broadcast.
    */
   signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string, opts?: SendOptions) => Promise<DeliverTxResponse>;
+
+  /**
+   * The messages of the transactions in this node's mempool (unconfirmed_txs), decoded: what the
+   * next block will likely hold. For work that can start before that block; never a confirmation.
+   * A message of a type the registry does not know is left out.
+   */
+  pendingMessages: () => Promise<readonly EncodeObject[]>;
 } & NodeReads;
 
 export async function walletFromMnemonic(args: { mnemonic: string; prefix: string }): Promise<DirectSecp256k1HdWallet> {
@@ -253,7 +260,23 @@ export async function connectOcpCosmosSigningClient(args: {
     return (await broadcastAuto(msgs, memo, opts)).landed;
   }
 
-  return { address, client, broadcastAuto, signAndBroadcastAuto, ...nodeReadsOver(() => comet) };
+  async function pendingMessages(): Promise<readonly EncodeObject[]> {
+    const res = await fetch(`${args.rpcUrl.replace(/\/+$/, "")}/unconfirmed_txs?limit=100`);
+    const body = (await res.json()) as { result?: { txs?: string[] | null } };
+    const out: EncodeObject[] = [];
+    for (const tx of body.result?.txs ?? []) {
+      for (const any of decodeTxRaw(fromBase64(tx)).body.messages) {
+        try {
+          out.push({ typeUrl: any.typeUrl, value: client.registry.decode(any) });
+        } catch {
+          // Not a type this client registers.
+        }
+      }
+    }
+    return out;
+  }
+
+  return { address, client, broadcastAuto, signAndBroadcastAuto, pendingMessages, ...nodeReadsOver(() => comet) };
 }
 
 /** The sequence a CheckTx refusal says the account is at: "account sequence mismatch, expected 61, got 60". */

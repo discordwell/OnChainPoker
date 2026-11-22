@@ -62,6 +62,8 @@ export class FakeNode {
 
   /** Every message handed to the signer, in order, whatever became of it. */
   readonly sent: Sent[] = [];
+  /** The messages of the transactions in the node's mempool. */
+  pending: Sent[] = [];
   /** Every transaction: its messages, and whether it was sent without a simulation. */
   readonly txs: { msgs: readonly Sent[]; gasLimit?: number }[] = [];
   /** How the chain answers the nth message of a type (n from 0). Everything lands unless a test says otherwise. */
@@ -169,6 +171,7 @@ export class FakeNode {
       broadcastAuto,
       signAndBroadcastAuto: async (msgs: readonly Sent[]) => (await broadcastAuto(msgs)).landed,
       committedHeight: async () => this.height,
+      pendingMessages: async () => this.pending,
       queryStore: async (store: string, key: Uint8Array, height?: number) => {
         if (store !== "dealer") throw new Error(`fake node: unknown store ${store}`);
         const failure = this.failRead(`store:0x${key[0]!.toString(16).padStart(2, "0")}`);

@@ -91,3 +91,33 @@ describe("handleShuffle wraparound guard", () => {
   });
 });
 
+describe("finalDeckOf", () => {
+  it("reads the deck a shuffle proof ends with, for an even and an odd deck and both proof versions", async () => {
+    const { groupElementToBytes, mulBase } = await import("@onchainpoker/ocp-crypto");
+    const { shuffleProveV1, buildShuffleContext } = await import("@onchainpoker/ocp-shuffle");
+    const { finalDeckOf, deckKey } = await import("../src/handlers/shuffle.js");
+    const pk = mulBase(77n);
+    for (const n of [4, 5]) {
+      const deck = Array.from({ length: n }, (_, i) => ({ c1: mulBase(BigInt(1000 + i)), c2: mulBase(BigInt(2000 + i)) }));
+      for (const context of [undefined, buildShuffleContext({ tableId: 1, handId: 5, round: 2, shuffler: "ocpvaloper1aaa" })]) {
+        const { deckOut, proofBytes } = shuffleProveV1(pk, deck, { rounds: 3, context });
+        const expected = deckOut.map((ct) => ({ c1: groupElementToBytes(ct.c1), c2: groupElementToBytes(ct.c2) }));
+        assert.equal(deckKey(finalDeckOf(proofBytes)), deckKey(expected), `n=${n} ${context ? "v2" : "v1"}`);
+      }
+    }
+  });
+});
+
+describe("initialDeck", () => {
+  it("makes the deck the chain's InitHand made (read from a local three-validator chain at the InitHand's height)", async () => {
+    const { initialDeck, deckKey } = await import("../src/handlers/shuffle.js");
+    const b64 = (s: string) => Uint8Array.from(Buffer.from(s, "base64"));
+    // Epoch 1, table 1, hand 2, InitHand at height 1,100,366; its init_hash_salt was 32 zero bytes.
+    const { deck } = initialDeck({ pkEpoch: b64("2lMsZzYrEpvuuHyCh378gxYv7Y5DIrPNq4b+Brzq2AA="), epochId: 1, tableId: "1", handId: "2", initHeight: 1_100_366 });
+    assert.equal(deck.length, 52);
+    assert.equal(deckKey([deck[0]!, deck[51]!]), deckKey([
+      { c1: "lLdbpOfSJ4o1aVNmTFS8C/1QMUKDBuKOOmtI5VUZpkE=", c2: "VsWLjOuYziQFf3Wu8zt93MdDh2z9G1RNink/u5PzY2k=" },
+      { c1: "oF7q8EZzk2p/NkHGk71UD85EtjuNscXUI9SuAI/6JTY=", c2: "/pgRp7x+50gZ65uK334Xu4YrV1AvYbRuE5/9vXOxHyM=" },
+    ]));
+  });
+});

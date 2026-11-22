@@ -1,4 +1,5 @@
 import {
+  OCP_TYPE_URLS,
   txFailureOf,
   type DealerDkg,
   type DealerEpoch,
@@ -29,18 +30,18 @@ import {
 } from "./rotation.js";
 import { beaconCommitment, beaconSalt } from "./handlers/beacon.js";
 import { encryptShareFor, plainShareFor, prepareCommit, settleShare, syncShares, type SecretsStore } from "./handlers/dkg.js";
-import { handleShuffle } from "./handlers/shuffle.js";
+import { deckKey, finalDeckOf, handleShuffle, initialDeck, proveRound, type Ahead } from "./handlers/shuffle.js";
 import { handleEncShares } from "./handlers/encshares.js";
-import { handlePubShare } from "./handlers/pubshares.js";
+import { handlePubShare, pubShareMessage } from "./handlers/pubshares.js";
 import {
   maybeFinalizeDeck,
   maybeInitHand,
   maybeTick,
   maybeDealerTimeout,
 } from "./handlers/automation.js";
-import { dealerTimeoutSecs } from "./handlers/encshares.js";
-import { handSender, type HandSender } from "./handlers/send.js";
-import { InFlight } from "./turns.js";
+import { dealerTimeoutSecs, holePositions, holeShareMessages } from "./handlers/encshares.js";
+import { BLIND_GAS, handSender, type HandSender } from "./handlers/send.js";
+import { InFlight, turnOrder } from "./turns.js";
 
 /** A node that could not serve a finalized DKG at its past height is asked again after this many blocks. */
 const FINAL_DKG_RETRY_BLOCKS = 120;
@@ -131,6 +132,102 @@ function expectedRevealPos(table: any): number | null {
   return null;
 }
 
+/**
+ * The cards of the street being revealed, from the one the chain waits for, in the order the chain
+ * reveals them (x/poker dealerExpectedRevealPos): the flop's remaining cards, or the showdown's hole
+ * cards in ascending position. The turn and the river are one card.
+ */
+function streetPositions(table: any): number[] {
+  const first = expectedRevealPos(table);
+  if (first === null) return [];
+  const h = table.hand;
+  const phase = normalizePhase(h.phase);
+  if (phase === "awaitFlop") {
+    const cursor = asNumber(h.dealer?.cursor) ?? 0;
+    return Array.from({ length: Math.max(0, cursor + 3 - first) }, (_, i) => first + i);
+  }
+  if (phase !== "awaitShowdown") return [first];
+  const holePos: number[] = (pick(h.dealer, "holePos", "hole_pos") ?? []).map((x: unknown) => asNumber(x));
+  const inHand = pick(h, "inHand", "in_hand") ?? [];
+  const folded = Array.isArray(h.folded) ? h.folded : [];
+  const eligible = [];
+  for (let seat = 0; seat < 9; seat++) {
+    if (!inHand[seat] || folded[seat]) continue;
+    for (const p of [holePos[seat * 2], holePos[seat * 2 + 1]]) if (p !== undefined && p >= first && p !== 255) eligible.push(p);
+  }
+  return eligible.sort((a, b) => a - b);
+}
+
+/**
+ * Whether `action` by the seat whose turn it is ends the betting round (x/poker logic.go
+ * streetComplete): after it, every seat still in, not folded and not all in has matched the bet and
+ * acted in this interval. Only a check or a call is taken to end it; anything else is "no".
+ */
+export function closesStreet(hand: any, action: string): boolean {
+  if (action !== "check" && action !== "call") return false;
+  const actor = asNumber(pick(hand, "actionOn", "action_on"));
+  const inHand = pick(hand, "inHand", "in_hand") ?? [];
+  const folded = hand?.folded ?? [];
+  const allIn = pick(hand, "allIn", "all_in") ?? [];
+  const commit = pick(hand, "streetCommit", "street_commit") ?? [];
+  const acted = pick(hand, "lastIntervalActed", "last_interval_acted") ?? [];
+  const betTo = String(pick(hand, "betTo", "bet_to") ?? "0");
+  const interval = asNumber(pick(hand, "intervalId", "interval_id")) ?? 0;
+  if (actor === undefined) return false;
+  for (let seat = 0; seat < 9; seat++) {
+    if (seat === actor || !inHand[seat] || folded[seat] || allIn[seat]) continue;
+    if (String(commit[seat] ?? "0") !== betTo || asNumber(acted[seat]) !== interval) return false;
+  }
+  return true;
+}
+
+/** The cards the street after this betting round reveals, in the chain's order (dealerExpectedRevealPos). */
+function nextStreetPositions(table: any): number[] {
+  const h = table?.hand;
+  const cursor = asNumber(h?.dealer?.cursor) ?? 0;
+  const street = String(h?.street ?? "");
+  if (street === "STREET_PREFLOP" || street === "1") return [cursor, cursor + 1, cursor + 2];
+  if (street === "STREET_FLOP" || street === "2") return [cursor + 3];
+  if (street === "STREET_TURN" || street === "3") return [cursor + 4];
+  if (street !== "STREET_RIVER" && street !== "4") return [];
+  const holePos: number[] = (pick(h.dealer, "holePos", "hole_pos") ?? []).map((x: unknown) => asNumber(x));
+  const inHand = pick(h, "inHand", "in_hand") ?? [];
+  const folded = Array.isArray(h.folded) ? h.folded : [];
+  const out = [];
+  for (let seat = 0; seat < 9; seat++) {
+    if (!inHand[seat] || folded[seat]) continue;
+    for (const p of [holePos[seat * 2], holePos[seat * 2 + 1]]) if (p !== undefined && p !== 255) out.push(p);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+/** A hand's state at the last block, for work the mempool shows the next block makes possible. */
+type HandAt = {
+  tableId: string;
+  handId: string;
+  epochId: number;
+  table: any;
+  dealerHand: any;
+  qualified: readonly { validator: string }[];
+  threshold: number;
+  sender: HandSender;
+};
+
+/** A street with cards still to reveal, as the last block showed it. */
+type Street = {
+  tableId: string;
+  handId: string;
+  epochId: number;
+  dealerHand: any;
+  /** The card the chain waits for first. */
+  positions: readonly number[];
+  /** Validators whose public share of each card is in the chain's state. */
+  shared: ReadonlyMap<number, ReadonlySet<string>>;
+  qualified: readonly { validator: string }[];
+  threshold: number;
+  sender: HandSender;
+};
+
 /** What dealTables hands each table: the epoch to deal on, who shuffles, and whether a new hand may start. */
 type HandDuty = {
   epochId: number;
@@ -169,6 +266,21 @@ export class DealerDaemon {
   private readonly inflight = new InFlight();
   /** "table/hand" to the first height this process saw that hand started and not initialized. */
   private readonly uninitializedSince = new Map<string, number>();
+  /** The round this daemon shuffles next, while the member before it is shuffling: watched for in the mempool. */
+  private shuffleNext: { tableId: string; handId: string; round: number; after: string; pkHand: unknown } | null = null;
+  /** That round, proved on the deck the pending round before it leaves. */
+  private ahead: Ahead | null = null;
+  /** The dealing epoch at the last block, with its public key once read: what an InitHand in the mempool will build its deck from. */
+  private dealing: { epochId: number; qualified: readonly { validator: string }[]; pkEpoch: Uint8Array | null } | null = null;
+  /** A table with no hand at the last block, and the id its next hand gets. */
+  private startable: { tableId: string; handId: string; epochId: number; qualified: readonly { validator: string }[]; sender: HandSender } | null = null;
+  /** The street being revealed at the last block, while it has more than one card. */
+  private street: Street | null = null;
+  /** A hand being shuffled, and one being bet on, at the last block. */
+  private shuffling: HandAt | null = null;
+  private betting: HandAt | null = null;
+  /** "table/hand/pos" of the shares sent ahead of their card's turn, "table/hand/hole" of the hole shares. */
+  private readonly sharedAhead = new Set<string>();
 
   /** Height at which this process first saw the chain unable to deal, with no break since. In memory: a restart waits longer. */
   private rotatingSince: number | null = null;
@@ -229,6 +341,7 @@ export class DealerDaemon {
           polledAt = Date.now();
           await this.poll();
         } else {
+          await this.aheadOfTheBlock().catch((err) => logError("ahead of the block", err));
           await new Promise((resolve) => setTimeout(resolve, BLOCK_WATCH_MS));
         }
       }
@@ -508,6 +621,8 @@ export class DealerDaemon {
     const epoch = view.dealer.epoch;
     if (!epoch) return;
     const status = await this.client.getNodeStatus().catch(() => null);
+    if (this.dealing?.epochId !== epoch.epochId) this.dealing = { epochId: epoch.epochId, qualified: shufflersOf(epoch), pkEpoch: null };
+    else this.dealing.qualified = shufflersOf(epoch);
     const duty: HandDuty = {
       epochId: epoch.epochId,
       threshold: epoch.threshold,
@@ -523,6 +638,198 @@ export class DealerDaemon {
     }
   }
 
+  /** Between blocks: work that the mempool shows the next block will make possible. */
+  private async aheadOfTheBlock(): Promise<void> {
+    if (!this.shuffleNext && !this.street && !this.startable && !this.shuffling && !this.betting && this.dealing?.qualified[0]?.validator !== this.config.validatorAddress) return;
+    const pending = await this.client.signing.pendingMessages();
+    await this.initAhead(pending);
+    await this.holeSharesAhead(pending);
+    await this.closeAhead(pending);
+    await this.revealAhead(pending);
+    await this.proveAhead(pending);
+    await this.proveFirstAhead(pending);
+  }
+
+  /**
+   * The first round, ahead: an InitHand in the mempool builds its deck from the epoch's key, the
+   * table, the hand and the height of the block it lands in, which is the next one (initialDeck).
+   * The first shuffler proves round 1 on that deck while the block is made; if the InitHand lands
+   * later, the chain's deck differs and the proof is not sent (handleShuffle).
+   */
+  private async proveFirstAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const d = this.dealing;
+    const me = this.config.validatorAddress;
+    if (!d || d.qualified[0]?.validator !== me) return;
+    const init = pending.find((m) => m.typeUrl === OCP_TYPE_URLS.dealer.initHand && Number(m.value.epochId) === d.epochId);
+    if (!init) return;
+    const tableId = String(init.value.tableId);
+    const handId = String(init.value.handId);
+    if (this.ahead?.tableId === tableId && this.ahead.handId === handId && this.ahead.round === 1) return;
+    if (!d.pkEpoch) {
+      const raw = pick(await this.client.getDealerEpoch(), "pkEpoch", "pk_epoch");
+      if (!raw) return;
+      d.pkEpoch = Uint8Array.from(Buffer.from(String(raw), "base64"));
+    }
+    const initHeight = (await this.client.getNodeStatus()).latestHeight + 1;
+    const { pkHand, deck } = initialDeck({ pkEpoch: d.pkEpoch, epochId: d.epochId, tableId, handId, initHeight });
+    this.ahead = { tableId, handId, round: 1, inputKey: deckKey(deck), proofBytes: proveRound(this.config, pkHand, deck, tableId, handId, 1) };
+    logProgress(`Shuffle: proved round 1 of table ${tableId} hand ${handId} ahead, on the deck its InitHand in the mempool makes at height ${initHeight}`);
+  }
+
+  /**
+   * A player's StartHand in the mempool: the member whose turn the hand is sends its InitHand
+   * behind it, so the dealer's part starts in the block the hand starts in. One that lands before
+   * the StartHand fails alone; the next block sends it again the usual way (maybeInitHand).
+   */
+  private async initAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const t = this.startable;
+    if (!t) return;
+    const key = `t${t.tableId}:h${t.handId}:init`;
+    if (turnOrder(t.qualified, Number(t.handId))[0] !== this.config.validatorAddress || t.sender.inflight.holds(key, t.sender.height)) return;
+    if (!pending.some((m) => m.typeUrl === OCP_TYPE_URLS.poker.startHand && String(m.value.tableId) === t.tableId)) return;
+    this.startable = null;
+    const sent = await t.sender.send({
+      key,
+      msgs: [this.client.messages.initHand({ tableId: t.tableId, handId: t.handId, epochId: t.epochId })],
+      holdBlocks: 0,
+      gasLimit: BLIND_GAS.initHand,
+      what: `init hand ${t.handId} of table ${t.tableId}, behind a player's StartHand`,
+    });
+    if (sent) logProgress(`Automation: init hand ${t.handId} of table ${t.tableId} sent behind a player's StartHand`);
+  }
+
+  /**
+   * The last round's shuffle in the mempool with FinalizeDeck behind it: the deck that block makes
+   * final is that proof's last snapshot (finalDeckOf) and the hole positions follow from the seats
+   * (holePositions). The members whose turn the hole shares are send theirs behind, unsimulated,
+   * so the betting can open in the shuffle's own block. A batch that lands too early fails, and the
+   * block after sends the shares again the usual way.
+   */
+  private async holeSharesAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const h = this.shuffling;
+    if (!h) return;
+    const key = `${h.tableId}/${h.handId}/hole`;
+    if (this.sharedAhead.has(key) || !turnOrder(h.qualified, h.qualified.length - 1).slice(0, h.threshold).includes(this.config.validatorAddress)) return;
+    const ofHand = (m: { value: any }) => String(m.value.tableId) === h.tableId && String(m.value.handId) === h.handId;
+    const last = pending.findIndex((m) => m.typeUrl === OCP_TYPE_URLS.dealer.submitShuffle && ofHand(m) && Number(m.value.round) === h.qualified.length);
+    if (last < 0 || !pending.slice(last).some((m) => m.typeUrl === OCP_TYPE_URLS.dealer.finalizeDeck && ofHand(m))) return;
+    this.sharedAhead.add(key);
+    const shares = await holeShareMessages({
+      client: this.client,
+      config: this.config,
+      stateStore: this.stateStore,
+      tableId: h.tableId,
+      handId: h.handId,
+      epochId: h.epochId,
+      table: h.table,
+      dealerHand: h.dealerHand,
+      deck: finalDeckOf(pending[last]!.value.proofShuffle),
+      holePos: holePositions(h.table.hand),
+      skip: new Set(),
+    });
+    if (shares.length === 0) return;
+    const sent = await h.sender.send({
+      key: `t${h.tableId}:h${h.handId}:holeShares`,
+      msgs: shares.map((s) => s.msg),
+      holdBlocks: 0,
+      gasLimit: BLIND_GAS.holeShare * shares.length,
+      what: `hole-card shares for table ${h.tableId} hand ${h.handId}, behind the last shuffle`,
+    });
+    if (sent) logProgress(`EncShares: sent ${shares.length} shares for table ${h.tableId} hand ${h.handId} behind the last shuffle`);
+  }
+
+  /**
+   * A player's check or call in the mempool that ends the betting round (closesStreet): the next
+   * street's first card opens in that block. The members whose turn that card is send their share
+   * and FinalizeReveal behind it, unsimulated, and revealAhead carries on with the street's other
+   * cards. A guess that lands too early fails, and the block after reveals the card the usual way.
+   */
+  private async closeAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const b = this.betting;
+    if (!b) return;
+    const hand = b.table.hand;
+    const actor = asNumber(pick(hand, "actionOn", "action_on"));
+    const player = actor === undefined ? undefined : b.table.seats?.[actor]?.player;
+    const act = pending.find((m) => m.typeUrl === OCP_TYPE_URLS.poker.act && String(m.value.tableId) === b.tableId && m.value.player === player);
+    if (!player || !act || !closesStreet(hand, String(act.value.action))) return;
+    const positions = nextStreetPositions(b.table);
+    const pos = positions[0];
+    if (pos === undefined) return;
+    this.betting = null;
+    this.street = { tableId: b.tableId, handId: b.handId, epochId: b.epochId, dealerHand: b.dealerHand, positions, shared: new Map(), qualified: b.qualified, threshold: b.threshold, sender: b.sender };
+    const key = `${b.tableId}/${b.handId}/${pos}`;
+    if (this.sharedAhead.has(key) || !turnOrder(b.qualified, pos).slice(0, b.threshold).includes(this.config.validatorAddress)) return;
+    const share = await pubShareMessage({ client: this.client, config: this.config, stateStore: this.stateStore, tableId: b.tableId, handId: b.handId, epochId: b.epochId, dealerHand: b.dealerHand, pos });
+    if (!share) return;
+    this.sharedAhead.add(key);
+    const what = `pos ${pos} table ${b.tableId} hand ${b.handId}, behind the action that ends the betting`;
+    const keys = `t${b.tableId}:h${b.handId}:`;
+    if (!(await b.sender.send({ key: `${keys}pub${pos}`, msgs: [share], holdBlocks: 0, gasLimit: BLIND_GAS.pubShare, what: `public share of ${what}` }))) return;
+    await b.sender.send({ key: `${keys}reveal${pos}`, msgs: [this.client.messages.finalizeReveal({ tableId: b.tableId, handId: b.handId, pos })], holdBlocks: 0, gasLimit: BLIND_GAS.finalizeReveal, what: `finalize reveal of ${what}` });
+    logProgress(`PubShare: sent for ${what}`);
+  }
+
+  /**
+   * The chain reveals one card at a time. When the mempool holds enough shares of the card it waits
+   * for, and a FinalizeReveal behind them, that card is revealed in the next block: the member whose
+   * turn the following card is sends its share and FinalizeReveal behind those, so the next block
+   * reveals both. Each such send is a guess at the block's order; one that lands too early fails
+   * alone, and the block after sends it again the usual way.
+   */
+  private async revealAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const st = this.street;
+    if (!st) return;
+    const me = this.config.validatorAddress;
+    const ofHand = (m: { value: any }) => String(m.value.tableId) === st.tableId && String(m.value.handId) === st.handId;
+    const revealsNext = (pos: number): boolean => {
+      const shared = new Set(st.shared.get(pos) ?? []);
+      for (const m of pending) {
+        if (!ofHand(m) || Number(m.value.pos) !== pos) continue;
+        if (m.typeUrl === OCP_TYPE_URLS.dealer.submitPubShare) shared.add(m.value.validator);
+        if (m.typeUrl === OCP_TYPE_URLS.dealer.finalizeReveal && shared.size >= st.threshold) return true;
+      }
+      return false;
+    };
+    for (let i = 1; i < st.positions.length && revealsNext(st.positions[i - 1]!); i++) {
+      const pos = st.positions[i]!;
+      const key = `${st.tableId}/${st.handId}/${pos}`;
+      if (!turnOrder(st.qualified, pos).slice(0, st.threshold).includes(me) || st.shared.get(pos)?.has(me) || this.sharedAhead.has(key)) continue;
+      const share = await pubShareMessage({ client: this.client, config: this.config, stateStore: this.stateStore, tableId: st.tableId, handId: st.handId, epochId: st.epochId, dealerHand: st.dealerHand, pos });
+      if (!share) return;
+      this.sharedAhead.add(key);
+      const what = `pos ${pos} table ${st.tableId} hand ${st.handId}, ahead of its turn`;
+      const keys = `t${st.tableId}:h${st.handId}:`;
+      if (!(await st.sender.send({ key: `${keys}pub${pos}`, msgs: [share], holdBlocks: 0, gasLimit: BLIND_GAS.pubShare, what: `public share of ${what}` }))) return;
+      await st.sender.send({ key: `${keys}reveal${pos}`, msgs: [this.client.messages.finalizeReveal({ tableId: st.tableId, handId: st.handId, pos })], holdBlocks: 0, gasLimit: BLIND_GAS.finalizeReveal, what: `finalize reveal of ${what}` });
+      logProgress(`PubShare: sent for ${what}`);
+    }
+  }
+
+  /**
+   * A shuffle proof takes several seconds of processor time, about a block. The round before mine
+   * is in the mempool before its block: proving mine on the deck it leaves, while that block is
+   * being made, lets mine land in the next block instead of the one after. The proof is sent only
+   * if the chain's deck turns out to be that deck (handleShuffle).
+   */
+  private async proveAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
+    const next = this.shuffleNext;
+    if (!next) return;
+    const before = pending.find(
+      (m) =>
+        m.typeUrl === OCP_TYPE_URLS.dealer.submitShuffle &&
+        String(m.value.tableId) === next.tableId &&
+        String(m.value.handId) === next.handId &&
+        Number(m.value.round) === next.round - 1 &&
+        m.value.shuffler === next.after,
+    );
+    if (!before) return;
+    this.shuffleNext = null;
+    const deck = finalDeckOf(before.value.proofShuffle);
+    const proofBytes = proveRound(this.config, next.pkHand, deck, next.tableId, next.handId, next.round);
+    this.ahead = { tableId: next.tableId, handId: next.handId, round: next.round, inputKey: deckKey(deck), proofBytes };
+    logProgress(`Shuffle: proved round ${next.round} of table ${next.tableId} hand ${next.handId} ahead, on the deck of round ${next.round - 1} in the mempool`);
+  }
+
   private async processTable(tableId: string, duty: HandDuty): Promise<void> {
     const { epochId, sender } = duty;
     const table = await this.client.getTable(tableId).catch(() => null);
@@ -534,9 +841,16 @@ export class DealerDaemon {
     this.inflight.forgetAllBut(`t${tableId}:`, `t${tableId}:h${handKey}:`);
     for (const k of this.uninitializedSince.keys()) if (k.startsWith(`${tableId}/`) && k !== `${tableId}/${handId}`) this.uninitializedSince.delete(k);
     const turns = { qualified: duty.shufflers, sender };
+    if (this.street?.tableId === tableId) this.street = null;
+    if (this.startable?.tableId === tableId) this.startable = null;
+    if (this.shuffling?.tableId === tableId) this.shuffling = null;
+    if (this.betting?.tableId === tableId) this.betting = null;
+    if (this.shuffleNext?.tableId === tableId) this.shuffleNext = null;
+    for (const k of this.sharedAhead) if (k.startsWith(`${tableId}/`) && !k.startsWith(`${tableId}/${handId}/`)) this.sharedAhead.delete(k);
 
     if (!hand || !handId) {
-      // Only a seated player may start a hand (x/poker StartHand).
+      // Only a seated player may start a hand (x/poker StartHand). Its InitHand can land right behind it.
+      if (duty.startHands && this.config.autoInitHand && /^\d+$/.test(handKey)) this.startable = { tableId, handId: handKey, epochId, qualified: duty.shufflers, sender };
       return;
     }
 
@@ -577,6 +891,13 @@ export class DealerDaemon {
             ...turns,
           });
         } else if (dealerHand) {
+          this.shuffling = { tableId, handId, epochId, table, dealerHand, qualified: duty.shufflers, threshold: duty.threshold, sender };
+          const me = this.config.validatorAddress;
+          const proving = this.ahead?.tableId === tableId && this.ahead.handId === handId && this.ahead.round === step + 2;
+          this.shuffleNext =
+            duty.shufflers[step + 1]?.validator === me && !proving
+              ? { tableId, handId, round: step + 2, after: duty.shufflers[step]!.validator, pkHand: pick(dealerHand, "pkHand", "pk_hand") }
+              : null;
           await handleShuffle({
             client: this.client,
             config: this.config,
@@ -584,6 +905,7 @@ export class DealerDaemon {
             handId,
             shufflers: duty.shufflers,
             sender,
+            ahead: this.ahead,
           }).catch((err) => logError("shuffle error", err));
         }
       }
@@ -608,6 +930,15 @@ export class DealerDaemon {
     ) {
       // Reveal phases
       const pos = expectedRevealPos(table);
+      const positions = streetPositions(table);
+      const dealerHand = positions.length > 1 ? await this.client.getDealerHand(tableId, handId).catch(() => null) : null;
+      const shared = new Map<number, Set<string>>();
+      for (const ps of (pick(dealerHand, "pubShares", "pub_shares") ?? []) as any[]) {
+        const p = Number(ps?.pos);
+        if (!shared.has(p)) shared.set(p, new Set());
+        shared.get(p)!.add(String(ps?.validator));
+      }
+      this.street = dealerHand ? { tableId, handId, epochId, dealerHand, positions, shared, qualified: duty.shufflers, threshold: duty.threshold, sender } : null;
       if (pos != null) {
         await handlePubShare({
           client: this.client,
@@ -628,6 +959,8 @@ export class DealerDaemon {
 
     // Betting phase - check for timeouts
     if (phase === "betting") {
+      const dealerHand = await this.client.getDealerHand(tableId, handId).catch(() => null);
+      if (dealerHand) this.betting = { tableId, handId, epochId, table, dealerHand, qualified: duty.shufflers, threshold: duty.threshold, sender };
       await maybeTick({
         client: this.client,
         config: this.config,

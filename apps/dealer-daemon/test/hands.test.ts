@@ -180,6 +180,32 @@ describe("shuffling and starting", () => {
     assert.deepEqual([txs[0]!.msgs[0]!.value.round, txs[1]!.gasLimit !== undefined], [3, true]);
   });
 
+  it("with no hand, a player's StartHand in the mempool: the member whose turn the next hand is sends InitHand behind it, unsimulated; the others wait", async () => {
+    // Hand 7: 7 mod 3 = 1, so the order is B, C, A.
+    const sent = new Map<string, [string[], boolean][]>();
+    for (const v of [A, B, C]) {
+      const node = nodeWith({ next_hand_id: "7" });
+      const daemon = await daemonOf(node, v);
+      await pollOnce(daemon);
+      node.pending = [{ typeUrl: POKER.startHand, value: { caller: "ocp1player0", tableId: "1" } }];
+      await (daemon as unknown as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+      sent.set(v, sentBy(node).map((tx) => [typesOf(tx.msgs), tx.gasLimit !== undefined]));
+    }
+    assert.deepEqual(Object.fromEntries(sent), { [A]: [], [B]: [[["MsgInitHand"], true]], [C]: [] });
+  });
+
+  it("polls again at the same height send that InitHand once", async () => {
+    const node = nodeWith({ next_hand_id: "7" });
+    node.answer = (msg) => (msg.typeUrl === MSG.initHand ? "wait" : { refuse: "not due" });
+    const daemon = await daemonOf(node, B);
+    for (let repoll = 0; repoll < 3; repoll++) {
+      await pollOnce(daemon);
+      node.pending = [{ typeUrl: POKER.startHand, value: { caller: "ocp1player0", tableId: "1" } }];
+      await (daemon as unknown as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+    }
+    assert.equal(node.sentOf(MSG.initHand).length, 1);
+  });
+
   it("a started hand that is not initialized: the member whose turn it is sends InitHand at once, the others one block later", async () => {
     const table = { hand: { hand_id: "7", phase: "HAND_PHASE_SHUFFLE", dealer: { epoch_id: "0", deck_finalized: false } } };
     // The fake's state never shows the InitHand that landed, so only the members waiting are asked about the next block.
@@ -202,3 +228,195 @@ describe("shuffling and starting", () => {
   });
 });
 
+describe("proving a shuffle round ahead", () => {
+  // The order of shufflers is A, B, C. A's round 1 is in the mempool; B shuffles round 2.
+  const shuffling = (deck: unknown[], step: number) =>
+    [{ hand: { hand_id: "5", phase: "HAND_PHASE_SHUFFLE", dealer: { epoch_id: "9", deck_finalized: false } } }, dealerHand({ deck, shuffle_step: step, finalized: false })] as const;
+
+  async function roundOneOfA() {
+    const { shuffleProveV1, buildShuffleContext } = await import("@onchainpoker/ocp-shuffle");
+    const { decodeDeck, finalDeckOf } = await import("../src/handlers/shuffle.js");
+    const context = buildShuffleContext({ tableId: 1, handId: 5, round: 1, shuffler: A });
+    const { proofBytes } = shuffleProveV1(mulBase(77n), decodeDeck(deckOf(4)), { rounds: 2, context });
+    const after = finalDeckOf(proofBytes).map((e) => ({ c1: base64(e.c1), c2: base64(e.c2) }));
+    return { msg: { typeUrl: MSG.submitShuffle, value: { tableId: "1", handId: "5", round: 1, shuffler: A, proofShuffle: proofBytes } }, after };
+  }
+  const proveAhead = (daemon: unknown) => (daemon as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+  const roundTwo = (node: FakeNode) => node.sentOf(MSG.submitShuffle).map((m) => Buffer.from(m.value.proofShuffle).toString("hex"));
+
+  it("the next shuffler proves its round on the deck the pending round leaves, and sends that proof once the chain shows that deck", async () => {
+    const node = nodeWith(...shuffling(deckOf(4), 0));
+    const daemon = await daemonOf(node, B);
+    await pollOnce(daemon);
+    const { msg, after } = await roundOneOfA();
+    node.pending = [msg];
+    await proveAhead(daemon);
+    const made = Buffer.from((daemon as any).ahead.proofBytes).toString("hex");
+
+    node.dealerHands.set("1/5", shuffling(after, 1)[1]);
+    node.height += 1;
+    await pollOnce(daemon);
+
+    assert.deepEqual(roundTwo(node), [made]);
+  });
+
+  it("a proof made on a deck the chain does not show is not sent; the round is proved again on the chain's deck", async () => {
+    const node = nodeWith(...shuffling(deckOf(4), 0));
+    const daemon = await daemonOf(node, B);
+    await pollOnce(daemon);
+    node.pending = [(await roundOneOfA()).msg];
+    await proveAhead(daemon);
+    const made = Buffer.from((daemon as any).ahead.proofBytes).toString("hex");
+
+    // A's round that landed is another proof than the one that was pending.
+    node.dealerHands.set("1/5", shuffling((await roundOneOfA()).after, 1)[1]);
+    node.height += 1;
+    await pollOnce(daemon);
+
+    const sent = roundTwo(node);
+    assert.equal(sent.length, 1);
+    assert.notEqual(sent[0], made);
+  });
+});
+
+describe("revealing a street's next card ahead", () => {
+  // The flop: positions 4, 5, 6, the chain waits for 4. The order for 5 is C, A, B; for 6, A, B, C.
+  const flop = () => nodeWith(awaitingFlop(0), dealerHand());
+  const pub = (validator: string, pos: number) => ({ typeUrl: MSG.submitPubShare, value: { tableId: "1", handId: "5", pos, validator } });
+  const fin = (pos: number) => ({ typeUrl: MSG.finalizeReveal, value: { tableId: "1", handId: "5", pos } });
+  const ahead = (daemon: unknown) => (daemon as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+
+  it("when the mempool holds two shares of the waited card and a FinalizeReveal behind them, the next card's member sends its share and FinalizeReveal, unsimulated", async () => {
+    const node = flop();
+    const daemon = await daemonOf(node, C);
+    await pollOnce(daemon);
+    const before = sentBy(node).length;
+    node.pending = [pub(B, 4), pub(C, 4), fin(4)];
+    await ahead(daemon);
+
+    const txs = sentBy(node).slice(before);
+    assert.deepEqual(txs.map((tx) => [typesOf(tx.msgs)[0], tx.msgs[0]!.value.pos, tx.gasLimit !== undefined]), [
+      ["MsgSubmitPubShare", 5, true],
+      ["MsgFinalizeReveal", 5, true],
+    ]);
+  });
+
+  it("sends nothing ahead when the FinalizeReveal in the mempool has only one share before it", async () => {
+    const node = flop();
+    const daemon = await daemonOf(node, C);
+    await pollOnce(daemon);
+    const before = sentBy(node).length;
+    node.pending = [pub(B, 4), fin(4), pub(C, 4)];
+    await ahead(daemon);
+    assert.equal(sentBy(node).length, before);
+  });
+});
+
+describe("proving the first shuffle round ahead", () => {
+  it("the first shuffler proves round 1 on the deck a pending InitHand makes in the next block, and sends that proof once the chain shows it", async () => {
+    const { initialDeck } = await import("../src/handlers/shuffle.js");
+    const node = nodeWith({ next_hand_id: "6" });
+    const daemon = await daemonOf(node, A);
+    await pollOnce(daemon);
+    node.pending = [{ typeUrl: MSG.initHand, value: { caller: "ocp1x", tableId: "1", handId: "6", epochId: "9", deckSize: 0 } }];
+    await (daemon as unknown as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+    const made = Buffer.from((daemon as any).ahead.proofBytes).toString("hex");
+
+    const { pkHand, deck } = initialDeck({ pkEpoch: point(7), epochId: 9, tableId: "1", handId: "6", initHeight: node.height + 1 });
+    node.height += 1;
+    node.pending = [];
+    node.tables.set("1", { ...(node.tables.get("1") as object), hand: { hand_id: "6", phase: "HAND_PHASE_SHUFFLE", dealer: { epoch_id: "9", deck_finalized: false } } });
+    node.dealerHands.set("1/6", dealerHand({ pk_hand: base64(pkHand), deck: deck.map((e) => ({ c1: base64(e.c1), c2: base64(e.c2) })), shuffle_step: 0, finalized: false }));
+    await pollOnce(daemon);
+
+    const sent = node.sentOf(MSG.submitShuffle).map((m) => [m.value.round, Buffer.from(m.value.proofShuffle).toString("hex") === made]);
+    assert.deepEqual(sent, [[1, true]]);
+  });
+});
+
+describe("what the next block will make possible", () => {
+  // A six-player hand on the turn, read from a local three-validator chain: seats 4, 5 and 0 have checked, seat 1 is to act.
+  const turn = {
+    small_blind_seat: 4,
+    in_hand: [true, true, true, true, true, true, false, false, false],
+    action_on: 1,
+    bet_to: "0",
+    interval_id: "0",
+    street_commit: ["0", "0", "0", "0", "0", "0", "0", "0", "0"],
+    last_interval_acted: [0, -1, -1, -1, 0, 0, -1, -1, -1],
+    folded: [false, false, false, false, false, false, false, false, false],
+    all_in: [false, false, false, false, false, false, false, false, false],
+  };
+
+  it("holePositions gives the positions the chain's FinalizeDeck gave that hand", async () => {
+    const { holePositions } = await import("../src/handlers/encshares.js");
+    assert.deepEqual(holePositions(turn), [2, 8, 3, 9, 4, 10, 5, 11, 0, 6, 1, 7, 255, 255, 255, 255, 255, 255]);
+  });
+
+  it("closesStreet: a check ends the round only when every other seat in the hand has acted and matched", async () => {
+    const { closesStreet } = await import("../src/daemon.js");
+    const lastToAct = { ...turn, action_on: 3, last_interval_acted: [0, 0, 0, -1, 0, 0, -1, -1, -1] };
+    const facingABet = { ...lastToAct, bet_to: "20000", street_commit: ["20000", "20000", "20000", "0", "20000", "20000", "0", "0", "0"] };
+    assert.deepEqual(
+      [closesStreet(turn, "check"), closesStreet(lastToAct, "check"), closesStreet(lastToAct, "raise"), closesStreet(facingABet, "call"), closesStreet(facingABet, "fold")],
+      [false, true, false, true, false],
+    );
+  });
+});
+
+describe("sending behind what the mempool holds", () => {
+  const ahead = (daemon: unknown) => (daemon as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+
+  it("the last round's shuffle and FinalizeDeck in the mempool: a member whose turn the hole shares are sends them all behind, unsimulated", async () => {
+    const { shuffleProveV1, buildShuffleContext } = await import("@onchainpoker/ocp-shuffle");
+    const { decodeDeck } = await import("../src/handlers/shuffle.js");
+    const context = buildShuffleContext({ tableId: 1, handId: 5, round: 3, shuffler: C });
+    const { proofBytes } = shuffleProveV1(mulBase(77n), decodeDeck(deckOf(12)), { rounds: 2, context });
+    const hand = { hand_id: "5", phase: "HAND_PHASE_SHUFFLE", small_blind_seat: 0, in_hand: [true, true, true], dealer: { epoch_id: "9", deck_finalized: false } };
+    // Hole shares go to the last shuffler, C, then A; B waits.
+    const sent = new Map<string, [number, boolean][]>();
+    for (const v of [A, B]) {
+      const node = nodeWith({ hand, seats: seats(3) }, dealerHand({ shuffle_step: 2, finalized: false }));
+      const daemon = await daemonOf(node, v);
+      await pollOnce(daemon);
+      const before = sentBy(node).length;
+      node.pending = [
+        { typeUrl: MSG.submitShuffle, value: { tableId: "1", handId: "5", round: 3, shuffler: C, proofShuffle: proofBytes } },
+        { typeUrl: MSG.finalizeDeck, value: { caller: "ocp1c", tableId: "1", handId: "5" } },
+      ];
+      await ahead(daemon);
+      sent.set(v, sentBy(node).slice(before).map((tx) => [tx.msgs.filter((m) => m.typeUrl === MSG.submitEncShare).length, tx.gasLimit !== undefined]));
+    }
+    assert.deepEqual(Object.fromEntries(sent), { [A]: [[6, true]], [B]: [] });
+  });
+
+  it("a check that ends the preflop betting in the mempool: the flop's first card's members send share and FinalizeReveal behind it", async () => {
+    const hand = {
+      hand_id: "5",
+      phase: "HAND_PHASE_BETTING",
+      street: "STREET_PREFLOP",
+      action_on: 1,
+      bet_to: "10000",
+      interval_id: "0",
+      in_hand: [true, true],
+      folded: [false, false],
+      all_in: [false, false],
+      street_commit: ["10000", "10000"],
+      last_interval_acted: [0, -1],
+      dealer: { epoch_id: "9", deck_finalized: true, cursor: 4, reveal_pos: 255 },
+    };
+    // The flop is positions 4, 5, 6; the order for 4 is B, C, A.
+    const node = nodeWith({ hand }, dealerHand());
+    const daemon = await daemonOf(node, B);
+    await pollOnce(daemon);
+    const before = sentBy(node).length;
+    node.pending = [{ typeUrl: POKER.act, value: { player: "ocp1player1", tableId: "1", action: "check", amount: "0" } }];
+    await ahead(daemon);
+
+    const txs = sentBy(node).slice(before);
+    assert.deepEqual(txs.map((tx) => [typesOf(tx.msgs)[0], tx.msgs[0]!.value.pos, tx.gasLimit !== undefined]), [
+      ["MsgSubmitPubShare", 4, true],
+      ["MsgFinalizeReveal", 4, true],
+    ]);
+  });
+});
