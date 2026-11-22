@@ -3,3 +3,6 @@ export * from "./signing.js";
 export * from "./encoding.js";
 export * from "./ocp.js";
 export * from "./client.js";
+
+export { OcpTxError, txFailureOf } from "./confirm.js";
+export type { TxFailure } from "./confirm.js";

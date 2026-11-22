@@ -229,10 +229,9 @@ export type OcpCosmosClient = {
 export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
   const { signing, lcd } = args;
 
-  async function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string): Promise<DeliverTxResponse> {
-    const res = await signing.signAndBroadcastAuto(msgs, memo);
-    if (res.code !== 0) throw new Error(`tx failed: code=${res.code} log=${res.rawLog ?? ""}`);
-    return res;
+  // Resolves for code 0 only; any other outcome is an OcpTxError (see txFailureOf).
+  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string): Promise<DeliverTxResponse> {
+    return signing.signAndBroadcastAuto(msgs, memo);
   }
 
   function ensureLcd(): CosmosLcdClient {
