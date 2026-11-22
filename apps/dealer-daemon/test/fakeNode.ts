@@ -66,12 +66,14 @@ export class FakeNode {
   answer: (msg: Sent, nthOfType: number) => Answer = () => "land";
   /** A read that fails: "store:0x03" for a dealer store key, "lcd:<path>" for an LCD path. Returns the error text, or null. */
   failRead: (read: string) => string | null = () => null;
+  /** The stored bytes of a dealer key at a past height, for a node that keeps them. Without it every height reads the current state. */
+  storeAt: ((key: number, height: number) => Uint8Array | null) | null = null;
 
   sentOf(typeUrl: string): Sent[] {
     return this.sent.filter((m) => m.typeUrl === typeUrl);
   }
 
-  private storeValue(key: number): Uint8Array | null {
+  storeValue(key: number): Uint8Array | null {
     switch (key) {
       case STORE_KEY.nextEpochId:
         return u64be(this.nextEpochId);
@@ -124,7 +126,8 @@ export class FakeNode {
     return Typed ? new Typed({ kind: "rejected", log: answer.refuse }) : new Error(answer.refuse);
   }
 
-  client(): sdk.OcpCosmosClient {
+  /** `signer` is the account that signs: the chain reads it as the caller of BeginEpoch and FinalizeEpoch. */
+  client(signer = "ocp1signer"): sdk.OcpCosmosClient {
     const fetchFn = (async (url: string) => {
       const failure = this.failRead(`lcd:${new URL(url).pathname}`);
       if (failure !== null) throw new TypeError(failure);
@@ -140,7 +143,7 @@ export class FakeNode {
     }) as unknown as typeof fetch;
 
     const signing = {
-      address: "ocp1signer",
+      address: signer,
       client: {} as any,
       signAndBroadcastAuto: async (msgs: readonly Sent[]) => {
         for (const msg of msgs) {
@@ -155,7 +158,8 @@ export class FakeNode {
         if (store !== "dealer") throw new Error(`fake node: unknown store ${store}`);
         const failure = this.failRead(`store:0x${key[0]!.toString(16).padStart(2, "0")}`);
         if (failure !== null) throw new TypeError(failure);
-        return { value: this.storeValue(key[0]!), height: height ?? this.height };
+        const past = height !== undefined && height !== this.height && this.storeAt;
+        return { value: past ? past(key[0]!, height) : this.storeValue(key[0]!), height: height ?? this.height };
       },
       nodeStatus: async () => ({
         latestHeight: this.height,
@@ -171,6 +175,9 @@ export class FakeNode {
     });
   }
 }
+
+/** The account that signs for a validator. On the chain both are one key under two prefixes. */
+export const accountOf = (validator: string): string => validator.replace("valoper", "");
 
 export type Harness = { daemon: DealerDaemon; node: FakeNode; store: EpochStateStore; stateDir: string };
 
@@ -197,7 +204,7 @@ export function daemonAgainst(node: FakeNode, validator: string, overrides: Part
     patienceBlocks: 17_280,
     ...overrides,
   } as DealerDaemonConfig;
-  const daemon = new DealerDaemon({ client: node.client(), config, stateStore: store });
+  const daemon = new DealerDaemon({ client: node.client(accountOf(validator)), config, stateStore: store });
   return { daemon, node, store, stateDir };
 }
 
