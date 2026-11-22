@@ -14,16 +14,17 @@
 # Every check prints one line:
 #   CHECK <id> <what was measured>: <observed> (want <expected>) PASS|FAIL
 # and the run ends with the table of all of them and
-#   checks expected 33, ran 33, passed 33
+#   checks expected 34, ran 34, passed 34
 # It exits 0 only when the three numbers are equal. Processes and chain homes are removed on exit;
 # logs stay in .tmp/liveness until the next run.
 #
 # Scenarios (each on a fresh network) and the checks they hold. Numbers 01 to 24 are the design's;
-# 11, 21 and 24 are not run (see checks_of), 25 to 36 are new.
+# 11, 21 and 24 are not run (see checks_of), 25 to 37 are new.
 #   main        the tx index is off and transactions confirm; a fresh chain reaches a dealing epoch
 #               with encrypted shares only; the live chain's dead-epoch state, the old daemons'
 #               two failures in it, and the new daemons rotating out of it with nothing typed
-#   kill9       daemons killed around their key-generation commit come back with the same secrets
+#   kill9       daemons killed around their key-generation commit come back with the same secrets;
+#               the finalized key generation is readable at past heights
 #   fallback    one share never lands: one complaint, one plaintext reveal, nobody slashed
 #   absent      one daemon never starts: no epoch and no slash while patience lasts, then the
 #               others begin without it; a jailed validator is unjailed only through its own node
@@ -42,7 +43,7 @@ SCENARIOS="main kill9 fallback absent unrevealed"
 checks_of() {
   case "$1" in
     main) echo "33 01 02 25 03 04 05 06 36 07 08 10 12 26 13 09 14 15 34 16 17 18 19 20" ;;
-    kill9) echo "23" ;;
+    kill9) echo "23 37" ;;
     fallback) echo "29" ;;
     absent) echo "22 30 31 35 28 27" ;;
     unrevealed) echo "32" ;;
@@ -268,6 +269,8 @@ scenario_kill9() {
     commits=$((commits + $(ev_count DKGCommitAccepted "$INITIAL_HEIGHT" "${fin%% *}" "dealer=${VALOPER[$i]}")))
   done
   log_has "$(since_start "$(daemon_log $a)")" 'Rotation: dkg commit for epoch 1 landed' && say "daemon $a sent its commit again after the restart, and the chain took it"
+  check_is 37 "the finalized DKG read at past heights, as a daemon that was down at the finalize reads it: commits and encrypted shares at its reveal deadline; reads at heights the node does not hold that were refused" "3 6; 2 of 2" \
+    "$(node "$LIVENESS_DIR/past-state-probe.mjs" --rpc "$(rpc_url 0)" 2>&1 | tail -n 1)"
   check_is 23 "two daemons killed -9, one as its commit was sent and one after it landed, restarted 20 s later: commits on chain from them, times they wrote secrets, restarts that found the chain's commit equal to the disk's, restarts whose share matches the chain; the epoch; slashes; hands completed at showdown" \
     "2 2 2 2; committeeSize=3 slashed=0; 0; at least 1" \
     "$commits $written $matches $settled; committeeSize=$(ev_attr "$fin" committeeSize) slashed=$(ev_attr "$fin" slashed); $(ev_count ValidatorSlashed "$INITIAL_HEIGHT" "$(ev_scanned)"); $( (($(ev_count HandCompleted "${fin%% *}" 999999999 reason=showdown) >= 1)) && echo "at least 1" || echo 0)"
