@@ -102,7 +102,7 @@ export function loadConfig(): DealerDaemonConfig {
   }
 
   const committeeSize = envInt("DEALER_COMMITTEE_SIZE", 3);
-  const threshold = envInt("DEALER_THRESHOLD", 3);
+  const threshold = envInt("DEALER_THRESHOLD", 2);
   if (committeeSize < 1) throw new Error("DEALER_COMMITTEE_SIZE must be >= 1");
   if (threshold < 1) throw new Error("DEALER_THRESHOLD must be >= 1");
   if (threshold > committeeSize) throw new Error("DEALER_THRESHOLD must be <= DEALER_COMMITTEE_SIZE");
