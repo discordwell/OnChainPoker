@@ -1,6 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { handleShuffle } from "../src/handlers/shuffle.js";
+import { InFlight } from "../src/turns.js";
 
 class StubClient {
   submissions: Array<unknown> = [];
@@ -14,9 +15,17 @@ class StubClient {
     return this.dealerHand;
   }
 
-  async dealerSubmitShuffle(args: unknown): Promise<void> {
-    this.submissions.push(args);
-  }
+  readonly messages = { submitShuffle: (args: unknown) => args, finalizeDeck: (args: unknown) => args };
+
+  /** The hand sender the daemon passes: every shuffle it sends is a submission. */
+  readonly sender = {
+    height: 1,
+    inflight: new InFlight(),
+    send: async (s: { msgs: readonly unknown[] }) => {
+      this.submissions.push(...s.msgs);
+      return true;
+    },
+  };
 }
 
 function makeMembers(addrs: string[]) {
@@ -40,6 +49,7 @@ describe("handleShuffle wraparound guard", () => {
       tableId: "1",
       handId: "100",
       shufflers,
+      sender: client.sender,
     });
 
     assert.equal(client.submissions.length, 0, "must not submit a shuffle after all members have already shuffled");
@@ -56,6 +66,7 @@ describe("handleShuffle wraparound guard", () => {
       tableId: "1",
       handId: "100",
       shufflers,
+      sender: client.sender,
     });
 
     assert.equal(client.submissions.length, 0);
@@ -73,8 +84,10 @@ describe("handleShuffle wraparound guard", () => {
       tableId: "1",
       handId: "100",
       shufflers,
+      sender: client.sender,
     });
 
     assert.equal(client.submissions.length, 0);
   });
 });
+
