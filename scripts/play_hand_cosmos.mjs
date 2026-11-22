@@ -325,7 +325,6 @@ async function mkValidatorClient(name, node) {
   const signing = await withRetry(`${name}: connect signing client`, () =>
     connectOcpCosmosSigningClient({
       rpcUrl: RPC,
-      lcdUrl: LCD,
       signer: wallet,
       gasPrice: GAS_PRICE,
       registry,
@@ -411,7 +410,6 @@ async function mkClient(name, mnemonicEnv) {
   const signing = await withRetry(`${name}: connect signing client`, () =>
     connectOcpCosmosSigningClient({
       rpcUrl: RPC,
-      lcdUrl: LCD,
       signer: wallet,
       gasPrice: GAS_PRICE,
       registry,

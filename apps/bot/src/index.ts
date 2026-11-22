@@ -67,7 +67,6 @@ async function main() {
   const signing = await retryUntilOk("connect to chain RPC", () =>
     connectOcpCosmosSigningClient({
       rpcUrl: config.cosmosRpcUrl,
-      lcdUrl: config.cosmosLcdUrl,
       signer: wallet,
       gasPrice: config.gasPrice,
       registry,
