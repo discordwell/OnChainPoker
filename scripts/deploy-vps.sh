@@ -14,21 +14,33 @@ set -euo pipefail
 #   VPS_OCP_DIR     — Remote install dir (default: /opt/ocp)
 #   NO_RESTART      — If set to 1, skip service restart and env validation
 #                     (useful for pre-flip deploys to a standby server)
+#   DEPLOY_CHAIN_BINARY — If set to 1, also build ocpd and replace the chain binary.
+#                     Off by default: a deploy of the services must not change what
+#                     the validators run.
+#   DEPLOY_REBOOT_IF_UNREACHABLE — If set to 1, reboot a target that does not answer
+#                     SSH within 10 s. Off by default: the host is shared, and a slow
+#                     network on the deploying machine is not a dead server.
 
 DEPLOY_TARGETS="${DEPLOY_TARGETS:-ovh2}"
 VPS_USER="${VPS_USER:-}"
 VPS_OCP_DIR="${VPS_OCP_DIR:-/opt/ocp}"
 NO_RESTART="${NO_RESTART:-0}"
+DEPLOY_CHAIN_BINARY="${DEPLOY_CHAIN_BINARY:-0}"
+DEPLOY_REBOOT_IF_UNREACHABLE="${DEPLOY_REBOOT_IF_UNREACHABLE:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 REBOOT_SCRIPT="${HOME}/Projects/shared/reboot-vps.sh"
 
-# SSH kicker: test connectivity, reboot via OVH API if unreachable
+# Test connectivity. Reboots the server via the OVH API only when asked to.
 ensure_ssh() {
   local host="$1"
   if ssh -o ConnectTimeout=10 -o BatchMode=yes "$host" "true" 2>/dev/null; then
     return 0
+  fi
+  if [[ "$DEPLOY_REBOOT_IF_UNREACHABLE" != "1" ]]; then
+    echo "ERROR: SSH unreachable on $host. Nothing was deployed there. Try again, or set DEPLOY_REBOOT_IF_UNREACHABLE=1 to reboot it." >&2
+    exit 1
   fi
   echo "SSH unreachable on $host — kicking server via OVH API..."
   if [[ -x "$REBOOT_SCRIPT" ]]; then
@@ -130,10 +142,12 @@ if [ "$SKIP_BUILD" = false ]; then
   echo ">> Building bot..."
   pnpm -C apps/bot build
 
-  echo ">> Cross-compiling ocpd (linux/amd64)..."
-  OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
-  (cd "$PROJECT_ROOT/apps/cosmos" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$OCPD_BIN" ./cmd/ocpd)
-  echo "   Built: $OCPD_BIN ($(du -h "$OCPD_BIN" | cut -f1))"
+  if [[ "$DEPLOY_CHAIN_BINARY" == "1" ]]; then
+    echo ">> Cross-compiling ocpd (linux/amd64)..."
+    OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
+    (cd "$PROJECT_ROOT/apps/cosmos" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o "$OCPD_BIN" ./cmd/ocpd)
+    echo "   Built: $OCPD_BIN ($(du -h "$OCPD_BIN" | cut -f1))"
+  fi
 
   echo ">> Build complete."
 fi
@@ -186,13 +200,16 @@ for TARGET in "${TARGETS[@]}"; do
     "$PROJECT_ROOT/apps/bot/package.json" \
     "$VPS_SSH:$VPS_OCP_DIR/bot/"
 
-  # Chain binary (linux/amd64)
+  # Chain binary (linux/amd64): only when asked for.
   OCPD_BIN="$PROJECT_ROOT/apps/cosmos/bin/ocpd-linux-amd64"
-  if [[ -f "$OCPD_BIN" ]]; then
+  if [[ "$DEPLOY_CHAIN_BINARY" != "1" ]]; then
+    echo "   Chain binary left as it is (DEPLOY_CHAIN_BINARY=1 replaces it)"
+  elif [[ -f "$OCPD_BIN" ]]; then
     rsync -az --rsync-path="sudo rsync" "$OCPD_BIN" "$VPS_SSH:$VPS_OCP_DIR/bin/ocpd"
     ssh "$VPS_SSH" "sudo chmod +x $VPS_OCP_DIR/bin/ocpd"
   else
-    echo "   WARN: ocpd-linux-amd64 not found, skipping chain binary deploy"
+    echo "ERROR: DEPLOY_CHAIN_BINARY=1 but $OCPD_BIN is missing (was --skip-build given?)" >&2
+    exit 1
   fi
 
   # Genesis scripts

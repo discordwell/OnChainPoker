@@ -12,6 +12,9 @@ Restart=on-failure
 RestartSec=10
 RestartSteps=5
 RestartMaxDelaySec=300
+# The host is shared and has no memory headroom: a runaway process is stopped, not swapped.
+MemoryMax=600M
+MemorySwapMax=0
 
 Environment=NODE_ENV=production
 EnvironmentFile=/opt/ocp/config/bot-%i.env
