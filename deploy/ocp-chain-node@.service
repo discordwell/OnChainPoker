@@ -6,9 +6,11 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=ocp
-ExecStart=/opt/ocp/bin/ocpd start --home /opt/ocp/chain/node%i
+ExecStart=/opt/ocp/bin/ocpd start --home /opt/ocp/chain/node%i --log_level warn
 Restart=on-failure
 RestartSec=5
+RestartSteps=5
+RestartMaxDelaySec=60
 
 [Install]
 WantedBy=multi-user.target

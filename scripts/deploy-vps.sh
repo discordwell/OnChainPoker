@@ -8,14 +8,14 @@ set -euo pipefail
 #   ./scripts/deploy-vps.sh [--build-only] [--skip-build]
 #
 # Environment:
-#   DEPLOY_TARGETS  — Comma-separated SSH host aliases (default: ovh)
+#   DEPLOY_TARGETS  — Comma-separated SSH host aliases (default: ovh2)
 #                     Example: DEPLOY_TARGETS=ovh,ovh2 ./scripts/deploy-vps.sh
 #   VPS_USER        — SSH user override (default: use SSH config)
 #   VPS_OCP_DIR     — Remote install dir (default: /opt/ocp)
 #   NO_RESTART      — If set to 1, skip service restart and env validation
 #                     (useful for pre-flip deploys to a standby server)
 
-DEPLOY_TARGETS="${DEPLOY_TARGETS:-ovh}"
+DEPLOY_TARGETS="${DEPLOY_TARGETS:-ovh2}"
 VPS_USER="${VPS_USER:-}"
 VPS_OCP_DIR="${VPS_OCP_DIR:-/opt/ocp}"
 NO_RESTART="${NO_RESTART:-0}"
@@ -111,6 +111,7 @@ if [ "$SKIP_BUILD" = false ]; then
   pnpm -C packages/ocp-crypto build
   pnpm -C packages/ocp-shuffle build
   pnpm -C packages/ocp-sdk build
+  pnpm -C packages/holdem-eval build
 
   echo ">> Building web..."
   VITE_COORDINATOR_HTTP_URL=/ocp/api \
@@ -290,12 +291,31 @@ NODE"
   require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/coordinator.env"
   require_remote_file "$VPS_SSH" "$VPS_OCP_DIR/config/dealer-0.env"
 
-  # Reload and restart services
+  # Reload, enable and restart services. Every unit is enabled so the testnet
+  # comes back after a reboot. Chain nodes go first, one at a time.
   echo ">> [$TARGET] Restarting services..."
   ssh "$VPS_SSH" "sudo systemctl daemon-reload"
 
+  # Restart each initialized chain node and wait for its own RPC port (from its config.toml)
+  NODE_INSTANCES="$(ssh "$VPS_SSH" "sudo sh -c 'ls -d $VPS_OCP_DIR/chain/node*/config/genesis.json 2>/dev/null' | sed 's|.*/chain/node||;s|/config/genesis.json$||' | sort -n || true")"
+  if [[ -n "$NODE_INSTANCES" ]]; then
+    for NODE_ID in $NODE_INSTANCES; do
+      NODE_RPC_PORT="$(ssh "$VPS_SSH" "sudo sed -n '/^\[rpc\]/,/^\[/s|^laddr = \"tcp://[^:]*:\([0-9]*\)\"|\1|p' $VPS_OCP_DIR/chain/node$NODE_ID/config/config.toml")"
+      if [[ -z "$NODE_RPC_PORT" ]]; then
+        echo "ERROR: no [rpc] laddr port in $VPS_OCP_DIR/chain/node$NODE_ID/config/config.toml"
+        exit 1
+      fi
+      echo "   Restarting ocp-chain-node@$NODE_ID (RPC port $NODE_RPC_PORT)..."
+      ssh "$VPS_SSH" "sudo systemctl enable ocp-chain-node@$NODE_ID && sudo systemctl restart ocp-chain-node@$NODE_ID"
+      ensure_service_active "$VPS_SSH" "ocp-chain-node@$NODE_ID"
+      wait_remote_http "$VPS_SSH" "chain node $NODE_ID RPC status" "http://127.0.0.1:$NODE_RPC_PORT/status" 60
+    done
+  else
+    echo "   Chain not initialized yet — run production-genesis.sh on VPS first"
+  fi
+
   # Restart coordinator
-  ssh "$VPS_SSH" "sudo systemctl restart ocp-coordinator"
+  ssh "$VPS_SSH" "sudo systemctl enable ocp-coordinator && sudo systemctl restart ocp-coordinator"
   ensure_service_active "$VPS_SSH" "ocp-coordinator"
   wait_remote_http "$VPS_SSH" "coordinator health" "http://127.0.0.1:8788/health" 45
 
@@ -304,7 +324,7 @@ NODE"
   if [[ -n "$DEALER_INSTANCES" ]]; then
     for DEALER_ID in $DEALER_INSTANCES; do
       echo "   Restarting ocp-dealer-daemon@$DEALER_ID..."
-      ssh "$VPS_SSH" "sudo systemctl restart ocp-dealer-daemon@$DEALER_ID"
+      ssh "$VPS_SSH" "sudo systemctl enable ocp-dealer-daemon@$DEALER_ID && sudo systemctl restart ocp-dealer-daemon@$DEALER_ID"
       ensure_service_active "$VPS_SSH" "ocp-dealer-daemon@$DEALER_ID"
     done
   else
@@ -316,20 +336,11 @@ NODE"
   if [[ -n "$BOT_INSTANCES" ]]; then
     for BOT_ID in $BOT_INSTANCES; do
       echo "   Restarting ocp-bot@$BOT_ID..."
-      ssh "$VPS_SSH" "sudo systemctl restart ocp-bot@$BOT_ID"
+      ssh "$VPS_SSH" "sudo systemctl enable ocp-bot@$BOT_ID && sudo systemctl restart ocp-bot@$BOT_ID"
       ensure_service_active "$VPS_SSH" "ocp-bot@$BOT_ID"
     done
   else
     echo "   No bot env files found — skipping bot restart"
-  fi
-
-  # Restart chain node if it's already initialized
-  if ssh "$VPS_SSH" "sudo test -f '$VPS_OCP_DIR/chain/node0/config/genesis.json'"; then
-    ssh "$VPS_SSH" "sudo systemctl restart ocp-chain-node@0"
-    ensure_service_active "$VPS_SSH" "ocp-chain-node@0"
-    wait_remote_http "$VPS_SSH" "chain RPC status" "http://127.0.0.1:26657/status" 60
-  else
-    echo "   Chain not initialized yet — run production-genesis.sh on VPS first"
   fi
 
   # Detect and reload the reverse proxy (nginx or caddy)
