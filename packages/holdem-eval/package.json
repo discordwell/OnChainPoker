@@ -14,7 +14,7 @@
   ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
