@@ -30,7 +30,7 @@ time_hands() { # players
   ev_wait HandCompleted "${fin%% *}" 1500 >/dev/null || die "no hand completed"
   from="$(ev_scanned)"
   say "epoch 1 dealing; timing $HANDS hands started after height $from"
-  while (($(node "$LIVENESS_DIR/hand-times.mjs" "$EVENTS" --from "$from" --players "$players" --json 2>/dev/null | jq '.summary.hands // 0') < HANDS)); do
+  while (($(node "$LIVENESS_DIR/hand-times.mjs" "$EVENTS" --from "$from" --players "$players" --json | jq '.summary.hands') < HANDS)); do
     (($(ev_scanned) < from + HANDS * 1500)) || die "fewer than $HANDS hands in $((HANDS * 1500)) blocks"
     ev_sync $(($(ev_scanned) + 5))
   done
@@ -63,7 +63,7 @@ trap 'exit 130' INT TERM
 
 OCPD="$(build_ocpd)"
 [[ "${SKIP_BUILD:-}" == 1 ]] || build_new
-say "chain binary $OCPD ($CHAIN_REF); networks: $CONFIGS; $HANDS hands each"
+say "chain binary $OCPD ($(ocpd_origin)); networks: $CONFIGS; $HANDS hands each"
 
 index=0
 RUN_PIDS=""
