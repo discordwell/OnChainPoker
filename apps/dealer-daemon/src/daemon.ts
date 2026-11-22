@@ -397,7 +397,10 @@ export class DealerDaemon {
 
     if (decision.action === null) {
       if (decision.alarm) logError(decision.why);
-      else if (!lines.some((l) => l.line === decision.why)) log(decision.why);
+      // A chain that deals can stay as it is for weeks: what there is to say beyond the headline is said once.
+      else if (decision.situation.kind !== "dealing") log(decision.why);
+      else if (lines.some((l) => l.line === decision.why)) this.printed.dealing = "";
+      else this.once("dealing", decision.why, decision.why);
     } else if (decision.costs.length > 0) {
       // A step that gets a validator slashed is announced every time, before it is sent.
       logProgress(decision.why);
