@@ -107,7 +107,6 @@ export class FaucetService {
       rpcUrl: this.config.rpcUrl,
       signer: wallet,
       gasPrice: this.config.gasPrice,
-      lcdUrl: this.config.lcdUrl,
     });
     console.log(`[faucet] initialized — address: ${this.signing.address}, drip: ${this.config.amount}${this.config.denom}`);
   }
@@ -177,10 +176,6 @@ export class FaucetService {
       };
 
       const result = await this.signing.signAndBroadcastAuto([msg], "ocp faucet drip");
-
-      if (result.code !== 0) {
-        throw new Error(`tx failed with code ${result.code}: ${result.rawLog}`);
-      }
 
       // Set cooldowns after success
       this.addressCooldowns.set(address, now + this.config.cooldownMs);

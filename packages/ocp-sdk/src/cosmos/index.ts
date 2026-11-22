@@ -4,8 +4,8 @@ export * from "./encoding.js";
 export * from "./ocp.js";
 export * from "./client.js";
 
-export { OcpTxError, txFailureOf } from "./txFailure.js";
-export type { TxFailure } from "./txFailure.js";
+export { OcpTxError, txFailureOf } from "./confirm.js";
+export type { TxFailure } from "./confirm.js";
 
 export type {
   BeaconWindow,

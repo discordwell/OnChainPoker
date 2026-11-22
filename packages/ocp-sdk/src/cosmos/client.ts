@@ -3,7 +3,7 @@ import type { DeliverTxResponse, Event } from "@cosmjs/stargate";
 
 import { parseValidators, readDealerState, type DealerState, type ValidatorInfo } from "./dealerState.js";
 import type { CosmosLcdClient } from "./lcd.js";
-import type { NodeReads, NodeStatus } from "./nodeReads.js";
+import type { NodeStatus } from "./nodeReads.js";
 import { OCP_TYPE_URLS } from "./ocp.js";
 import type { OcpCosmosSigningClient } from "./signing.js";
 
@@ -130,15 +130,8 @@ export function parseHandIdFromTx(tx: DeliverTxResponse): string | null {
   return v && /^\d+$/.test(v) ? v : null;
 }
 
-/**
- * STAND-IN. signing.ts gains `queryStore` and `nodeStatus` (nodeReadsOver in nodeReads.ts, over
- * its CometBFT client) with the confirmation change. Until OcpCosmosSigningClient declares them,
- * they are optional here. Then: use OcpCosmosSigningClient alone and delete this type.
- */
-type SigningWithNodeReads = OcpCosmosSigningClient & Partial<NodeReads>;
-
 export type OcpCosmosClient = {
-  signing: SigningWithNodeReads;
+  signing: OcpCosmosSigningClient;
   lcd?: CosmosLcdClient;
 
   // --- poker queries ---
@@ -252,13 +245,12 @@ export type OcpCosmosClient = {
   slashingUnjail: (args: { validator: string; memo?: string }) => Promise<DeliverTxResponse>;
 };
 
-export function createOcpCosmosClient(args: { signing: SigningWithNodeReads; lcd?: CosmosLcdClient }): OcpCosmosClient {
+export function createOcpCosmosClient(args: { signing: OcpCosmosSigningClient; lcd?: CosmosLcdClient }): OcpCosmosClient {
   const { signing, lcd } = args;
 
-  async function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string): Promise<DeliverTxResponse> {
-    const res = await signing.signAndBroadcastAuto(msgs, memo);
-    if (res.code !== 0) throw new Error(`tx failed: code=${res.code} log=${res.rawLog ?? ""}`);
-    return res;
+  // Resolves for code 0 only; any other outcome is an OcpTxError (see txFailureOf).
+  function signAndBroadcast(msgs: readonly EncodeObject[], memo?: string): Promise<DeliverTxResponse> {
+    return signing.signAndBroadcastAuto(msgs, memo);
   }
 
   function ensureLcd(): CosmosLcdClient {
@@ -301,7 +293,6 @@ export function createOcpCosmosClient(args: { signing: SigningWithNodeReads; lcd
   }
 
   async function getDealerState(at?: { height: number }): Promise<DealerState> {
-    if (!signing.queryStore) throw new Error("OcpCosmosClient: the signing client cannot read a store (no queryStore)");
     return readDealerState(signing.queryStore, at);
   }
 
@@ -310,7 +301,6 @@ export function createOcpCosmosClient(args: { signing: SigningWithNodeReads; lcd
   }
 
   async function getNodeStatus(): Promise<NodeStatus> {
-    if (!signing.nodeStatus) throw new Error("OcpCosmosClient: the signing client cannot read its node's status (no nodeStatus)");
     return signing.nodeStatus();
   }
 

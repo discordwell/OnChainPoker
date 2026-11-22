@@ -1,13 +1,28 @@
+import { sha256 } from "@cosmjs/crypto";
+import { toHex } from "@cosmjs/encoding";
 import type { EncodeObject, OfflineSigner, Registry } from "@cosmjs/proto-signing";
 import { DirectSecp256k1HdWallet, DirectSecp256k1Wallet } from "@cosmjs/proto-signing";
-import type { DeliverTxResponse, Event, SigningStargateClientOptions } from "@cosmjs/stargate";
-import { calculateFee, GasPrice, SigningStargateClient } from "@cosmjs/stargate";
+import type { DeliverTxResponse, SigningStargateClientOptions } from "@cosmjs/stargate";
+import { calculateFee, fromTendermintEvent, GasPrice, SigningStargateClient } from "@cosmjs/stargate";
+import { connectComet, type CometClient } from "@cosmjs/tendermint-rpc";
+import { TxRaw } from "cosmjs-types/cosmos/tx/v1beta1/tx.js";
+
+import { answerBy, type BlockSource, CONFIRM_LIMITS, confirmByBlockScan, OcpTxError, realClock } from "./confirm.js";
+import { nodeReadsOver, type NodeReads } from "./nodeReads.js";
 
 export type OcpCosmosSigningClient = {
   address: string;
   client: SigningStargateClient;
+
+  /**
+   * Simulates, signs with a timeout height, broadcasts, and reads blocks until one holds the tx.
+   * Resolves only for a tx in a block with code 0, with that block's result.
+   * Throws OcpTxError "rejected" | "failed" | "expired" | "unknown" (see txFailureOf), and passes other
+   * errors from before the broadcast through unchanged. Holds the caller at most
+   * CONFIRM_LIMITS.maxWaitMs from the broadcast.
+   */
   signAndBroadcastAuto: (msgs: readonly EncodeObject[], memo?: string) => Promise<DeliverTxResponse>;
-};
+} & NodeReads;
 
 export async function walletFromMnemonic(args: { mnemonic: string; prefix: string }): Promise<DirectSecp256k1HdWallet> {
   return DirectSecp256k1HdWallet.fromMnemonic(args.mnemonic, { prefix: args.prefix });
@@ -26,99 +41,22 @@ export async function walletFromPrivKey(args: { privateKeyHex: string; prefix: s
   return DirectSecp256k1Wallet.fromKey(new Uint8Array(Buffer.from(normalized, "hex")), args.prefix);
 }
 
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
-function toNumber(x: unknown, fallback = 0): number {
-  if (typeof x === "number" && Number.isFinite(x)) return x;
-  if (typeof x === "string" && x.trim() !== "") {
-    const n = Number(x);
-    return Number.isFinite(n) ? n : fallback;
+/** cosmjs throws a node's JSON-RPC error as its JSON text. This is the node's own sentence, or null. */
+function nodeSaid(err: unknown): string | null {
+  try {
+    const e = JSON.parse(errorText(err));
+    return typeof e?.code === "number" ? String(e.data || e.message) : null;
+  } catch {
+    return null;
   }
-  if (typeof x === "bigint") return Number(x);
-  return fallback;
-}
-
-function toBigInt(x: unknown): bigint {
-  if (typeof x === "bigint") return x;
-  if (typeof x === "number" && Number.isFinite(x)) return BigInt(Math.trunc(x));
-  if (typeof x === "string" && x.trim() !== "") {
-    try {
-      return BigInt(x);
-    } catch {
-      return 0n;
-    }
-  }
-  return 0n;
-}
-
-function normalizeEvents(eventsRaw: unknown): readonly Event[] {
-  if (!Array.isArray(eventsRaw)) return [];
-  const events: Event[] = [];
-  for (const ev of eventsRaw) {
-    if (!ev || typeof ev !== "object") continue;
-    const type = String((ev as Record<string, unknown>).type ?? "");
-    if (!type) continue;
-    const attrsRaw = (ev as Record<string, unknown>).attributes;
-    const attrs = Array.isArray(attrsRaw)
-      ? attrsRaw
-        .filter((a) => a && typeof a === "object")
-        .map((a) => ({
-          key: String((a as Record<string, unknown>).key ?? ""),
-          value: String((a as Record<string, unknown>).value ?? ""),
-        }))
-      : [];
-    events.push({ type, attributes: attrs });
-  }
-  return events;
-}
-
-async function waitForDeliverTxViaLcd(lcdUrl: string, txHash: string): Promise<DeliverTxResponse> {
-  const fetchFn: ((input: string) => Promise<{ ok: boolean; status: number; json: () => Promise<any> }>) | undefined =
-    (globalThis as { fetch?: any }).fetch;
-  if (typeof fetchFn !== "function") {
-    throw new Error("global fetch is required to poll tx results via LCD");
-  }
-
-  const base = lcdUrl.replace(/\/+$/, "");
-  const hash = txHash.trim().toUpperCase();
-  const deadline = Date.now() + 120_000;
-  let lastError = "";
-
-  while (Date.now() < deadline) {
-    try {
-      const res = await fetchFn(`${base}/cosmos/tx/v1beta1/txs/${hash}`);
-      if (res.ok) {
-        const json = await res.json();
-        const txRes = json?.tx_response ?? json?.txResponse;
-        if (txRes && typeof txRes === "object") {
-          return {
-            height: toNumber(txRes.height),
-            txIndex: toNumber(txRes.tx_index ?? txRes.txIndex, 0),
-            code: toNumber(txRes.code),
-            transactionHash: String(txRes.txhash ?? txRes.txHash ?? hash).toUpperCase(),
-            events: normalizeEvents(txRes.events),
-            rawLog: typeof txRes.raw_log === "string" ? txRes.raw_log : typeof txRes.rawLog === "string" ? txRes.rawLog : "",
-            msgResponses: [],
-            gasWanted: toBigInt(txRes.gas_wanted ?? txRes.gasWanted),
-            gasUsed: toBigInt(txRes.gas_used ?? txRes.gasUsed),
-          };
-        }
-      } else if (res.status !== 404 && res.status !== 400) {
-        lastError = `unexpected HTTP ${res.status} from LCD tx query`;
-      }
-    } catch (err) {
-      lastError = String((err as Error)?.message ?? err);
-    }
-    await sleepMs(500);
-  }
-
-  throw new Error(`timed out waiting for tx ${hash} via LCD${lastError ? ` (${lastError})` : ""}`);
 }
 
 function isSocketError(err: unknown): boolean {
-  const msg = String((err as Error)?.message ?? err).toLowerCase();
+  const msg = errorText(err).toLowerCase();
   return msg.includes("socket hang up") ||
     msg.includes("econnreset") ||
     msg.includes("econnrefused") ||
@@ -127,12 +65,47 @@ function isSocketError(err: unknown): boolean {
     msg.includes("fetch failed");
 }
 
+/** A keep-alive socket the node closed while we were idle fails the first request; one more try gets a new one. */
+async function onceMoreOnSocketError<T>(call: () => Promise<T>): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (!isSocketError(err)) throw err;
+    return call();
+  }
+}
+
+const txHashOf = (tx: Uint8Array) => toHex(sha256(tx)).toUpperCase();
+
+type BlockResults = Awaited<ReturnType<CometClient["blockResults"]>>;
+
+function blockSource(comet: CometClient): BlockSource {
+  const read = <T>(p: Promise<T>) => p.catch((err): never => { throw new Error(nodeSaid(err) ?? errorText(err)); });
+  return {
+    latestHeight: async () => (await read(comet.status())).syncInfo.latestBlockHeight,
+    txHashesAt: async (height) => (await read(comet.block(height))).block.txs.map(txHashOf),
+    txResultAt: async (height, index) => {
+      const r = (await read<BlockResults>(comet.blockResults(height))).results[index];
+      if (!r) throw new Error(`block results at height ${height} have no result for tx ${index}`);
+      return {
+        code: r.code,
+        codespace: r.codespace ?? "",
+        log: r.log ?? "",
+        events: r.events.map(fromTendermintEvent),
+        gasWanted: r.gasWanted,
+        gasUsed: r.gasUsed,
+      };
+    },
+  };
+}
+
 export async function connectOcpCosmosSigningClient(args: {
   rpcUrl: string;
   signer: OfflineSigner;
   signerAddress?: string;
   gasPrice: string;
-  lcdUrl?: string;
+  /** A person approves each signature (a browser wallet): a tx gets 60 blocks to land instead of 6. */
+  interactive?: boolean;
   registry?: Registry;
   stargate?: Omit<SigningStargateClientOptions, "registry">;
   gasMultiplier?: number;
@@ -144,63 +117,68 @@ export async function connectOcpCosmosSigningClient(args: {
   if (!address) throw new Error("empty signer address");
 
   const gasPrice = GasPrice.fromString(args.gasPrice);
-  const connectOpts: SigningStargateClientOptions = {
+  const gasMultiplier = args.gasMultiplier ?? 1.3;
+  const ttlBlocks = args.interactive ? CONFIRM_LIMITS.ttlBlocks.interactive : CONFIRM_LIMITS.ttlBlocks.service;
+
+  const comet = await connectComet(args.rpcUrl);
+  const client = await SigningStargateClient.createWithSigner(comet, args.signer, {
     gasPrice,
     registry: args.registry,
-    ...(args.stargate ?? {})
-  };
+    ...(args.stargate ?? {}),
+  });
+  const source = blockSource(comet);
 
-  let client = await SigningStargateClient.connectWithSigner(args.rpcUrl, args.signer, connectOpts);
+  // Confirmation reads each tx's result from block_results. The latest block may still be executing, so ask for the one before it.
+  const latest = await source.latestHeight();
+  await comet.blockResults(Math.max(1, latest - 1)).catch((err) => {
+    throw new Error(
+      `${args.rpcUrl} does not serve block results, so no transaction it takes can be confirmed ` +
+      `(its config.toml must keep discard_abci_responses = false under [storage]): ${nodeSaid(err) ?? errorText(err)}`,
+    );
+  });
 
-  const gasMultiplier = args.gasMultiplier ?? 1.3;
-
-  async function reconnect(): Promise<void> {
-    try { client.disconnect(); } catch { /* ignore */ }
-    client = await SigningStargateClient.connectWithSigner(args.rpcUrl, args.signer, connectOpts);
-  }
-
-  // Note: on socket-error retry, the original tx may already be in the mempool.
-  // Cosmos SDK account sequence numbers prevent double-execution, so retrying is
-  // safe (the retry will fail with sequence mismatch if the original succeeded).
-  // Callers should tolerate transient errors and re-check on-chain state.
-  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = ""): Promise<DeliverTxResponse> {
-    let gasUsed: number;
+  async function simulate(msgs: readonly EncodeObject[], memo: string): Promise<number> {
     try {
-      gasUsed = await client.simulate(address, msgs, memo);
+      return await onceMoreOnSocketError(() => client.simulate(address, msgs, memo));
     } catch (err) {
-      if (!isSocketError(err)) throw err;
-      // Stale RPC connection (e.g. after long shuffle computation) — reconnect and retry
-      await reconnect();
-      gasUsed = await client.simulate(address, msgs, memo);
-    }
-
-    const gasLimit = Math.max(200_000, Math.ceil(gasUsed * gasMultiplier));
-    const fee = calculateFee(gasLimit, gasPrice);
-
-    if (args.lcdUrl) {
-      let txHash: string;
-      try {
-        txHash = await client.signAndBroadcastSync(address, msgs, fee, memo);
-      } catch (err) {
-        if (!isSocketError(err)) throw err;
-        await reconnect();
-        txHash = await client.signAndBroadcastSync(address, msgs, fee, memo);
+      const text = errorText(err);
+      // cosmjs's wording for "the chain answered no": a failed query, or no account to sign for.
+      if (/^Query failed with \(\d+\)/.test(text) || text.includes("does not exist on chain")) {
+        throw new OcpTxError({ kind: "rejected", log: text });
       }
-      return waitForDeliverTxViaLcd(args.lcdUrl, txHash);
-    }
-
-    try {
-      return await client.signAndBroadcast(address, msgs, fee, memo);
-    } catch (err) {
-      if (!isSocketError(err)) throw err;
-      await reconnect();
-      return client.signAndBroadcast(address, msgs, fee, memo);
+      throw err;
     }
   }
 
-  return {
-    address,
-    get client() { return client; },
-    signAndBroadcastAuto,
-  };
+  // Throws "rejected" only when the node's first answer says it did not take the tx. When the first
+  // attempt fails on the wire the tx may be in a mempool, so the same bytes go once more and the block scan decides.
+  async function broadcast(tx: Uint8Array, deadline: number): Promise<void> {
+    try {
+      const res = await answerBy(comet.broadcastTxSync({ tx }), deadline, realClock);
+      if (res.code !== 0) throw new OcpTxError({ kind: "rejected", log: res.log ?? "" });
+      return;
+    } catch (err) {
+      if (err instanceof OcpTxError) throw err;
+      const said = nodeSaid(err);
+      if (said?.includes("tx already exists in cache")) return;
+      if (said !== null) throw new OcpTxError({ kind: "rejected", log: said });
+    }
+    await answerBy(comet.broadcastTxSync({ tx }), deadline, realClock).catch(() => undefined);
+  }
+
+  // Signs once. A second signature would be a second tx with the same sequence, and the caller would hear of one.
+  async function signAndBroadcastAuto(msgs: readonly EncodeObject[], memo = ""): Promise<DeliverTxResponse> {
+    const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
+    const gasUsed = await simulate(msgs, memo);
+    const fee = calculateFee(Math.max(200_000, Math.ceil(gasUsed * gasMultiplier)), gasPrice);
+    const timeoutHeight = sentAtHeight + ttlBlocks;
+    const tx = TxRaw.encode(await client.sign(address, msgs, fee, memo, undefined, BigInt(timeoutHeight))).finish();
+    const hash = txHashOf(tx);
+
+    const deadline = realClock.now() + CONFIRM_LIMITS.maxWaitMs;
+    await broadcast(tx, deadline);
+    return confirmByBlockScan(source, { hash, sentAtHeight, timeoutHeight }, realClock, deadline);
+  }
+
+  return { address, client, signAndBroadcastAuto, ...nodeReadsOver(() => comet) };
 }
