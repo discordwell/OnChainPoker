@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:
 import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Algorithm, hashRaw } from "@node-rs/argon2";
+import type { UnjailRecord } from "./rotation.js";
 
 export interface EpochSecrets {
   epochId: number;
@@ -193,6 +194,7 @@ function parseSecrets(value: unknown, epochId: number): EpochSecrets {
 }
 
 const EPOCH_FILE = /^epoch-(\d+)\.json\.enc(\.tmp)?$/;
+const UNJAIL_FILE = "unjail.json";
 
 export class EpochStateStore {
   private readonly dir: string;
@@ -301,6 +303,26 @@ export class EpochStateStore {
     } catch (err) {
       return { ok: false, reason: reasonOf(err) };
     }
+  }
+
+  /** The unjails this daemon sent. Not a secret, so it is plain JSON an operator can read. No file means none yet. */
+  loadUnjailRecord(): UnjailRecord {
+    let value: unknown;
+    try {
+      value = JSON.parse(readFileSync(join(this.dir, UNJAIL_FILE), "utf8"));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return { landed: 0, lastLandedAtMs: 0, lastTriedAtMs: 0 };
+      throw new Error(`the unjail record ${UNJAIL_FILE} cannot be read: ${reasonOf(err)}`);
+    }
+    const count = (n: unknown): n is number => typeof n === "number" && Number.isFinite(n) && n >= 0;
+    if (!isRecord(value) || !count(value.landed) || !count(value.lastLandedAtMs) || !count(value.lastTriedAtMs)) {
+      throw new Error(`the unjail record ${UNJAIL_FILE} does not hold three counts`);
+    }
+    return { landed: value.landed, lastLandedAtMs: value.lastLandedAtMs, lastTriedAtMs: value.lastTriedAtMs };
+  }
+
+  saveUnjailRecord(record: UnjailRecord): void {
+    this.writeDurably(join(this.dir, UNJAIL_FILE), JSON.stringify(record));
   }
 
   /**

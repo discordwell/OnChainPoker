@@ -3,7 +3,8 @@
 
 import { afterEach, beforeEach, describe, it, mock } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { OCP_TYPE_URLS } from "@onchainpoker/ocp-sdk/cosmos";
 import {
   BeaconState,
@@ -126,6 +127,97 @@ describe("the secrets directory", () => {
     await pollOnce(daemon);
 
     assert.deepEqual(readdirSync(stateDir), ["epoch-7.json.enc"]);
+  });
+});
+
+describe("a jailed validator is brought back by its own daemon", () => {
+  const KEY_OF_A = bytes(1);
+
+  /** A is jailed. Its daemon's node is caught up, fresh, and signs with A's key. */
+  function jailed(): FakeNode {
+    const node = deadEpoch(905);
+    node.validators = bonded().map((v) => (v.operator === A ? { ...v, status: "BOND_STATUS_UNBONDING" as const, jailed: true } : v));
+    node.nodeStatus = { catchingUp: false, blockAgeMs: 2_000, consensusPubkey: KEY_OF_A };
+    return node;
+  }
+
+  it("sends MsgUnjail for its own validator when every guard passes, and says so", async () => {
+    const node = jailed();
+    await pollOnce(daemonAgainst(node, A).daemon);
+    assert.deepEqual(node.sent.map((m) => [m.typeUrl, m.value.validatorAddr]), [[OCP_TYPE_URLS.slashing.unjail, A]]);
+    assert.match(lines.join("\n"), /Unjail: ocpvaloper1a unjailed \(attempt 1; the next one waits at least 1 h\)/);
+  });
+
+  it("does not unjail a validator whose node is catching up, is stale, or signs with another key", async () => {
+    for (const status of [
+      { catchingUp: true, blockAgeMs: 2_000, consensusPubkey: KEY_OF_A },
+      { catchingUp: false, blockAgeMs: 31_000, consensusPubkey: KEY_OF_A },
+      { catchingUp: false, blockAgeMs: 2_000, consensusPubkey: bytes(9) },
+      { catchingUp: false, blockAgeMs: 2_000, consensusPubkey: null },
+    ]) {
+      const node = jailed();
+      node.nodeStatus = status;
+      await pollOnce(daemonAgainst(node, A).daemon);
+      assert.deepEqual(node.sent, [], JSON.stringify(status));
+    }
+  });
+
+  it("does not unjail when its node's status cannot be read", async () => {
+    const node = jailed();
+    const { daemon } = daemonAgainst(node, A);
+    (daemon as any).client.signing.nodeStatus = async () => {
+      throw new TypeError("fetch failed");
+    };
+    await pollOnce(daemon);
+    assert.deepEqual(node.sent, []);
+  });
+
+  it("after an unjail landed, a restarted daemon still waits an hour before the next", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+    try {
+      const node = jailed();
+      const first = daemonAgainst(node, A);
+      await pollOnce(first.daemon);
+      assert.equal(node.sentOf(OCP_TYPE_URLS.slashing.unjail).length, 1);
+
+      // Jailed again. A new process on the same state directory, 59 minutes later, then 60.
+      const config = { stateDir: first.stateDir };
+      mock.timers.tick(59 * 60_000);
+      await pollOnce(daemonAgainst(node, A, config).daemon);
+      assert.equal(node.sentOf(OCP_TYPE_URLS.slashing.unjail).length, 1);
+
+      mock.timers.tick(60_000);
+      await pollOnce(daemonAgainst(node, A, config).daemon);
+      assert.equal(node.sentOf(OCP_TYPE_URLS.slashing.unjail).length, 2);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("asks again a minute after the chain refused, not sooner, and a refusal does not lengthen the wait", async () => {
+    mock.timers.enable({ apis: ["Date"], now: 1_800_000_000_000 });
+    try {
+      const node = jailed();
+      node.answer = () => ({ refuse: "validator still jailed; cannot be unjailed" });
+      const { daemon } = daemonAgainst(node, A);
+      await pollOnce(daemon);
+      mock.timers.tick(59_000);
+      await pollOnce(daemon);
+      assert.equal(node.sent.length, 1);
+      mock.timers.tick(1_000);
+      await pollOnce(daemon);
+      assert.equal(node.sent.length, 2);
+    } finally {
+      mock.timers.reset();
+    }
+  });
+
+  it("holds the unjail back when its record cannot be read", async () => {
+    const node = jailed();
+    const { daemon, stateDir } = daemonAgainst(node, A);
+    writeFileSync(join(stateDir, "unjail.json"), "{ not json");
+    await pollOnce(daemon);
+    assert.deepEqual(node.sent, []);
   });
 });
 

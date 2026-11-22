@@ -1,15 +1,25 @@
-import { txFailureOf, type DealerDkg, type DealerEpoch, type OcpCosmosClient, type TxFailure } from "@onchainpoker/ocp-sdk/cosmos";
+import {
+  txFailureOf,
+  type DealerDkg,
+  type DealerEpoch,
+  type OcpCosmosClient,
+  type TxFailure,
+  type ValidatorInfo,
+} from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "./config.js";
 import type { EpochStateStore } from "./state.js";
 import { log, logError, logProgress } from "./log.js";
 import {
   POLICY,
+  afterUnjail,
   assertNever,
   decide,
   describe,
   headlines,
   short,
   shufflersOf,
+  unjailBlock,
+  unjailWaitMs,
   type Action,
   type ChainView,
   type Decision,
@@ -286,13 +296,49 @@ export class DealerDaemon {
 
     const dkg = dealer.dkg;
     const epoch = dealer.epoch;
+    const mine = view.validators.find((v) => v.operator === me);
     return {
       waitedBlocks: this.rotatingSince === null ? 0 : dealer.height - this.rotatingSince,
       storeUsable: this.storeProbe?.usable ?? false,
-      unjailBlockedBy: "this build does not unjail",
+      unjailBlockedBy: mine?.jailed ? await this.unjailBlockedBy(mine) : null,
       keygen: dkg && dkg.members.some((m) => m.validator === me) ? await syncShares(secrets, dkg, me) : null,
       share: epoch ? await settleShare(secrets, epoch, me, () => this.readFinalDkg(epoch, dealer.height)) : { is: "not-member" },
     };
+  }
+
+  /**
+   * The guards on unjailing my own validator, from the record on disk and this daemon's node. A
+   * record or a node that cannot be read holds the unjail back: neither is taken for "fine".
+   */
+  private async unjailBlockedBy(mine: ValidatorInfo): Promise<string | null> {
+    try {
+      return unjailBlock({
+        nowMs: Date.now(),
+        record: this.stateStore.loadUnjailRecord(),
+        node: await this.client.getNodeStatus(),
+        consensusPubkey: mine.consensusPubkey,
+      });
+    } catch (err) {
+      return `its guards could not be checked (${err instanceof Error ? err.message : String(err)})`;
+    }
+  }
+
+  /** Asks the chain to unjail my validator. The try is on disk before it is sent, the landing after. */
+  private async unjail(): Promise<void> {
+    const me = this.me.validator;
+    const record = this.stateStore.loadUnjailRecord();
+    this.stateStore.saveUnjailRecord({ ...record, lastTriedAtMs: Date.now() });
+    try {
+      await this.client.slashingUnjail({ validator: me });
+    } catch (err) {
+      // "Unknown" may have landed. Counting it only lengthens the wait before the next one.
+      if (txFailureOf(err).kind === "unknown") this.stateStore.saveUnjailRecord(afterUnjail(record, Date.now()));
+      throw err;
+    }
+    const landed = afterUnjail(record, Date.now());
+    this.stateStore.saveUnjailRecord(landed);
+    const wait = unjailWaitMs(landed.landed) / 3_600_000;
+    logProgress(`Unjail: ${short(me)} unjailed (attempt ${landed.landed}; the next one waits at least ${wait} h)`);
   }
 
   /**
@@ -366,8 +412,8 @@ export class DealerDaemon {
     try {
       switch (action.do) {
         case "unjail":
-          await this.client.slashingUnjail({ validator: me });
-          break;
+          await this.unjail();
+          return;
         case "beaconCommit":
           await this.client.dealerBeaconCommit({ validator: me, epochId: action.epochId, commit: beaconCommitment(this.config, action) });
           break;

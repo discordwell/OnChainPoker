@@ -53,6 +53,8 @@ export class FakeNode {
   dkg: DealerDKG | null = null;
   beacon: BeaconState | null = null;
   validators: FakeValidator[] = [];
+  /** What the node says of itself. By default it is caught up, holds a fresh block and has no validator key. */
+  nodeStatus: { catchingUp: boolean; blockAgeMs: number; consensusPubkey: Uint8Array | null } = { catchingUp: false, blockAgeMs: 0, consensusPubkey: null };
   /** Table id to the table as the LCD prints it. */
   readonly tables = new Map<string, unknown>();
   /** "tableId/handId" to the dealer hand as the LCD prints it. */
@@ -157,9 +159,9 @@ export class FakeNode {
       },
       nodeStatus: async () => ({
         latestHeight: this.height,
-        latestBlockTimeMs: Date.now(),
-        catchingUp: false,
-        consensusPubkey: null,
+        latestBlockTimeMs: Date.now() - this.nodeStatus.blockAgeMs,
+        catchingUp: this.nodeStatus.catchingUp,
+        consensusPubkey: this.nodeStatus.consensusPubkey,
       }),
     };
 
@@ -172,9 +174,9 @@ export class FakeNode {
 
 export type Harness = { daemon: DealerDaemon; node: FakeNode; store: EpochStateStore; stateDir: string };
 
-/** A daemon for `validator` against `node`, with its own empty state directory. */
+/** A daemon for `validator` against `node`, with its own empty state directory unless one is given. */
 export function daemonAgainst(node: FakeNode, validator: string, overrides: Partial<DealerDaemonConfig> = {}): Harness {
-  const stateDir = mkdtempSync(join(tmpdir(), "dealer-daemon-test-"));
+  const stateDir = overrides.stateDir ?? mkdtempSync(join(tmpdir(), "dealer-daemon-test-"));
   const statePassphrase = "a passphrase for tests only";
   const store = new EpochStateStore(stateDir, statePassphrase, FAST_KDF);
   const config = {

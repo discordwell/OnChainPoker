@@ -15,6 +15,7 @@ import type {
   DealerEpoch,
   DealerMember,
   DealerState,
+  NodeStatus,
   ValidatorInfo,
   Valoper,
 } from "@onchainpoker/ocp-sdk/cosmos";
@@ -341,6 +342,58 @@ export function headlines(view: ChainView, situation: Situation): readonly { slo
 export function unjailWaitMs(landed: number): number {
   if (landed <= 0) return 0;
   return Math.min(POLICY.unjail.maxWaitMs, POLICY.unjail.firstWaitMs * 2 ** (landed - 1));
+}
+
+/** The unjails of this validator that this daemon sent. Kept on disk, so a restart does not reset the wait. */
+export type UnjailRecord = {
+  /** Unjails that landed, counted since the last quiet stretch of POLICY.unjail.forgetAfterMs. */
+  readonly landed: number;
+  readonly lastLandedAtMs: number;
+  /** When the chain was last asked, whatever it answered. */
+  readonly lastTriedAtMs: number;
+};
+
+/** The record after an unjail landed at `nowMs`. */
+export function afterUnjail(record: UnjailRecord, nowMs: number): UnjailRecord {
+  const forgotten = record.landed > 0 && nowMs - record.lastLandedAtMs > POLICY.unjail.forgetAfterMs;
+  return { landed: (forgotten ? 0 : record.landed) + 1, lastLandedAtMs: nowMs, lastTriedAtMs: nowMs };
+}
+
+/**
+ * Why this daemon would not unjail its validator now, or null when every guard passes.
+ *
+ * A validator that is bonded while its node does not sign is jailed again for downtime, and one
+ * that is unjailed straight back into the fault that jailed it loses stake each round. So: the
+ * node this daemon talks to must be caught up, hold a block from the last 30 s and sign with this
+ * validator's consensus key, and each unjail that landed doubles the wait before the next.
+ */
+export function unjailBlock(facts: {
+  readonly nowMs: number;
+  readonly record: UnjailRecord;
+  readonly node: NodeStatus;
+  /** The consensus key the chain holds for my validator. */
+  readonly consensusPubkey: Uint8Array | null;
+}): string | null {
+  const { nowMs, record, node, consensusPubkey } = facts;
+  const u = POLICY.unjail;
+
+  if (nowMs - record.lastTriedAtMs < u.askEveryMs) return "the chain was asked less than a minute ago";
+
+  const counted = nowMs - record.lastLandedAtMs > u.forgetAfterMs ? 0 : record.landed;
+  const left = record.lastLandedAtMs + unjailWaitMs(counted) - nowMs;
+  if (left > 0) {
+    return `${counted} ${counted === 1 ? "unjail" : "unjails"} landed lately, so the next one waits ${Math.ceil(left / 60_000)} more minutes`;
+  }
+
+  if (node.catchingUp) return "this daemon's node is still catching up";
+  if (nowMs - node.latestBlockTimeMs > u.nodeFreshMs) return `this daemon's node holds no block from the last ${u.nodeFreshMs / 1000} s`;
+  const signsWithMine =
+    node.consensusPubkey !== null &&
+    consensusPubkey !== null &&
+    node.consensusPubkey.length === consensusPubkey.length &&
+    node.consensusPubkey.every((b, i) => b === consensusPubkey[i]);
+  if (!signsWithMine) return "this daemon's node does not sign with this validator's consensus key";
+  return null;
 }
 
 /** "ocpvaloper1la3r…": enough of an operator address to tell validators apart in a log line. */

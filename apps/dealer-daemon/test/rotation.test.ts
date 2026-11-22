@@ -8,8 +8,10 @@ import assert from "node:assert/strict";
 import type { BeaconWindow, DealerDkg, DealerEpoch, DealerState, ValidatorInfo } from "@onchainpoker/ocp-sdk/cosmos";
 import {
   POLICY,
+  afterUnjail,
   decide,
   shufflersOf,
+  unjailBlock,
   unjailWaitMs,
   type Action,
   type ChainView,
@@ -636,6 +638,59 @@ describe("unjail", () => {
   it("each unjail that landed doubles the wait before the next, from an hour up to a day", () => {
     const hour = 3_600_000;
     assert.deepEqual([0, 1, 2, 3, 4, 5, 6, 40].map(unjailWaitMs), [0, hour, 2 * hour, 4 * hour, 8 * hour, 16 * hour, 24 * hour, 24 * hour]);
+  });
+});
+
+describe("the guards on unjailing my own validator", () => {
+  const MINUTE = 60_000;
+  const HOUR = 60 * MINUTE;
+  const DAY = 24 * HOUR;
+  const NOW = 1_800_000_000_000;
+  const KEY = bytes(7);
+  const node = { latestHeight: 5000, latestBlockTimeMs: NOW - 5_000, catchingUp: false, consensusPubkey: KEY };
+  const never = { landed: 0, lastLandedAtMs: 0, lastTriedAtMs: 0 };
+  const block = (parts: Partial<Parameters<typeof unjailBlock>[0]> = {}) => unjailBlock({ nowMs: NOW, record: never, node, consensusPubkey: KEY, ...parts });
+
+  it("pass for a node that is caught up, holds a fresh block and signs with my validator's key", () => {
+    assert.equal(block(), null);
+  });
+
+  it("hold while my node is catching up", () => {
+    assert.match(block({ node: { ...node, catchingUp: true } })!, /catching up/);
+  });
+
+  it("hold when my node's latest block is more than 30 s old", () => {
+    assert.equal(block({ node: { ...node, latestBlockTimeMs: NOW - 30_000 } }), null);
+    assert.match(block({ node: { ...node, latestBlockTimeMs: NOW - 30_001 } })!, /no block from the last 30 s/);
+  });
+
+  it("hold when my node signs with another key, or with none", () => {
+    for (const consensusPubkey of [bytes(8), null]) {
+      assert.match(block({ node: { ...node, consensusPubkey } })!, /does not sign with this validator's consensus key/);
+    }
+    assert.match(block({ consensusPubkey: null })!, /does not sign with this validator's consensus key/);
+  });
+
+  it("ask the chain at most once a minute", () => {
+    assert.match(block({ record: { ...never, lastTriedAtMs: NOW - MINUTE + 1 } })!, /less than a minute ago/);
+    assert.equal(block({ record: { ...never, lastTriedAtMs: NOW - MINUTE } }), null);
+  });
+
+  it("wait an hour after the first unjail that landed, two after the second, and a day at most", () => {
+    const landedAgo = (landed: number, ago: number) => block({ record: { landed, lastLandedAtMs: NOW - ago, lastTriedAtMs: NOW - ago } });
+    assert.notEqual(landedAgo(1, HOUR - 1), null);
+    assert.equal(landedAgo(1, HOUR), null);
+    assert.notEqual(landedAgo(2, 2 * HOUR - 1), null);
+    assert.equal(landedAgo(2, 2 * HOUR), null);
+    assert.notEqual(landedAgo(30, DAY - 1), null);
+    assert.equal(landedAgo(30, DAY), null);
+  });
+
+  it("count unjails from one again after seven days without one", () => {
+    const old = { landed: 6, lastLandedAtMs: NOW - 7 * DAY - 1, lastTriedAtMs: NOW - 7 * DAY - 1 };
+    assert.deepEqual(afterUnjail(old, NOW), { landed: 1, lastLandedAtMs: NOW, lastTriedAtMs: NOW });
+    const recent = { landed: 6, lastLandedAtMs: NOW - 7 * DAY, lastTriedAtMs: NOW - 7 * DAY };
+    assert.deepEqual(afterUnjail(recent, NOW), { landed: 7, lastLandedAtMs: NOW, lastTriedAtMs: NOW });
   });
 });
 
