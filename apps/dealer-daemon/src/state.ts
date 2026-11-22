@@ -1,21 +1,40 @@
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { Algorithm, hashRaw } from "@node-rs/argon2";
 
 export interface EpochSecrets {
   epochId: number;
   validatorIndex: number;
-  /** Polynomial coefficients as bigint hex strings */
+  /** Polynomial coefficients as bigint hex strings. Their count is the DKG threshold. */
   polyCoeffs: string[];
-  /** Aggregated secret share as bigint hex string */
-  secretShare: string;
+  /** Per-epoch ElGamal secret key, bigint hex. "" in a file from before encrypted shares. */
+  ephemeralSk: string;
   /**
-   * DKG v2: per-epoch ephemeral ElGamal secret key (bigint hex string, LE).
-   * Used to decrypt encrypted shares destined for this validator. Empty on
-   * v1 chains that have not yet been migrated.
+   * Shares other dealers sent me: dealer valoper to scalar hex. Every entry was checked against
+   * that dealer's on-chain commitments before it was written. Kept apart from the sum because who
+   * counts is only known when the epoch is final.
    */
-  ephemeralSk?: string;
+  received: Record<string, string>;
+  /**
+   * null until the epoch is final and the sum matched my on-chain pub_share. A value is a share
+   * that was verified against the chain.
+   */
+  secretShare: string | null;
+}
+
+/**
+ * A secrets file that exists and cannot be read, decrypted or understood. It is never taken for
+ * "no file": acting on that would replace secrets a landed commit depends on.
+ */
+export class SecretsUnreadableError extends Error {
+  constructor(
+    readonly epochId: number,
+    readonly reason: string,
+  ) {
+    super(`secrets for epoch ${epochId} cannot be read: ${reason}`);
+    this.name = "SecretsUnreadableError";
+  }
 }
 
 export interface KdfOptions {
@@ -136,13 +155,50 @@ async function decryptJson<T>(
   throw new Error("state blob is too short to be a valid v1 or v2 ciphertext");
 }
 
+const HEX = /^[0-9a-f]+$/i;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+const reasonOf = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** A file written before this record had `received` and a null share loads as "no shares, no verified share". */
+function parseSecrets(value: unknown, epochId: number): EpochSecrets {
+  const bad = (what: string) => new SecretsUnreadableError(epochId, what);
+  if (!isRecord(value)) throw bad("the file does not hold a record");
+  if (value.epochId !== epochId) throw bad(`the file says epoch ${String(value.epochId)}`);
+  if (typeof value.validatorIndex !== "number" || !Number.isInteger(value.validatorIndex)) throw bad("no validator index");
+  const coeffs = value.polyCoeffs;
+  if (!Array.isArray(coeffs) || !coeffs.every((c): c is string => typeof c === "string" && HEX.test(c))) {
+    throw bad("polynomial coefficients are not hex strings");
+  }
+  const ephemeralSk = value.ephemeralSk ?? "";
+  if (typeof ephemeralSk !== "string" || (ephemeralSk !== "" && !HEX.test(ephemeralSk))) throw bad("ephemeral key is not hex");
+  const received = value.received ?? {};
+  if (!isRecord(received) || !Object.values(received).every((v): v is string => typeof v === "string" && HEX.test(v))) {
+    throw bad("received shares are not hex strings");
+  }
+  const share = value.secretShare ?? null;
+  if (share !== null && (typeof share !== "string" || !HEX.test(share))) throw bad("secret share is not hex");
+  return {
+    epochId,
+    validatorIndex: value.validatorIndex,
+    polyCoeffs: coeffs,
+    ephemeralSk,
+    received: received as Record<string, string>,
+    // "0" was the placeholder for "not computed yet".
+    secretShare: share === null || share === "0" ? null : share,
+  };
+}
+
+const EPOCH_FILE = /^epoch-(\d+)\.json\.enc(\.tmp)?$/;
+
 export class EpochStateStore {
   private readonly dir: string;
   private readonly passphrase: string;
   private readonly kdfOpts: KdfOptions | undefined;
   private cache = new Map<number, EpochSecrets>();
-  /** Epoch ids whose on-disk blob is still v1 and should be re-saved in v2. */
-  private legacyEpochs = new Set<number>();
 
   constructor(dir: string, passphrase: string, kdfOpts?: KdfOptions) {
     this.dir = dir;
@@ -169,48 +225,100 @@ export class EpochStateStore {
     return join(this.dir, `epoch-${epochId}.json.enc`);
   }
 
-  async save(secrets: EpochSecrets): Promise<void> {
-    const path = this.filePath(secrets.epochId);
-    if (this.passphrase) {
-      const blob = await encryptJsonV2(secrets, this.passphrase, this.kdfOpts);
-      writeFileSync(path, blob, { mode: 0o600 });
-    } else {
-      writeFileSync(path, JSON.stringify(secrets, null, 2), { mode: 0o600 });
+  /**
+   * Durable before it returns: a temp file in the same directory, fsync, rename over the target,
+   * fsync of the directory. A crash leaves the old file or the new one, never part of one.
+   */
+  private writeDurably(path: string, data: Buffer | string): void {
+    const tmp = `${path}.tmp`;
+    const fd = openSync(tmp, "w", 0o600);
+    try {
+      writeFileSync(fd, data);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
     }
-    this.cache.set(secrets.epochId, secrets);
-    this.legacyEpochs.delete(secrets.epochId);
+    renameSync(tmp, path);
+    const dir = openSync(this.dir, "r");
+    try {
+      fsyncSync(dir);
+    } finally {
+      closeSync(dir);
+    }
   }
 
+  private async writeRecord(path: string, record: unknown): Promise<void> {
+    this.writeDurably(path, this.passphrase ? await encryptJsonV2(record, this.passphrase, this.kdfOpts) : JSON.stringify(record, null, 2));
+  }
+
+  private async readRecord(path: string): Promise<unknown> {
+    const raw = readFileSync(path);
+    if (!this.passphrase) return JSON.parse(raw.toString("utf8"));
+    const { value, wasLegacy } = await decryptJson<unknown>(raw, this.passphrase, this.kdfOpts);
+    if (wasLegacy) {
+      console.warn("[dealer-daemon] WARNING: legacy v1 state file detected — will be re-encrypted with argon2id on next save");
+    }
+    return value;
+  }
+
+  /** prepareCommit depends on this returning only after the record is durable: "stored before sent". */
+  async save(secrets: EpochSecrets): Promise<void> {
+    await this.writeRecord(this.filePath(secrets.epochId), secrets);
+    this.cache.set(secrets.epochId, secrets);
+  }
+
+  /** null only when there is no file. A file that cannot be read throws SecretsUnreadableError. */
   async load(epochId: number): Promise<EpochSecrets | null> {
     const cached = this.cache.get(epochId);
     if (cached) return cached;
 
     const path = this.filePath(epochId);
-    if (!existsSync(path)) return null;
-
-    const raw = readFileSync(path);
-    let secrets: EpochSecrets;
-    if (this.passphrase) {
-      const { value, wasLegacy } = await decryptJson<EpochSecrets>(
-        raw,
-        this.passphrase,
-        this.kdfOpts
-      );
-      secrets = value;
-      if (wasLegacy) {
-        console.warn(
-          "[dealer-daemon] WARNING: legacy v1 state file detected — will be re-encrypted with argon2id on next save"
-        );
-        this.legacyEpochs.add(epochId);
-      }
-    } else {
-      secrets = JSON.parse(raw.toString("utf8")) as EpochSecrets;
+    let value: unknown;
+    try {
+      value = await this.readRecord(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw new SecretsUnreadableError(epochId, reasonOf(err));
     }
+    const secrets = parseSecrets(value, epochId);
     this.cache.set(epochId, secrets);
     return secrets;
   }
 
-  has(epochId: number): boolean {
-    return this.cache.has(epochId) || existsSync(this.filePath(epochId));
+  /**
+   * Writes a small record the way save() does, reads it back, and deletes it. Shows that the
+   * directory takes a durable write and that what is written can be opened again, before the daemon
+   * answers a roll call. Never throws.
+   */
+  async probe(): Promise<{ ok: true } | { ok: false; reason: string }> {
+    const path = join(this.dir, "probe.json.enc");
+    const token = randomBytes(16).toString("hex");
+    try {
+      await this.writeRecord(path, { probe: token });
+      const back = await this.readRecord(path);
+      rmSync(path);
+      return isRecord(back) && back.probe === token ? { ok: true } : { ok: false, reason: "the probe file read back differently" };
+    } catch (err) {
+      return { ok: false, reason: reasonOf(err) };
+    }
+  }
+
+  /**
+   * Deletes the file and the cache entry of every epoch below `below` that is not in `keep`.
+   * Epoch ids are never reused, so the caller passes the chain's next epoch id and keeps the
+   * current epoch and the DKG in flight: the directory then holds two files at most.
+   */
+  prune(keep: readonly number[], below: number): number[] {
+    const removed = new Set<number>();
+    for (const name of readdirSync(this.dir)) {
+      const match = EPOCH_FILE.exec(name);
+      if (!match) continue;
+      const epochId = Number(match[1]);
+      if (epochId >= below || keep.includes(epochId)) continue;
+      rmSync(join(this.dir, name), { force: true });
+      this.cache.delete(epochId);
+      removed.add(epochId);
+    }
+    return [...removed];
   }
 }

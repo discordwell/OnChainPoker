@@ -1,10 +1,10 @@
+// How a beacon salt and its commitment are derived. Which epoch, which window and whether to take
+// part are decided in rotation.ts from the chain's own beacon window.
+
 import { createHash, createHmac } from "node:crypto";
-import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "../config.js";
-import { log, logProgress } from "../log.js";
 
 const BEACON_COMMIT_DOMAIN = "ocp/v1/beacon/commit";
-const SALT_DOMAIN = "ocp/v1/beacon/salt/v1";
 
 function u64LE(n: bigint): Uint8Array {
   const buf = Buffer.alloc(8);
@@ -51,14 +51,6 @@ function computeCommit(validator: string, epochId: bigint, salt: Uint8Array): Ui
   );
 }
 
-function deriveSalt(passphrase: string, validator: string, epochId: bigint): Uint8Array {
-  const mac = createHmac("sha256", Buffer.from(passphrase, "utf8"));
-  mac.update(Buffer.from(SALT_DOMAIN, "utf8"));
-  mac.update(Buffer.from(validator, "utf8"));
-  mac.update(u64LE(epochId));
-  return new Uint8Array(mac.digest());
-}
-
 type Identity = Pick<DealerDaemonConfig, "statePassphrase" | "validatorAddress">;
 
 /** One beacon window: the epoch it seeds and the height at which the chain opened it. */
@@ -85,60 +77,4 @@ export function beaconSalt(config: Identity, window: BeaconWindowId): Uint8Array
 /** What MsgBeaconCommit carries: the chain's hash of (validator, epoch id, salt), which it recomputes at the reveal. */
 export function beaconCommitment(config: Identity, window: BeaconWindowId): Uint8Array {
   return computeCommit(config.validatorAddress, BigInt(window.epochId), beaconSalt(config, window));
-}
-
-function isExpectedBeaconError(msg: string): boolean {
-  return (
-    msg.includes("already committed") ||
-    msg.includes("already revealed") ||
-    msg.includes("not in commit window") ||
-    msg.includes("not in reveal window") ||
-    msg.includes("no beacon state") ||
-    msg.includes("commit not found") ||
-    msg.includes("beacon not open") ||
-    msg.includes("active bonded")
-  );
-}
-
-export async function maybeBeaconParticipate(args: {
-  client: OcpCosmosClient;
-  config: DealerDaemonConfig;
-}): Promise<void> {
-  const { client, config } = args;
-
-  const epoch = await client.getDealerEpoch();
-  const currentEpochId = epoch ? BigInt(epoch.epoch_id ?? epoch.epochId ?? "0") : 0n;
-  const targetEpoch = currentEpochId + 1n;
-
-  const passphrase = config.statePassphrase ?? "ocp-beacon-fallback";
-  const salt = deriveSalt(passphrase, config.validatorAddress, targetEpoch);
-  const commit = computeCommit(config.validatorAddress, targetEpoch, salt);
-
-  try {
-    await client.dealerBeaconCommit({
-      validator: config.validatorAddress,
-      epochId: targetEpoch.toString(),
-      commit,
-    });
-    logProgress(`Beacon: committed for epoch ${targetEpoch}`);
-  } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    if (!isExpectedBeaconError(msg)) {
-      log(`Beacon: commit error for epoch ${targetEpoch}: ${msg.slice(0, 200)}`);
-    }
-  }
-
-  try {
-    await client.dealerBeaconReveal({
-      validator: config.validatorAddress,
-      epochId: targetEpoch.toString(),
-      salt,
-    });
-    logProgress(`Beacon: revealed for epoch ${targetEpoch}`);
-  } catch (err) {
-    const msg = String((err as Error)?.message ?? err);
-    if (!isExpectedBeaconError(msg)) {
-      log(`Beacon: reveal error for epoch ${targetEpoch}: ${msg.slice(0, 200)}`);
-    }
-  }
 }

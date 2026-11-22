@@ -62,6 +62,8 @@ export class FakeNode {
   readonly sent: Sent[] = [];
   /** How the chain answers the nth message of a type (n from 0). Everything lands unless a test says otherwise. */
   answer: (msg: Sent, nthOfType: number) => Answer = () => "land";
+  /** A read that fails: "store:0x03" for a dealer store key, "lcd:<path>" for an LCD path. Returns the error text, or null. */
+  failRead: (read: string) => string | null = () => null;
 
   sentOf(typeUrl: string): Sent[] {
     return this.sent.filter((m) => m.typeUrl === typeUrl);
@@ -122,6 +124,8 @@ export class FakeNode {
 
   client(): sdk.OcpCosmosClient {
     const fetchFn = (async (url: string) => {
+      const failure = this.failRead(`lcd:${new URL(url).pathname}`);
+      if (failure !== null) throw new TypeError(failure);
       const body = this.lcdJson(new URL(url).pathname);
       const status = body === undefined ? 404 : 200;
       return {
@@ -147,6 +151,8 @@ export class FakeNode {
       },
       queryStore: async (store: string, key: Uint8Array, height?: number) => {
         if (store !== "dealer") throw new Error(`fake node: unknown store ${store}`);
+        const failure = this.failRead(`store:0x${key[0]!.toString(16).padStart(2, "0")}`);
+        if (failure !== null) throw new TypeError(failure);
         return { value: this.storeValue(key[0]!), height: height ?? this.height };
       },
       nodeStatus: async () => ({

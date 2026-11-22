@@ -1,28 +1,36 @@
-import WebSocket from "ws";
-import type { OcpCosmosClient } from "@onchainpoker/ocp-sdk/cosmos";
+import { txFailureOf, type DealerDkg, type DealerEpoch, type OcpCosmosClient, type TxFailure } from "@onchainpoker/ocp-sdk/cosmos";
 import type { DealerDaemonConfig } from "./config.js";
 import type { EpochStateStore } from "./state.js";
-import { log, logError } from "./log.js";
+import { log, logError, logProgress } from "./log.js";
 import {
-  handleDkgCommit,
-  handleDkgComplaints,
-  handleDkgEncryptedShares,
-  handleDkgReveals,
-  handleDkgAggregate,
-} from "./handlers/dkg.js";
+  POLICY,
+  assertNever,
+  decide,
+  describe,
+  headlines,
+  short,
+  type Action,
+  type ChainView,
+  type Decision,
+  type Me,
+  type Memory,
+  type Situation,
+} from "./rotation.js";
+import { beaconCommitment, beaconSalt } from "./handlers/beacon.js";
+import { encryptShareFor, plainShareFor, prepareCommit, settleShare, syncShares, type SecretsStore } from "./handlers/dkg.js";
 import { handleShuffle } from "./handlers/shuffle.js";
 import { handleEncShares } from "./handlers/encshares.js";
 import { handlePubShare } from "./handlers/pubshares.js";
-import { maybeBeaconParticipate } from "./handlers/beacon.js";
 import {
-  maybeBeginEpoch,
-  maybeFinalizeEpoch,
   maybeFinalizeDeck,
   maybeFinalizeReveal,
   maybeTick,
   maybeDealerTimeout,
   maybeStartAndInitHand,
 } from "./handlers/automation.js";
+
+/** A node that could not serve a finalized DKG at its past height is asked again after this many blocks. */
+const FINAL_DKG_RETRY_BLOCKS = 120;
 
 function asNumber(v: unknown): number | undefined {
   if (typeof v === "number") return Number.isFinite(v) ? v : undefined;
@@ -107,50 +115,47 @@ function expectedRevealPos(table: any): number | null {
   return null;
 }
 
-type ParsedMember = { validator: string; index: number; ephemeralPubkey?: Uint8Array };
+/** What dealTables hands each table: the epoch to deal on, who shuffles, and whether a new hand may start. */
+type HandDuty = {
+  epochId: number;
+  shufflers: readonly { validator: string; index: number }[];
+  startHands: boolean;
+};
 
-function parseMembersFromEpoch(epoch: any): ParsedMember[] {
-  const raw = epoch?.members ?? epoch?.Members ?? [];
-  if (!Array.isArray(raw)) return [];
-  const out: ParsedMember[] = [];
-  for (const m of raw) {
-    const validator = String(m?.validator ?? m?.Validator ?? m?.validatorId ?? "");
-    const index = asNumber(m?.index ?? m?.Index);
-    if (!validator || index === undefined) continue;
-    const ephRaw = m?.ephemeralPubkey ?? m?.ephemeral_pubkey ?? m?.EphemeralPubkey;
-    let ephemeralPubkey: Uint8Array | undefined;
-    if (ephRaw != null) {
-      if (ephRaw instanceof Uint8Array) {
-        ephemeralPubkey = ephRaw.length > 0 ? ephRaw : undefined;
-      } else if (Array.isArray(ephRaw)) {
-        ephemeralPubkey = ephRaw.length > 0 ? Uint8Array.from(ephRaw.map((x: unknown) => Number(x))) : undefined;
-      } else if (typeof ephRaw === "string" && ephRaw.length > 0) {
-        const s = ephRaw.startsWith("0x") ? ephRaw.slice(2) : ephRaw;
-        if (/^[0-9a-fA-F]+$/.test(s) && s.length === 64) {
-          const buf = new Uint8Array(32);
-          for (let i = 0; i < 32; i++) buf[i] = parseInt(s.slice(i * 2, i * 2 + 2), 16);
-          ephemeralPubkey = buf;
-        } else {
-          const buf = Buffer.from(ephRaw, "base64");
-          if (buf.length > 0) ephemeralPubkey = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-        }
-      } else if (typeof ephRaw === "object" && (ephRaw as any).length != null) {
-        const arr = Object.values(ephRaw as Record<string, number>);
-        if (arr.length > 0) ephemeralPubkey = new Uint8Array(arr);
-      }
-    }
-    out.push({ validator, index, ephemeralPubkey });
+function failureSummary(f: Exclude<TxFailure, { kind: "not-a-tx" }>): string {
+  switch (f.kind) {
+    case "rejected":
+      return f.log;
+    case "failed":
+      return `code ${f.code} at height ${f.height}: ${f.log}`;
+    case "expired":
+      return `not in any block through ${f.timeoutHeight} (hash ${f.hash})`;
+    case "unknown":
+      return `${f.why}; it is in a block by height ${f.timeoutHeight} or it is dead (hash ${f.hash})`;
+    default:
+      return assertNever(f);
   }
-  return out;
 }
 
 export class DealerDaemon {
   private readonly client: OcpCosmosClient;
   private readonly config: DealerDaemonConfig;
   private readonly stateStore: EpochStateStore;
+  private readonly me: Me;
   private abortController: AbortController | null = null;
   private pollTimer: NodeJS.Timeout | null = null;
   private processing = false;
+
+  /** Height at which this process first saw the chain unable to deal, with no break since. In memory: a restart waits longer. */
+  private rotatingSince: number | null = null;
+  /** The last probe of the state directory, and the beacon window it was taken in. */
+  private storeProbe: { usable: boolean; window: number | null } | null = null;
+  /** Key of the last headline printed per slot, so a change prints once. */
+  private readonly printed: Record<string, string> = {};
+  /** The epoch, DKG and next id the secrets directory was last pruned for. */
+  private prunedFor = "";
+  /** A finalized DKG is read at a past height at most once per epoch, and retried no sooner than this height. */
+  private finalDkg = { epochId: 0, synced: false, retryAt: 0 };
 
   constructor(args: {
     client: OcpCosmosClient;
@@ -160,11 +165,20 @@ export class DealerDaemon {
     this.client = args.client;
     this.config = args.config;
     this.stateStore = args.stateStore;
+    this.me = {
+      validator: args.config.validatorAddress,
+      committeeSize: args.config.committeeSize,
+      threshold: args.config.threshold,
+      mayBeginEpoch: args.config.autoBeginEpoch,
+      mayFinalizeEpoch: args.config.autoFinalize,
+      patienceBlocks: args.config.patienceBlocks,
+    };
   }
 
   async start(): Promise<void> {
     log(`Daemon starting for validator ${this.config.validatorAddress}`);
     log(`Poll interval: ${this.config.pollIntervalMs}ms`);
+    await this.probeStore(null);
 
     this.abortController = new AbortController();
     this.startPolling();
@@ -199,130 +213,235 @@ export class DealerDaemon {
     }
   }
 
+  private async readView(): Promise<ChainView> {
+    // A failed read rejects here and ends the poll. Nothing is sent on a guess.
+    return { dealer: await this.client.getDealerState(), validators: await this.client.getValidators() };
+  }
+
   private async pollOnce(): Promise<void> {
-    // 1. Check epoch/DKG state. A failed read throws and ends this poll: it must
-    // never be taken for "no epoch", which would send BeginEpoch.
-    const epoch = await this.client.getDealerEpoch();
-    const dkg = await this.client.getDealerDkg();
+    const view = await this.readView();
 
-    // Beacon participation runs every cycle so the chain can finalize an
-    // unpredictable rand_epoch before BeginEpoch is attempted.
-    await maybeBeaconParticipate({ client: this.client, config: this.config });
+    // Disk only: store shares that arrived, derive my share once the epoch is final.
+    const memory = await this.remember(view, this.stateStore);
+    this.pruneSecrets(view);
 
-    if (!epoch && !dkg) {
-      // No epoch and no DKG — try to begin one
-      await maybeBeginEpoch({ client: this.client, config: this.config });
-      return;
-    }
+    const decision = decide(view, this.me, memory);
+    this.report(view, decision, memory);
 
-    // If DKG is in progress, handle the full multi-party DKG flow
-    if (dkg) {
-      const dkgMembers = parseMembersFromEpoch(dkg);
-      const epochId = asNumber(pick(dkg, "epochId", "epoch_id")) ?? 0;
+    // At most one rotation transaction per poll. The next poll reads the chain again.
+    if (decision.action) await this.perform(decision.action);
 
-      if (dkgMembers.length > 0 && epochId > 0) {
-        // Phase 1: Submit our polynomial commitment
-        await handleDkgCommit({
-          client: this.client,
-          config: this.config,
-          stateStore: this.stateStore,
-          epochId,
-          members: dkgMembers,
-        }).catch((err) => logError("DKG commit error", err));
+    await this.dealTables(view, decision.situation);
+  }
 
-        // Re-fetch DKG state after commit to pick up new commits/complaints
-        const dkgAfterCommit = await this.client.getDealerDkg().catch(() => null);
-        if (!dkgAfterCommit) return;
+  /**
+   * For `--explain`: one read, one probe, one decision, printed. Sends nothing, runs no hand
+   * handler and leaves every secrets file as it is (the probe writes and deletes its own).
+   */
+  async explain(): Promise<void> {
+    const view = await this.readView();
+    const { dealer } = view;
+    const readOnly: SecretsStore = { load: (epochId) => this.stateStore.load(epochId), save: async () => {} };
+    const decision = decide(view, this.me, await this.remember(view, readOnly));
 
-        // DKG v2: publish one encrypted share per recipient that has already
-        // committed and posted an ephemeral pubkey. Runs in parallel with the
-        // legacy complaint-reveal path; the chain accepts both flows.
-        const membersAfterCommit = parseMembersFromEpoch(dkgAfterCommit);
-        await handleDkgEncryptedShares({
-          client: this.client,
-          config: this.config,
-          stateStore: this.stateStore,
-          epochId,
-          members: membersAfterCommit,
-          dkg: dkgAfterCommit,
-        }).catch((err) => logError("DKG encrypted-share error", err));
+    logProgress(`Explain: height ${dealer.height}, next epoch ${dealer.nextEpochId}`);
+    for (const { line } of headlines(view, decision.situation)) logProgress(line);
+    const b = dealer.beacon;
+    logProgress(
+      b
+        ? `Explain: beacon window for epoch ${b.epochId}${b.consumed ? " (consumed)" : ""}: commit ${b.commitOpenHeight} to ${b.commitCloseHeight}, reveal to ${b.revealCloseHeight}, threshold ${b.threshold}, committed [${b.committed.map(short).join(", ")}], revealed [${b.revealed.map(short).join(", ")}]`
+        : "Explain: no beacon window"
+    );
+    const bonded = view.validators.filter((v) => v.bonded && v.power > 0);
+    const mine = view.validators.find((v) => v.operator === this.me.validator);
+    const mineIs = !mine ? "is not a validator" : mine.jailed ? "is jailed" : mine.bonded ? "is bonded" : "is not bonded";
+    logProgress(`Explain: ${bonded.length} bonded with power: ${bonded.map((v) => `${short(v.operator)} (${v.power})`).join(", ")}; mine ${mineIs}`);
+    logProgress(decision.action ? `Explain: would send: ${describe(decision.action)}. ${decision.why}` : `Explain: would wait: ${decision.why}`);
+    logProgress("Explain: nothing was sent");
+  }
 
-        // Phase 2: File "missing" complaints for all other members
-        // (forces on-chain share reveals since there's no off-chain channel)
-        await handleDkgComplaints({
-          client: this.client,
-          config: this.config,
-          epochId,
-          members: dkgMembers,
-          dkg: dkgAfterCommit,
-        }).catch((err) => logError("DKG complaint error", err));
-
-        // Re-fetch DKG state after complaints to pick up new reveals
-        const dkgAfterComplaints = await this.client.getDealerDkg().catch(() => null);
-        if (!dkgAfterComplaints) return;
-
-        // Phase 3: Reveal shares for complaints targeting us
-        await handleDkgReveals({
-          client: this.client,
-          config: this.config,
-          stateStore: this.stateStore,
-          epochId,
-          members: dkgMembers,
-          dkg: dkgAfterComplaints,
-        }).catch((err) => logError("DKG reveal error", err));
-
-        // Re-fetch DKG state after reveals for aggregation
-        const dkgAfterReveals = await this.client.getDealerDkg().catch(() => null);
-        if (!dkgAfterReveals) return;
-
-        // Phase 4: Aggregate secret share from reveals (must happen BEFORE finalization)
-        const aggregated = await handleDkgAggregate({
-          client: this.client,
-          stateStore: this.stateStore,
-          config: this.config,
-          epochId,
-          members: dkgMembers,
-          dkg: dkgAfterReveals,
-        }).catch(() => false);
-
-        // Phase 5: Try to finalize epoch (only after aggregation succeeds)
-        if (aggregated) {
-          await maybeFinalizeEpoch({
-            client: this.client,
-            config: this.config,
-            epochId,
-          }).catch((err) => logError("maybeFinalizeEpoch error", err));
-        }
-      }
-      return;
-    }
-
-    if (!epoch) return;
-
-    const epochId = asNumber(pick(epoch, "epochId", "epoch_id", "EpochId")) ?? 0;
-    const epochMembers = parseMembersFromEpoch(epoch);
-
-    // Verify our secret share was computed during DKG (should already be set)
-    const secrets = await this.stateStore.load(epochId);
-    if (secrets && secrets.secretShare === "0") {
-      log(`WARNING: epoch ${epochId} finalized but secret share not computed — DKG may have been incomplete`);
-    }
-
-    // 2. List tables and process each
-    const tableIds = await this.client.getTables().catch(() => [] as string[]);
-
-    for (const tableId of tableIds) {
-      await this.processTable(tableId, epochId, epochMembers).catch((err) =>
-        logError(`table ${tableId} processing error`, err)
-      );
+  private async probeStore(window: number | null): Promise<void> {
+    const result = await this.stateStore.probe();
+    const was = this.storeProbe?.usable;
+    this.storeProbe = { usable: result.ok, window };
+    if (!result.ok) {
+      logError(`State: ${this.config.stateDir} failed its write-read probe (${result.reason}). Staying out of roll call.`);
+    } else if (was !== true) {
+      logProgress(`State: ${this.config.stateDir} writable, passphrase opens it`);
     }
   }
 
-  private async processTable(
-    tableId: string,
-    epochId: number,
-    epochMembers: Array<{ validator: string; index: number }>
-  ): Promise<void> {
+  /**
+   * Fills Memory. Touches the disk and, for a daemon that was down at finalize, reads a past
+   * height. Sends nothing. Everything it does is safe to do twice.
+   */
+  private async remember(view: ChainView, secrets: SecretsStore): Promise<Memory> {
+    const { dealer } = view;
+    const me = this.me.validator;
+
+    // Probed at start, then once per beacon window: a roll call is answered only on a fresh probe.
+    const window = dealer.beacon?.commitOpenHeight ?? null;
+    if (this.storeProbe === null || this.storeProbe.window !== window) await this.probeStore(window);
+
+    const dkg = dealer.dkg;
+    const epoch = dealer.epoch;
+    return {
+      waitedBlocks: this.rotatingSince === null ? 0 : dealer.height - this.rotatingSince,
+      storeUsable: this.storeProbe?.usable ?? false,
+      unjailBlockedBy: "this build does not unjail",
+      keygen: dkg && dkg.members.some((m) => m.validator === me) ? await syncShares(secrets, dkg, me) : null,
+      share: epoch ? await settleShare(secrets, epoch, me, () => this.readFinalDkg(epoch, dealer.height)) : { is: "not-member" },
+    };
+  }
+
+  /**
+   * The DKG record as it was at its reveal deadline, for a daemon that was down when it was
+   * finalized and deleted. Two reads at past heights: at epoch.startHeight the DKG exists and names
+   * its own reveal deadline, and at that height it holds every share that was accepted.
+   * null when the node no longer holds those states, and once the record has been read.
+   */
+  private async readFinalDkg(epoch: DealerEpoch, now: number): Promise<DealerDkg | null> {
+    if (this.finalDkg.epochId !== epoch.epochId) this.finalDkg = { epochId: epoch.epochId, synced: false, retryAt: 0 };
+    if (this.finalDkg.synced || now < this.finalDkg.retryAt) return null;
+    try {
+      const begun = (await this.client.getDealerState({ height: epoch.startHeight })).dkg;
+      if (begun?.epochId !== epoch.epochId) throw new Error(`no DKG for epoch ${epoch.epochId} at height ${epoch.startHeight}`);
+      const final = (await this.client.getDealerState({ height: begun.revealDeadline })).dkg;
+      if (final?.epochId !== epoch.epochId) throw new Error(`no DKG for epoch ${epoch.epochId} at height ${begun.revealDeadline}`);
+      this.finalDkg.synced = true;
+      return final;
+    } catch (err) {
+      this.finalDkg.retryAt = now + FINAL_DKG_RETRY_BLOCKS;
+      logError(`DKG: cannot read the finalized DKG for epoch ${epoch.epochId} at a past height`, err);
+      return null;
+    }
+  }
+
+  /** Epoch ids are never reused, so a file below the next id that is neither the epoch's nor the DKG's is dead. */
+  private pruneSecrets(view: ChainView): void {
+    const { epoch, dkg, nextEpochId } = view.dealer;
+    const key = `${epoch?.epochId ?? 0}:${dkg?.epochId ?? 0}:${nextEpochId}`;
+    if (key === this.prunedFor) return;
+    const keep = [epoch?.epochId, dkg?.epochId].filter((id): id is number => id !== undefined);
+    const removed = this.stateStore.prune(keep, nextEpochId);
+    this.prunedFor = key;
+    if (removed.length > 0) logProgress(`State: removed the secrets of ${removed.length === 1 ? "epoch" : "epochs"} ${removed.sort((a, b) => a - b).join(", ")}, which nothing can use any more`);
+  }
+
+  /** Prints one line when `key` differs from the last one printed in `slot`. */
+  private once(slot: string, key: string, line: string): void {
+    if (this.printed[slot] === key) return;
+    this.printed[slot] = key;
+    logProgress(line);
+  }
+
+  /** Prints the decision, and keeps the count of blocks this process has watched the chain unable to deal. */
+  private report(view: ChainView, decision: Decision, memory: Memory): void {
+    if (decision.situation.kind !== "rotating") this.rotatingSince = null;
+    else this.rotatingSince ??= view.dealer.height;
+
+    const lines = headlines(view, decision.situation);
+    for (const { slot, key, line } of lines) this.once(slot, key, line);
+    const dkg = view.dealer.dkg;
+    if (dkg && memory.keygen?.disk === "ok" && memory.keygen.commitMatchesDisk) {
+      this.once("commit", String(dkg.epochId), `DKG: my commit for epoch ${dkg.epochId} is on chain and matches the secrets on disk`);
+    }
+
+    if (decision.action === null) {
+      if (decision.alarm) logError(decision.why);
+      else if (!lines.some((l) => l.line === decision.why)) log(decision.why);
+    } else if (decision.costs.length > 0) {
+      // A step that gets a validator slashed is announced every time, before it is sent.
+      logProgress(decision.why);
+    }
+  }
+
+  /**
+   * Sends one rotation transaction and classifies the result. The only place a rotation
+   * transaction is sent. It never retries: the next poll reads the chain and decides again.
+   */
+  private async perform(action: Action): Promise<void> {
+    const me = this.me.validator;
+    try {
+      switch (action.do) {
+        case "unjail":
+          await this.client.slashingUnjail({ validator: me });
+          break;
+        case "beaconCommit":
+          await this.client.dealerBeaconCommit({ validator: me, epochId: action.epochId, commit: beaconCommitment(this.config, action) });
+          break;
+        case "beaconReveal":
+          await this.client.dealerBeaconReveal({ validator: me, epochId: action.epochId, salt: beaconSalt(this.config, action) });
+          break;
+        case "beginEpoch":
+          await this.client.dealerBeginEpoch({
+            epochId: action.epochId,
+            committeeSize: action.committeeSize,
+            threshold: action.threshold,
+            ...POLICY.dkgWindows,
+          });
+          break;
+        case "dkgCommit": {
+          // prepareCommit returns only after the secrets are on disk, and the same commit every time.
+          const stored = await prepareCommit(this.stateStore, action.dkg, me);
+          await this.client.dealerDkgCommit({
+            dealer: me,
+            epochId: action.dkg.epochId,
+            commitments: stored.commitments,
+            ephemeralPubkey: stored.ephemeralPubkey,
+          });
+          break;
+        }
+        case "dkgEncryptedShare":
+          await this.client.dealerDkgEncryptedShare({
+            dealer: me,
+            epochId: action.dkg.epochId,
+            ...(await encryptShareFor(this.stateStore, action.dkg, action.recipientIndex)),
+          });
+          break;
+        case "dkgRevealShare":
+          await this.client.dealerDkgShareReveal({
+            dealer: me,
+            epochId: action.dkg.epochId,
+            to: action.to,
+            share: await plainShareFor(this.stateStore, action.dkg, action.to),
+          });
+          break;
+        case "dkgComplainMissing":
+          await this.client.dealerDkgComplaintMissing({ complainer: me, epochId: action.dkg.epochId, dealer: action.dealer });
+          break;
+        case "finalizeEpoch":
+          await this.client.dealerFinalizeEpoch({ epochId: action.epochId });
+          break;
+        default:
+          assertNever(action);
+      }
+      logProgress(`Rotation: ${describe(action)} landed`);
+    } catch (err) {
+      const failure = txFailureOf(err);
+      if (failure.kind === "not-a-tx") throw err;
+      log(`Rotation: ${describe(action)} ${failure.kind}: ${failureSummary(failure)}`);
+    }
+  }
+
+  /**
+   * Hands. Runs when an epoch exists, in every situation: a hand on an epoch that cannot deal still
+   * needs its Timeout so that the chain aborts and refunds it. What changes with the situation is
+   * only whether new hands are started.
+   */
+  private async dealTables(view: ChainView, situation: Situation): Promise<void> {
+    const epoch = view.dealer.epoch;
+    if (!epoch) return;
+    const duty: HandDuty = { epochId: epoch.epochId, shufflers: epoch.members, startHands: situation.kind === "dealing" };
+
+    const tableIds = await this.client.getTables().catch(() => [] as string[]);
+    for (const tableId of tableIds) {
+      await this.processTable(tableId, duty).catch((err) => logError(`table ${tableId} processing error`, err));
+    }
+  }
+
+  private async processTable(tableId: string, duty: HandDuty): Promise<void> {
+    const { epochId } = duty;
     const table = await this.client.getTable(tableId).catch(() => null);
     if (!table) return;
 
@@ -330,13 +449,15 @@ export class DealerDaemon {
     const handId = String(pick(hand, "handId", "hand_id") ?? "");
 
     if (!hand || !handId) {
-      // No active hand — maybe start one
-      await maybeStartAndInitHand({
-        client: this.client,
-        config: this.config,
-        tableId,
-        epochId,
-      }).catch(() => {});
+      // No active hand — maybe start one, but not on an epoch that cannot deal it.
+      if (duty.startHands) {
+        await maybeStartAndInitHand({
+          client: this.client,
+          config: this.config,
+          tableId,
+          epochId,
+        }).catch(() => {});
+      }
       return;
     }
 
@@ -350,10 +471,12 @@ export class DealerDaemon {
       // dealerInitHand, the dealer epoch_id will be 0.  Init it now.
       const dealerEpochId = asNumber(pick(dealer, "epochId", "epoch_id")) ?? 0;
       if (dealerEpochId === 0) {
-        log(`Table ${tableId} hand ${handId}: dealer hand not initialized, calling initHand`);
-        await this.client.dealerInitHand({ tableId, handId, epochId }).catch((err) =>
-          logError(`initHand for table ${tableId} hand ${handId} failed`, err)
-        );
+        if (duty.startHands) {
+          log(`Table ${tableId} hand ${handId}: dealer hand not initialized, calling initHand`);
+          await this.client.dealerInitHand({ tableId, handId, epochId }).catch((err) =>
+            logError(`initHand for table ${tableId} hand ${handId} failed`, err)
+          );
+        }
       } else {
         // Try to shuffle (handleShuffle reads authoritative shuffleStep from DealerHand)
         await handleShuffle({
@@ -361,7 +484,7 @@ export class DealerDaemon {
           config: this.config,
           tableId,
           handId,
-          epochMembers,
+          epochMembers: [...duty.shufflers],
         }).catch((err) => logError("shuffle error", err));
 
         // Always attempt finalization — maybeFinalizeDeck checks readiness internally

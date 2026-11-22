@@ -49,6 +49,19 @@ describe("rule 2: a condition that persists is logged once, then once per five m
     assert.equal(lines.length, 2, lines.join("\n"));
   });
 
+  it("remembers a bounded number of conditions: after 500 others, an old one prints again", () => {
+    // Letters only, so that each line is its own shape.
+    const word = (n: number) => [...n.toString(20)].map((d) => String.fromCharCode(103 + parseInt(d, 20))).join("");
+    logging.log("condition first persists");
+    for (let i = 0; i < 500; i++) logging.log(`condition ${word(i)} persists`);
+    assert.equal(lines.length, 501);
+
+    logging.log(`condition ${word(499)} persists`);
+    assert.equal(lines.length, 501, "a condition it still remembers stays limited");
+    logging.log("condition first persists");
+    assert.equal(lines.length, 502, "the oldest condition was forgotten, so it prints again");
+  });
+
   it("never rate-limits progress lines", () => {
     for (let hand = 1; hand <= 5; hand++) {
       logging.logProgress(`Automation: deck finalized for table 1 hand ${hand}`);

@@ -4,6 +4,8 @@
 const REPEAT_WINDOW_MS = 5 * 60_000;
 const NUMBERS = /\b[0-9a-f]{16,}\b|\d+/gi;
 const lastShown = new Map<string, { at: number; repeats: number }>();
+/** Shapes remembered at once. The oldest goes first, so a daemon that runs for months holds no more. */
+const MAX_SHAPES = 500;
 
 function write(stream: "log" | "error", line: string): void {
   const ts = new Date().toISOString();
@@ -18,7 +20,9 @@ function writeLimited(stream: "log" | "error", line: string): void {
     last.repeats++;
     return;
   }
+  lastShown.delete(shape);
   lastShown.set(shape, { at: now, repeats: 0 });
+  if (lastShown.size > MAX_SHAPES) lastShown.delete(lastShown.keys().next().value!);
   const repeats = last?.repeats ? ` (${last.repeats} more like this since ${new Date(last.at).toISOString()})` : "";
   write(stream, line + repeats);
 }

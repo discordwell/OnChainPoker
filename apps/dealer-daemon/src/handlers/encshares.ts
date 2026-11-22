@@ -77,7 +77,7 @@ export async function handleEncShares(args: {
   const { client, config, stateStore, tableId, handId, epochId } = args;
 
   const secrets = await stateStore.load(epochId);
-  if (!secrets || secrets.secretShare === "0") {
+  if (!secrets || secrets.secretShare === null) {
     log(`EncShares: no secrets for epoch ${epochId}`);
     return;
   }
