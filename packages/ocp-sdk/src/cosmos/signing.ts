@@ -231,10 +231,11 @@ export async function connectOcpCosmosSigningClient(args: {
       const fee = calculateFee(await gas, gasPrice);
       const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
       const timeoutHeight = sentAtHeight + ttlBlocks;
-      const deadline = realClock.now() + CONFIRM_LIMITS.maxWaitMs;
       let sequence = nextSequence ?? (await onceMoreOnSocketError(() => client.getSequence(address))).sequence;
       for (let tries = 0; ; tries++) {
         const tx = await signAt(msgs, fee, memo, sequence, timeoutHeight);
+        // From the signature on: a person may take minutes to approve it in a wallet.
+        const deadline = realClock.now() + CONFIRM_LIMITS.maxWaitMs;
         try {
           await broadcast(tx, deadline);
         } catch (err) {
