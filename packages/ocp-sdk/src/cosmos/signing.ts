@@ -203,7 +203,7 @@ export async function connectOcpCosmosSigningClient(args: {
 
   // The sequence of the next tx, counted here from the ones the node took: the node's query state
   // can be a block behind its last block, and a tx still in the mempool is not in it at all.
-  // null: ask the chain. A refusal that names the expected sequence corrects it.
+  // null: the chain's count alone. A refusal that names the expected sequence corrects it.
   let nextSequence: number | null = null;
   let signer: { accountNumber: number; chainId: string } | null = null;
   let queue: Promise<unknown> = Promise.resolve();
@@ -231,7 +231,10 @@ export async function connectOcpCosmosSigningClient(args: {
       const fee = calculateFee(await gas, gasPrice);
       const sentAtHeight = await onceMoreOnSocketError(() => source.latestHeight());
       const timeoutHeight = sentAtHeight + ttlBlocks;
-      let sequence = nextSequence ?? (await onceMoreOnSocketError(() => client.getSequence(address))).sequence;
+      // Another client of this key (a second tab, a bot) moves the chain's count past ours; our own
+      // txs still in the mempool keep ours ahead of the chain's. Signing at the larger asks a wallet once.
+      const onChain = (await onceMoreOnSocketError(() => client.getSequence(address))).sequence;
+      let sequence = Math.max(nextSequence ?? 0, onChain);
       for (let tries = 0; ; tries++) {
         const tx = await signAt(msgs, fee, memo, sequence, timeoutHeight);
         // From the signature on: a person may take minutes to approve it in a wallet.

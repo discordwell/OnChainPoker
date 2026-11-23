@@ -234,6 +234,23 @@ test("after a tx expires, the next send asks the chain for the sequence again", 
   assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 3]);
 });
 
+test("a key another client used since this one's last send is signed once, at the chain's sequence", async (t) => {
+  const { chain, signing, send, counter } = await connected(t, {
+    checkTx: (tx) =>
+      sequenceOf(tx) === Number(chain.account.sequence)
+        ? { code: 0, log: "" }
+        : { code: 32, codespace: "sdk", log: `account sequence mismatch, expected ${chain.account.sequence}, got ${sequenceOf(tx)}: incorrect account sequence` },
+  });
+
+  await signing.signAndBroadcastAuto([send], "this tab");
+  // That tx landed, and another tab's tx at the next sequence landed after it.
+  chain.account.sequence = 5n;
+  const before = counter.signs;
+  await signing.signAndBroadcastAuto([send], "this tab again");
+
+  assert.deepEqual({ signatures: counter.signs - before, sequences: chain.broadcasts.map(sequenceOf) }, { signatures: 1, sequences: [3, 5] });
+});
+
 test("the wait for the block starts at the signature: a wallet approval longer than maxWaitMs still ends in landed", async (t) => {
   const { CONFIRM_LIMITS } = await confirmModule();
   const maxWaitMs = CONFIRM_LIMITS.maxWaitMs;
