@@ -312,6 +312,81 @@ describe("revealing a street's next card ahead", () => {
   });
 });
 
+describe("the dealer sends a card's share only once a committed block makes that card due", () => {
+  const ahead = (daemon: unknown) => (daemon as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
+  const shares = (node: FakeNode) => node.sent.filter((m) => m.typeUrl === MSG.submitPubShare || m.typeUrl === MSG.submitEncShare).map((m) => m.value.pos);
+
+  // Two players, seat 1 to act. Its legal action would end the betting; the mempool holds its
+  // illegal twin instead (a call facing nothing, a check facing a bet), which the chain refuses in
+  // its block. The cards after each street: the flop 4, 5, 6, the turn 7, the river 8, then the
+  // showdown's hole cards 0 to 3.
+  const betting = (street: string, board: number[], betTo: string, commit: string[], illegal: string) => ({
+    table: {
+      hand: {
+        hand_id: "5",
+        phase: "HAND_PHASE_BETTING",
+        street,
+        board,
+        action_on: 1,
+        bet_to: betTo,
+        interval_id: "1",
+        in_hand: [true, true],
+        folded: [false, false],
+        all_in: [false, false],
+        street_commit: commit,
+        last_interval_acted: [1, -1],
+        dealer: { epoch_id: "9", deck_finalized: true, cursor: 4, reveal_pos: 255, hole_pos: [0, 2, 1, 3, ...Array(14).fill(255)] },
+      },
+    },
+    pending: { typeUrl: POKER.act, value: { player: "ocp1player1", tableId: "1", action: illegal, amount: "0" } },
+  });
+  const streets = {
+    preflop: betting("STREET_PREFLOP", [], "10000", ["10000", "10000"], "call"),
+    flop: betting("STREET_FLOP", [11, 12, 13], "5000", ["5000", "0"], "check"),
+    turn: betting("STREET_TURN", [11, 12, 13, 14], "0", ["0", "0"], "call"),
+    river: betting("STREET_RIVER", [11, 12, 13, 14, 15], "0", ["0", "0"], "call"),
+  };
+
+  it("a player's action in the mempool that would end the betting: no member sends a share of the flop, turn, river or any hole card", async () => {
+    const sent: Record<string, Record<string, number[]>> = {};
+    for (const v of [A, B, C]) {
+      sent[v] = {};
+      for (const [name, { table, pending }] of Object.entries(streets)) {
+        const node = nodeWith(table, dealerHand());
+        const daemon = await daemonOf(node, v);
+        await pollOnce(daemon);
+        node.pending = [pending];
+        await ahead(daemon);
+        await pollOnce(daemon);
+        sent[v]![name] = shares(node);
+      }
+    }
+    const none = { preflop: [], flop: [], turn: [], river: [] };
+    assert.deepEqual(sent, { [A]: none, [B]: none, [C]: none });
+  });
+
+  it("the last round's shuffle and FinalizeDeck in the mempool: no member sends a hole-card share until a block shows the deck final", async () => {
+    const { shuffleProveV1, buildShuffleContext } = await import("@onchainpoker/ocp-shuffle");
+    const { decodeDeck } = await import("../src/handlers/shuffle.js");
+    const context = buildShuffleContext({ tableId: 1, handId: 5, round: 3, shuffler: C });
+    const { proofBytes } = shuffleProveV1(mulBase(77n), decodeDeck(deckOf(12)), { rounds: 2, context });
+    const hand = { hand_id: "5", phase: "HAND_PHASE_SHUFFLE", small_blind_seat: 0, in_hand: [true, true, true], dealer: { epoch_id: "9", deck_finalized: false } };
+    const sent: Record<string, number[]> = {};
+    for (const v of [A, B, C]) {
+      const node = nodeWith({ hand, seats: seats(3) }, dealerHand({ shuffle_step: 2, finalized: false }));
+      const daemon = await daemonOf(node, v);
+      await pollOnce(daemon);
+      node.pending = [
+        { typeUrl: MSG.submitShuffle, value: { tableId: "1", handId: "5", round: 3, shuffler: C, proofShuffle: proofBytes } },
+        { typeUrl: MSG.finalizeDeck, value: { caller: "ocp1c", tableId: "1", handId: "5" } },
+      ];
+      await ahead(daemon);
+      sent[v] = shares(node);
+    }
+    assert.deepEqual(sent, { [A]: [], [B]: [], [C]: [] });
+  });
+});
+
 describe("proving the first shuffle round ahead", () => {
   it("the first shuffler proves round 1 on the deck a pending InitHand makes in the next block, and sends that proof once the chain shows it", async () => {
     const { initialDeck } = await import("../src/handlers/shuffle.js");
@@ -331,92 +406,5 @@ describe("proving the first shuffle round ahead", () => {
 
     const sent = node.sentOf(MSG.submitShuffle).map((m) => [m.value.round, Buffer.from(m.value.proofShuffle).toString("hex") === made]);
     assert.deepEqual(sent, [[1, true]]);
-  });
-});
-
-describe("what the next block will make possible", () => {
-  // A six-player hand on the turn, read from a local three-validator chain: seats 4, 5 and 0 have checked, seat 1 is to act.
-  const turn = {
-    small_blind_seat: 4,
-    in_hand: [true, true, true, true, true, true, false, false, false],
-    action_on: 1,
-    bet_to: "0",
-    interval_id: "0",
-    street_commit: ["0", "0", "0", "0", "0", "0", "0", "0", "0"],
-    last_interval_acted: [0, -1, -1, -1, 0, 0, -1, -1, -1],
-    folded: [false, false, false, false, false, false, false, false, false],
-    all_in: [false, false, false, false, false, false, false, false, false],
-  };
-
-  it("holePositions gives the positions the chain's FinalizeDeck gave that hand", async () => {
-    const { holePositions } = await import("../src/handlers/encshares.js");
-    assert.deepEqual(holePositions(turn), [2, 8, 3, 9, 4, 10, 5, 11, 0, 6, 1, 7, 255, 255, 255, 255, 255, 255]);
-  });
-
-  it("closesStreet: a check ends the round only when every other seat in the hand has acted and matched", async () => {
-    const { closesStreet } = await import("../src/daemon.js");
-    const lastToAct = { ...turn, action_on: 3, last_interval_acted: [0, 0, 0, -1, 0, 0, -1, -1, -1] };
-    const facingABet = { ...lastToAct, bet_to: "20000", street_commit: ["20000", "20000", "20000", "0", "20000", "20000", "0", "0", "0"] };
-    assert.deepEqual(
-      [closesStreet(turn, "check"), closesStreet(lastToAct, "check"), closesStreet(lastToAct, "raise"), closesStreet(facingABet, "call"), closesStreet(facingABet, "fold")],
-      [false, true, false, true, false],
-    );
-  });
-});
-
-describe("sending behind what the mempool holds", () => {
-  const ahead = (daemon: unknown) => (daemon as { aheadOfTheBlock(): Promise<void> }).aheadOfTheBlock();
-
-  it("the last round's shuffle and FinalizeDeck in the mempool: a member whose turn the hole shares are sends them all behind, unsimulated", async () => {
-    const { shuffleProveV1, buildShuffleContext } = await import("@onchainpoker/ocp-shuffle");
-    const { decodeDeck } = await import("../src/handlers/shuffle.js");
-    const context = buildShuffleContext({ tableId: 1, handId: 5, round: 3, shuffler: C });
-    const { proofBytes } = shuffleProveV1(mulBase(77n), decodeDeck(deckOf(12)), { rounds: 2, context });
-    const hand = { hand_id: "5", phase: "HAND_PHASE_SHUFFLE", small_blind_seat: 0, in_hand: [true, true, true], dealer: { epoch_id: "9", deck_finalized: false } };
-    // Hole shares go to the last shuffler, C, then A; B waits.
-    const sent = new Map<string, [number, boolean][]>();
-    for (const v of [A, B]) {
-      const node = nodeWith({ hand, seats: seats(3) }, dealerHand({ shuffle_step: 2, finalized: false }));
-      const daemon = await daemonOf(node, v);
-      await pollOnce(daemon);
-      const before = sentBy(node).length;
-      node.pending = [
-        { typeUrl: MSG.submitShuffle, value: { tableId: "1", handId: "5", round: 3, shuffler: C, proofShuffle: proofBytes } },
-        { typeUrl: MSG.finalizeDeck, value: { caller: "ocp1c", tableId: "1", handId: "5" } },
-      ];
-      await ahead(daemon);
-      sent.set(v, sentBy(node).slice(before).map((tx) => [tx.msgs.filter((m) => m.typeUrl === MSG.submitEncShare).length, tx.gasLimit !== undefined]));
-    }
-    assert.deepEqual(Object.fromEntries(sent), { [A]: [[6, true]], [B]: [] });
-  });
-
-  it("a check that ends the preflop betting in the mempool: the flop's first card's members send share and FinalizeReveal behind it", async () => {
-    const hand = {
-      hand_id: "5",
-      phase: "HAND_PHASE_BETTING",
-      street: "STREET_PREFLOP",
-      action_on: 1,
-      bet_to: "10000",
-      interval_id: "0",
-      in_hand: [true, true],
-      folded: [false, false],
-      all_in: [false, false],
-      street_commit: ["10000", "10000"],
-      last_interval_acted: [0, -1],
-      dealer: { epoch_id: "9", deck_finalized: true, cursor: 4, reveal_pos: 255 },
-    };
-    // The flop is positions 4, 5, 6; the order for 4 is B, C, A.
-    const node = nodeWith({ hand }, dealerHand());
-    const daemon = await daemonOf(node, B);
-    await pollOnce(daemon);
-    const before = sentBy(node).length;
-    node.pending = [{ typeUrl: POKER.act, value: { player: "ocp1player1", tableId: "1", action: "check", amount: "0" } }];
-    await ahead(daemon);
-
-    const txs = sentBy(node).slice(before);
-    assert.deepEqual(txs.map((tx) => [typesOf(tx.msgs)[0], tx.msgs[0]!.value.pos, tx.gasLimit !== undefined]), [
-      ["MsgSubmitPubShare", 4, true],
-      ["MsgFinalizeReveal", 4, true],
-    ]);
   });
 });

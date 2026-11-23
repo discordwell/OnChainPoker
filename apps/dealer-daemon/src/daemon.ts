@@ -39,7 +39,7 @@ import {
   maybeTick,
   maybeDealerTimeout,
 } from "./handlers/automation.js";
-import { dealerTimeoutSecs, holePositions, holeShareMessages } from "./handlers/encshares.js";
+import { dealerTimeoutSecs } from "./handlers/encshares.js";
 import { BLIND_GAS, handSender, type HandSender } from "./handlers/send.js";
 import { InFlight, turnOrder } from "./turns.js";
 
@@ -158,61 +158,6 @@ function streetPositions(table: any): number[] {
   return eligible.sort((a, b) => a - b);
 }
 
-/**
- * Whether `action` by the seat whose turn it is ends the betting round (x/poker logic.go
- * streetComplete): after it, every seat still in, not folded and not all in has matched the bet and
- * acted in this interval. Only a check or a call is taken to end it; anything else is "no".
- */
-export function closesStreet(hand: any, action: string): boolean {
-  if (action !== "check" && action !== "call") return false;
-  const actor = asNumber(pick(hand, "actionOn", "action_on"));
-  const inHand = pick(hand, "inHand", "in_hand") ?? [];
-  const folded = hand?.folded ?? [];
-  const allIn = pick(hand, "allIn", "all_in") ?? [];
-  const commit = pick(hand, "streetCommit", "street_commit") ?? [];
-  const acted = pick(hand, "lastIntervalActed", "last_interval_acted") ?? [];
-  const betTo = String(pick(hand, "betTo", "bet_to") ?? "0");
-  const interval = asNumber(pick(hand, "intervalId", "interval_id")) ?? 0;
-  if (actor === undefined) return false;
-  for (let seat = 0; seat < 9; seat++) {
-    if (seat === actor || !inHand[seat] || folded[seat] || allIn[seat]) continue;
-    if (String(commit[seat] ?? "0") !== betTo || asNumber(acted[seat]) !== interval) return false;
-  }
-  return true;
-}
-
-/** The cards the street after this betting round reveals, in the chain's order (dealerExpectedRevealPos). */
-function nextStreetPositions(table: any): number[] {
-  const h = table?.hand;
-  const cursor = asNumber(h?.dealer?.cursor) ?? 0;
-  const street = String(h?.street ?? "");
-  if (street === "STREET_PREFLOP" || street === "1") return [cursor, cursor + 1, cursor + 2];
-  if (street === "STREET_FLOP" || street === "2") return [cursor + 3];
-  if (street === "STREET_TURN" || street === "3") return [cursor + 4];
-  if (street !== "STREET_RIVER" && street !== "4") return [];
-  const holePos: number[] = (pick(h.dealer, "holePos", "hole_pos") ?? []).map((x: unknown) => asNumber(x));
-  const inHand = pick(h, "inHand", "in_hand") ?? [];
-  const folded = Array.isArray(h.folded) ? h.folded : [];
-  const out = [];
-  for (let seat = 0; seat < 9; seat++) {
-    if (!inHand[seat] || folded[seat]) continue;
-    for (const p of [holePos[seat * 2], holePos[seat * 2 + 1]]) if (p !== undefined && p !== 255) out.push(p);
-  }
-  return out.sort((a, b) => a - b);
-}
-
-/** A hand's state at the last block, for work the mempool shows the next block makes possible. */
-type HandAt = {
-  tableId: string;
-  handId: string;
-  epochId: number;
-  table: any;
-  dealerHand: any;
-  qualified: readonly { validator: string }[];
-  threshold: number;
-  sender: HandSender;
-};
-
 /** A street with cards still to reveal, as the last block showed it. */
 type Street = {
   tableId: string;
@@ -276,10 +221,7 @@ export class DealerDaemon {
   private startable: { tableId: string; handId: string; epochId: number; qualified: readonly { validator: string }[]; sender: HandSender } | null = null;
   /** The street being revealed at the last block, while it has more than one card. */
   private street: Street | null = null;
-  /** A hand being shuffled, and one being bet on, at the last block. */
-  private shuffling: HandAt | null = null;
-  private betting: HandAt | null = null;
-  /** "table/hand/pos" of the shares sent ahead of their card's turn, "table/hand/hole" of the hole shares. */
+  /** "table/hand/pos" of the shares sent ahead of their card's turn. */
   private readonly sharedAhead = new Set<string>();
 
   /** Height at which this process first saw the chain unable to deal, with no break since. In memory: a restart waits longer. */
@@ -638,13 +580,15 @@ export class DealerDaemon {
     }
   }
 
-  /** Between blocks: work that the mempool shows the next block will make possible. */
+  /**
+   * Between blocks: work that the mempool shows the next block will make possible. A pending
+   * transaction may still fail in its block, and a player can make theirs fail on purpose, so nothing
+   * here sends a card share the committed state has not made due (revealAhead stays in an open street).
+   */
   private async aheadOfTheBlock(): Promise<void> {
-    if (!this.shuffleNext && !this.street && !this.startable && !this.shuffling && !this.betting && this.dealing?.qualified[0]?.validator !== this.config.validatorAddress) return;
+    if (!this.shuffleNext && !this.street && !this.startable && this.dealing?.qualified[0]?.validator !== this.config.validatorAddress) return;
     const pending = await this.client.signing.pendingMessages();
     await this.initAhead(pending);
-    await this.holeSharesAhead(pending);
-    await this.closeAhead(pending);
     await this.revealAhead(pending);
     await this.proveAhead(pending);
     await this.proveFirstAhead(pending);
@@ -699,82 +643,14 @@ export class DealerDaemon {
   }
 
   /**
-   * The last round's shuffle in the mempool with FinalizeDeck behind it: the deck that block makes
-   * final is that proof's last snapshot (finalDeckOf) and the hole positions follow from the seats
-   * (holePositions). The members whose turn the hole shares are send theirs behind, unsimulated,
-   * so the betting can open in the shuffle's own block. A batch that lands too early fails, and the
-   * block after sends the shares again the usual way.
-   */
-  private async holeSharesAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
-    const h = this.shuffling;
-    if (!h) return;
-    const key = `${h.tableId}/${h.handId}/hole`;
-    if (this.sharedAhead.has(key) || !turnOrder(h.qualified, h.qualified.length - 1).slice(0, h.threshold).includes(this.config.validatorAddress)) return;
-    const ofHand = (m: { value: any }) => String(m.value.tableId) === h.tableId && String(m.value.handId) === h.handId;
-    const last = pending.findIndex((m) => m.typeUrl === OCP_TYPE_URLS.dealer.submitShuffle && ofHand(m) && Number(m.value.round) === h.qualified.length);
-    if (last < 0 || !pending.slice(last).some((m) => m.typeUrl === OCP_TYPE_URLS.dealer.finalizeDeck && ofHand(m))) return;
-    this.sharedAhead.add(key);
-    const shares = await holeShareMessages({
-      client: this.client,
-      config: this.config,
-      stateStore: this.stateStore,
-      tableId: h.tableId,
-      handId: h.handId,
-      epochId: h.epochId,
-      table: h.table,
-      dealerHand: h.dealerHand,
-      deck: finalDeckOf(pending[last]!.value.proofShuffle),
-      holePos: holePositions(h.table.hand),
-      skip: new Set(),
-    });
-    if (shares.length === 0) return;
-    const sent = await h.sender.send({
-      key: `t${h.tableId}:h${h.handId}:holeShares`,
-      msgs: shares.map((s) => s.msg),
-      holdBlocks: 0,
-      gasLimit: BLIND_GAS.holeShare * shares.length,
-      what: `hole-card shares for table ${h.tableId} hand ${h.handId}, behind the last shuffle`,
-    });
-    if (sent) logProgress(`EncShares: sent ${shares.length} shares for table ${h.tableId} hand ${h.handId} behind the last shuffle`);
-  }
-
-  /**
-   * A player's check or call in the mempool that ends the betting round (closesStreet): the next
-   * street's first card opens in that block. The members whose turn that card is send their share
-   * and FinalizeReveal behind it, unsimulated, and revealAhead carries on with the street's other
-   * cards. A guess that lands too early fails, and the block after reveals the card the usual way.
-   */
-  private async closeAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
-    const b = this.betting;
-    if (!b) return;
-    const hand = b.table.hand;
-    const actor = asNumber(pick(hand, "actionOn", "action_on"));
-    const player = actor === undefined ? undefined : b.table.seats?.[actor]?.player;
-    const act = pending.find((m) => m.typeUrl === OCP_TYPE_URLS.poker.act && String(m.value.tableId) === b.tableId && m.value.player === player);
-    if (!player || !act || !closesStreet(hand, String(act.value.action))) return;
-    const positions = nextStreetPositions(b.table);
-    const pos = positions[0];
-    if (pos === undefined) return;
-    this.betting = null;
-    this.street = { tableId: b.tableId, handId: b.handId, epochId: b.epochId, dealerHand: b.dealerHand, positions, shared: new Map(), qualified: b.qualified, threshold: b.threshold, sender: b.sender };
-    const key = `${b.tableId}/${b.handId}/${pos}`;
-    if (this.sharedAhead.has(key) || !turnOrder(b.qualified, pos).slice(0, b.threshold).includes(this.config.validatorAddress)) return;
-    const share = await pubShareMessage({ client: this.client, config: this.config, stateStore: this.stateStore, tableId: b.tableId, handId: b.handId, epochId: b.epochId, dealerHand: b.dealerHand, pos });
-    if (!share) return;
-    this.sharedAhead.add(key);
-    const what = `pos ${pos} table ${b.tableId} hand ${b.handId}, behind the action that ends the betting`;
-    const keys = `t${b.tableId}:h${b.handId}:`;
-    if (!(await b.sender.send({ key: `${keys}pub${pos}`, msgs: [share], holdBlocks: 0, gasLimit: BLIND_GAS.pubShare, what: `public share of ${what}` }))) return;
-    await b.sender.send({ key: `${keys}reveal${pos}`, msgs: [this.client.messages.finalizeReveal({ tableId: b.tableId, handId: b.handId, pos })], holdBlocks: 0, gasLimit: BLIND_GAS.finalizeReveal, what: `finalize reveal of ${what}` });
-    logProgress(`PubShare: sent for ${what}`);
-  }
-
-  /**
    * The chain reveals one card at a time. When the mempool holds enough shares of the card it waits
    * for, and a FinalizeReveal behind them, that card is revealed in the next block: the member whose
    * turn the following card is sends its share and FinalizeReveal behind those, so the next block
    * reveals both. Each such send is a guess at the block's order; one that lands too early fails
    * alone, and the block after sends it again the usual way.
+   * Only cards of the street a committed block opened (processTable): no one can act between two of
+   * its cards, and the chain reveals every one of them, so a share that lands early reveals a card
+   * that is already due.
    */
   private async revealAhead(pending: Awaited<ReturnType<OcpCosmosClient["signing"]["pendingMessages"]>>): Promise<void> {
     const st = this.street;
@@ -843,8 +719,6 @@ export class DealerDaemon {
     const turns = { qualified: duty.shufflers, sender };
     if (this.street?.tableId === tableId) this.street = null;
     if (this.startable?.tableId === tableId) this.startable = null;
-    if (this.shuffling?.tableId === tableId) this.shuffling = null;
-    if (this.betting?.tableId === tableId) this.betting = null;
     if (this.shuffleNext?.tableId === tableId) this.shuffleNext = null;
     for (const k of this.sharedAhead) if (k.startsWith(`${tableId}/`) && !k.startsWith(`${tableId}/${handId}/`)) this.sharedAhead.delete(k);
 
@@ -891,7 +765,6 @@ export class DealerDaemon {
             ...turns,
           });
         } else if (dealerHand) {
-          this.shuffling = { tableId, handId, epochId, table, dealerHand, qualified: duty.shufflers, threshold: duty.threshold, sender };
           const me = this.config.validatorAddress;
           const proving = this.ahead?.tableId === tableId && this.ahead.handId === handId && this.ahead.round === step + 2;
           this.shuffleNext =
@@ -959,8 +832,6 @@ export class DealerDaemon {
 
     // Betting phase - check for timeouts
     if (phase === "betting") {
-      const dealerHand = await this.client.getDealerHand(tableId, handId).catch(() => null);
-      if (dealerHand) this.betting = { tableId, handId, epochId, table, dealerHand, qualified: duty.shufflers, threshold: duty.threshold, sender };
       await maybeTick({
         client: this.client,
         config: this.config,
