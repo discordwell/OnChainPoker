@@ -25,8 +25,8 @@ async function rejectionOf(promise) {
 
 const ALLOWED_METHODS = new Set(["status", "abci_query", "broadcast_tx_sync", "block", "block_results"]);
 
-/** A connected signing client over a fake node; `signs` counts signatures made. */
-async function connected(t, chainOver = {}, connectOver = {}) {
+/** A connected signing client over a fake node; `signs` counts signatures made, each after `signDelayMs`. */
+async function connected(t, chainOver = {}, connectOver = {}, { signDelayMs = 0 } = {}) {
   const wallet = await sdk.walletFromPrivKey({ privateKeyHex: "11".repeat(32), prefix: "ocp" });
   const [{ address }] = await wallet.getAccounts();
   const chain = fakeChain({ address, ...chainOver });
@@ -35,8 +35,9 @@ async function connected(t, chainOver = {}, connectOver = {}) {
   const counter = { signs: 0 };
   const signer = {
     getAccounts: () => wallet.getAccounts(),
-    signDirect: (a, doc) => {
+    signDirect: async (a, doc) => {
       counter.signs += 1;
+      await new Promise((resolve) => setTimeout(resolve, signDelayMs));
       return wallet.signDirect(a, doc);
     },
   };
@@ -231,6 +232,20 @@ test("after a tx expires, the next send asks the chain for the sequence again", 
   await signing.signAndBroadcastAuto([send], "taken");
 
   assert.deepEqual(chain.broadcasts.map(sequenceOf), [3, 3]);
+});
+
+test("the wait for the block starts at the signature: a wallet approval longer than maxWaitMs still ends in landed", async (t) => {
+  const { CONFIRM_LIMITS } = await confirmModule();
+  const maxWaitMs = CONFIRM_LIMITS.maxWaitMs;
+  CONFIRM_LIMITS.maxWaitMs = 2_000;
+  t.after(() => {
+    CONFIRM_LIMITS.maxWaitMs = maxWaitMs;
+  });
+  const { chain, signing, send } = await connected(t, {}, { interactive: true }, { signDelayMs: 2_500 });
+
+  const res = await signing.signAndBroadcastAuto([send]);
+
+  assert.equal(res.transactionHash, txHash(chain.broadcasts[0]));
 });
 
 test("a socket error on broadcast re-sends the same bytes, does not sign again, then finds the tx", async (t) => {
