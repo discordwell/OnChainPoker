@@ -6,9 +6,8 @@ import type { InFlight } from "../turns.js";
  * Gas limits for hand messages sent without a simulation: each is sent behind another transaction
  * that is not in a block yet, so the node's simulation would refuse it. Each is about three times
  * the most the message used on a local three-validator chain with six players (InitHand 182,845,
- * FinalizeDeck 186,584, PubShare 630,525, FinalizeReveal 657,502 on the last showdown card,
- * 365,128 a hole share in a batch of 12; scripts/liveness/block-txs.mjs prints each transaction's
- * gas). Gas costs nothing here (the ante handler deducts no fee) and the block has no gas limit; a
+ * FinalizeDeck 186,584, PubShare 630,525, FinalizeReveal 657,502 on the last showdown card;
+ * scripts/liveness/block-txs.mjs prints each transaction's gas). Gas costs nothing here (the ante handler deducts no fee) and the block has no gas limit; a
  * limit too low fails only that transaction, and the next block sends the step with a simulation.
  */
 export const BLIND_GAS = {
@@ -16,8 +15,6 @@ export const BLIND_GAS = {
   finalizeDeck: 600_000,
   finalizeReveal: 2_000_000,
   pubShare: 2_000_000,
-  /** Per share of a batch. */
-  holeShare: 1_200_000,
 } as const;
 
 export type Send = {

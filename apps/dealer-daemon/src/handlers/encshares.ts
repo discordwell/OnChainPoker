@@ -124,7 +124,7 @@ export async function handleEncShares(args: {
       .map((es) => asNumber(es?.pos)),
   );
 
-  const shares = await holeShareMessages({ client, config, stateStore, tableId, handId, epochId, table, dealerHand, deck: dealerHand.deck ?? [], holePos, skip: sent });
+  const shares = await holeShareMessages({ client, config, stateStore, tableId, handId, epochId, table, dealerHand, holePos, skip: sent });
 
   // Every share has the same deadline, so a batch that fails must not hold back the others.
   for (const batch of batches(shares, sender.inflight.failures(key))) {
@@ -140,7 +140,7 @@ export async function handleEncShares(args: {
   }
 }
 
-/** This validator's encrypted share of each hole card at `holePos` over `deck`, but those in `skip`, as the messages that carry them. */
+/** This validator's encrypted share of each hole card at `holePos` of the chain's deck, but those in `skip`, as the messages that carry them. */
 export async function holeShareMessages(args: {
   client: OcpCosmosClient;
   config: DealerDaemonConfig;
@@ -150,7 +150,6 @@ export async function holeShareMessages(args: {
   epochId: number;
   table: any;
   dealerHand: any;
-  deck: readonly { c1: unknown; c2: unknown }[];
   holePos: readonly number[];
   skip: ReadonlySet<number | undefined>;
 }): Promise<{ seat: number; pos: number; msg: ReturnType<OcpCosmosClient["messages"]["submitEncShare"]> }[]> {
@@ -186,7 +185,7 @@ export async function holeShareMessages(args: {
   const xHand = scalarMul(secretShare, handScalar);
   const yHand = mulBase(xHand);
 
-  const deck = decodeDeck([...args.deck]);
+  const deck = decodeDeck(dealerHand.deck ?? []);
 
   const seats = Array.isArray(table.seats) ? table.seats : [];
   const shares: { seat: number; pos: number; msg: ReturnType<OcpCosmosClient["messages"]["submitEncShare"]> }[] = [];
@@ -247,22 +246,6 @@ export async function holeShareMessages(args: {
   }
 
   return shares;
-}
-
-/**
- * The hole positions FinalizeDeck gives (x/dealer/keeper ops.go finalizeDeck, logic.go
- * holeDealOrder): seats in the hand from the small blind round the table, first card each, then
- * second card each, from position 0. Index seat * 2 + card, 255 for a seat out of the hand.
- */
-export function holePositions(hand: any): number[] {
-  const inHand: boolean[] = hand?.inHand ?? hand?.in_hand ?? [];
-  const sb = asNumber(hand?.smallBlindSeat ?? hand?.small_blind_seat) ?? 0;
-  const start = sb >= 0 && sb < 9 ? sb : 0;
-  const order = Array.from({ length: 9 }, (_, i) => (start + i) % 9).filter((seat) => inHand[seat]);
-  const out = new Array<number>(18).fill(255);
-  let pos = 0;
-  for (let card = 0; card < 2; card++) for (const seat of order) out[seat * 2 + card] = pos++;
-  return out;
 }
 
 /** The chain's dealer timeout for a table: its own setting, or 120 s when it has none (x/dealer/keeper/logic.go tableDealerTimeoutSecs). */
