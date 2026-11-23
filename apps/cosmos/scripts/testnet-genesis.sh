@@ -48,6 +48,9 @@ MIN_RETAIN_BLOCKS="100000"
 PRUNING_KEEP_RECENT="100"
 PRUNING_INTERVAL="10"
 SNAPSHOT_INTERVAL="1000"
+# Memory. Each store caches this many state-tree nodes. At the default (781250) a node that was
+# dealing hands grew to 1.3 GB in 41 hours, hit its memory cap and fell behind (2026-11-23).
+IAVL_CACHE_SIZE="100000"
 
 # ── Paths ──
 
@@ -259,6 +262,7 @@ sed -i.bak -E "s/^pruning-keep-recent = .*/pruning-keep-recent = \"${PRUNING_KEE
 sed -i.bak -E "s/^pruning-interval = .*/pruning-interval = \"${PRUNING_INTERVAL}\"/" "$APP_TOML"
 sed -i.bak -E "s/^min-retain-blocks = .*/min-retain-blocks = ${MIN_RETAIN_BLOCKS}/" "$APP_TOML"
 sed -i.bak -E "s/^snapshot-interval = .*/snapshot-interval = ${SNAPSHOT_INTERVAL}/" "$APP_TOML"
+sed -i.bak -E "s/^iavl-cache-size = .*/iavl-cache-size = ${IAVL_CACHE_SIZE}/" "$APP_TOML"
 rm -f "$APP_TOML.bak"
 
 # Enable API (LCD)
