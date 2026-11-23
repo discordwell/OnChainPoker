@@ -367,6 +367,12 @@ scenario_absent() {
   local waits=no rebonded
   rebonded="$(chain_height)"
   daemon_stop "$gone"
+  if [[ "$gone" == 0 ]]; then
+    # The script reads the chain through node 0: through another node while node 0 is down.
+    READ_NODE="$other"
+    proc_stop events
+    events_follow $(($(ev_scanned) + 1))
+  fi
   node_stop "$gone"
   say "node $gone is down until the chain jails its validator for missed blocks"
   for ((n = 0; n < 160; n++)); do

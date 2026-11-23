@@ -97,8 +97,9 @@ rpc_url()   { echo "http://127.0.0.1:$(rpc_port "$1")"; }
 lcd_url()   { echo "http://127.0.0.1:$(api_port "$1")"; }
 
 ocpd() { "$OCPD" "$@"; }
-# Queries and transactions go through node 0.
-ocpq() { "$OCPD" query "$@" --node "tcp://127.0.0.1:$(rpc_port 0)" --output json; }
+# Queries, transactions and the event scan go through node READ_NODE: 0 unless a scenario stops node 0.
+READ_NODE=0
+ocpq() { "$OCPD" query "$@" --node "tcp://127.0.0.1:$(rpc_port "$READ_NODE")" --output json; }
 
 set_toml() { # file key value: replaces the first `key = ...` line
   sed -i.bak -E "s|^$2 = .*|$2 = $3|" "$1" && rm -f "$1.bak"
@@ -253,7 +254,7 @@ net_start() {
 }
 
 events_follow() { # from: appends the chain's events from that height to $EVENTS
-  node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url 0)" --from "$1" --follow --time --heartbeat >>"$EVENTS" 2>>"$NET/logs/events.err" 3>&- &
+  node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url "$READ_NODE")" --from "$1" --follow --time --heartbeat >>"$EVENTS" 2>>"$NET/logs/events.err" 3>&- &
   echo $! >"$PIDS/$NET_NAME.events"
 }
 
@@ -355,7 +356,7 @@ bot_start() { bot_run "$ROOT" "bot-$1" "$1"; }
 
 # ---- the chain, read ------------------------------------------------------------------------
 
-chain_status() { curl -s -m 5 "$(rpc_url 0)/status"; }
+chain_status() { curl -s -m 5 "$(rpc_url "$READ_NODE")/status"; }
 chain_height() { chain_status | jq -r '.result.sync_info.latest_block_height'; }
 # The latest block's header time, in Unix seconds.
 chain_time()   { chain_status | jq -r '.result.sync_info.latest_block_time | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601'; }
@@ -363,7 +364,7 @@ chain_time()   { chain_status | jq -r '.result.sync_info.latest_block_time | sub
 # The 8-byte big-endian counter under key 0x01 of the dealer store: the only epoch id BeginEpoch takes.
 next_epoch_id() {
   local hex
-  hex="$(curl -s -m 5 "$(rpc_url 0)/abci_query?path=%22/store/dealer/key%22&data=0x01" | jq -r '.result.response.value' | base64 -d | od -An -tx1 | tr -d ' \n')"
+  hex="$(curl -s -m 5 "$(rpc_url "$READ_NODE")/abci_query?path=%22/store/dealer/key%22&data=0x01" | jq -r '.result.response.value' | base64 -d | od -An -tx1 | tr -d ' \n')"
   echo $((16#$hex))
 }
 
@@ -459,11 +460,11 @@ cli_tx() {
   shift 2
   before="$(chain_height)"
   out="$("$OCPD" tx "$@" --from "$key" --home "$NET/node$index" --keyring-backend test --chain-id "$CHAIN_ID" \
-    --node "tcp://127.0.0.1:$(rpc_port 0)" --gas 5000000 --yes --output json 2>&1)" || die "ocpd tx $* failed: $out"
+    --node "tcp://127.0.0.1:$(rpc_port "$READ_NODE")" --gas 5000000 --yes --output json 2>&1)" || die "ocpd tx $* failed: $out"
   hash="$(jq -r '.txhash // empty' <<<"$out" 2>/dev/null)"
   [[ -n "$hash" && "$(jq -r '.code' <<<"$out")" == 0 ]] || die "ocpd tx $* was refused: $out"
   echo "$hash" >"$NET/last-tx"
-  out="$(node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url 0)" --from "$before" --find-tx "$hash" --wait 30)" || die "ocpd tx $* ($hash) is in no block"
+  out="$(node "$ROOT/scripts/dealer-events.mjs" --rpc "$(rpc_url "$READ_NODE")" --from "$before" --find-tx "$hash" --wait 30)" || die "ocpd tx $* ($hash) is in no block"
   [[ "$out" == *" code=0" ]] || die "ocpd tx $* failed in its block: $out"
   echo "$out"
 }
